@@ -134,6 +134,32 @@ def test_other_sessions_get_the_normal_prompt(repo, role, what):
     assert out.getvalue() == ""
 
 
+def test_a_damaged_hook_support_denies_a_pm_permission_request(repo, monkeypatch):
+    monkeypatch.setattr(pm, "SUPPORT_ERROR", "ModuleNotFoundError")
+    code, out = ask(request("git status", repo))
+    decision = json.loads(out)["hookSpecificOutput"]["decision"]
+    assert code == 0
+    assert decision["behavior"] == "deny"
+    assert decision["message"].startswith(PREFIX)
+    assert "hook files are damaged: ModuleNotFoundError" in decision["message"]
+    assert "Reinstall" in decision["message"]
+
+
+def test_a_damaged_hook_support_blocks_a_pm_guard_call_on_stderr(repo, monkeypatch, capsys):
+    monkeypatch.setattr(pm, "SUPPORT_ERROR", "ModuleNotFoundError")
+    code, out = ask(request("git status", repo), argv=[pm.GUARD_ARG])
+    captured = capsys.readouterr()
+    assert (code, out, captured.out) == (2, "", "")
+    assert captured.err.startswith(PREFIX)
+    assert "hook files are damaged" in captured.err
+
+
+def test_a_damaged_hook_support_leaves_other_sessions_alone(repo, monkeypatch):
+    monkeypatch.setattr(pm, "SUPPORT_ERROR", "ModuleNotFoundError")
+    code, out = ask(request("git status", repo), role="gm")
+    assert (code, out) == (0, "")
+
+
 APPROVED = [
     "git push -u origin feature",
     "git push -q -u origin feature",
