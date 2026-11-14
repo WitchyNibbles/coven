@@ -56,6 +56,8 @@ def git_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = tmp_path / "gitconfig"
     config.write_text(
         "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n"
+        # No detached auto-maintenance: it holds lock files while a test copies the repo.
+        "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n"
     )
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
