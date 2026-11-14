@@ -1,0 +1,109 @@
+#!/bin/sh
+# Run a Claude Code hook so that a crash blocks the tool call instead of letting it through.
+# Usage: /bin/sh fail-closed.sh <python-hook> [args]
+#
+# Claude Code blocks a call only on exit code 2: any other non-zero exit is a non-blocking error
+# and the call goes ahead. A hook that fails before its own error handling runs (a syntax error, a
+# missing module, a missing interpreter) would therefore fail open. The hook runs as
+# `python3 -I <hook> [args]` with stdin, stdout and stderr untouched; exit 0 (allow) and exit 2
+# (block) pass through, any other exit becomes 2. With no command at all, it blocks.
+#
+# Hooks need Python 3.12 or later, and some systems ship an older python3 (macOS has 3.9) or none.
+# Then deny_secrets.py falls back to a plain text check of the raw payload (below) and every other
+# hook exits 0 (allowed, skipped). Either way the script prints, once per session, how to fix it.
+#
+# Once-per-session marker: a file in ${XDG_CACHE_HOME:-$HOME/.cache}/coven/ named after the
+# payload's session_id, read from the raw payload with sed (no JSON parser is available here).
+# When the payload has no usable session_id (only letters, digits, `_` and `-`, at most 64
+# characters) the marker is named after the date, so the message shows once a day instead.
+
+NEED_PYTHON='coven: hooks need Python 3.12+; see README "Requirements"'
+
+cache_root() {
+    printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/coven"
+}
+
+python_is_new_enough() {
+    command -v python3 >/dev/null 2>&1 &&
+        python3 -I -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1
+}
+
+# Print NEED_PYTHON to stderr unless it was already printed for this session.
+tell_once() {
+    id=$(printf '%s' "$1" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]\{1,64\}\)".*/\1/p' | sed 1q)
+    [ -n "$id" ] || id=$(date +%Y%m%d)
+    marker="$(cache_root)/old-python-$id"
+    [ -e "$marker" ] && return 0
+    printf '%s\n' "$NEED_PYTHON" >&2
+    mkdir -p "$(cache_root)" 2>/dev/null && : >"$marker" 2>/dev/null
+    return 0
+}
+
+# Without a new enough python3: block a payload that names an env file or the ssh directory.
+# The raw payload is searched as text, so `secrets.env` and `.environment` are blocked too; a
+# `.env.example`, `.env.sample` or `.env.template` is allowed only as a whole name: one followed by
+# a name character (a letter, digit, `_`, `.` or `-`), as in `.env.example.local`, still counts as
+# an env file. A tool that fails (sed, or grep with an exit above 1) blocks too: an error is not
+# "no match".
+fallback_deny_secrets() {
+    payload=$1
+    tell_once "$payload"
+    if ! stripped=$(printf '%s' "$payload" | sed -E 's/\.env\.(example|sample|template)([^A-Za-z0-9_.-]|$)/\2/g'); then
+        printf '%s\n' "coven deny-secrets: could not check this call (sed failed); blocking" >&2
+        return 2
+    fi
+    for name in .env .ssh; do
+        printf '%s' "$stripped" | grep -F -q -e "$name"
+        found=$?
+        if [ "$found" -eq 0 ]; then
+            printf '%s\n' "coven deny-secrets: access to '$name' is blocked (secrets)" >&2
+            return 2
+        fi
+        if [ "$found" -gt 1 ]; then
+            printf '%s\n' "coven deny-secrets: could not check this call (grep failed); blocking" >&2
+            return 2
+        fi
+    done
+    return 0
+}
+
+# Append one line to the hook's log, unless it already holds 1 MB (the hooks rotate their own).
+log_failure() {
+    folder="$(cache_root)/logs"
+    file="$folder/$1.jsonl"
+    mkdir -p "$folder" 2>/dev/null || return 0
+    if [ -f "$file" ] && [ "$(wc -c <"$file")" -ge 1048576 ]; then
+        return 0
+    fi
+    printf '{"ts": "%s", "error": "exit %s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" >>"$file" 2>/dev/null
+    return 0
+}
+
+if [ $# -eq 0 ]; then
+    printf '%s\n' "coven: fail-closed.sh: no hook command" >&2
+    exit 2
+fi
+
+hook=$1
+name=${hook##*/}
+name=$(printf '%s' "${name%.py}" | tr _ -)
+
+if ! python_is_new_enough; then
+    payload=
+    [ -t 0 ] || payload=$(cat)
+    if [ "$name" = "deny-secrets" ]; then
+        fallback_deny_secrets "$payload"
+        exit $?
+    fi
+    tell_once "$payload"
+    exit 0
+fi
+
+python3 -I "$@"
+code=$?
+case $code in
+0 | 2) exit "$code" ;;
+esac
+printf '%s\n' "coven: $name failed (exit $code); blocking" >&2
+log_failure "$name" "$code"
+exit 2

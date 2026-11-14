@@ -1,0 +1,4 @@
+* text=auto eol=lf
+uv.lock linguist-generated
+standard/typescript/eslint.config.mjs linguist-vendored
+examples/ linguist-documentation

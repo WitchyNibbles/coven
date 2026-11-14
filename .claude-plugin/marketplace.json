@@ -1,0 +1,13 @@
+{
+  "name": "coven",
+  "owner": { "name": "WitchyNibbles" },
+  "description": "The coven plugin: a general manager, project managers, shared memory and a code standard for Claude Code.",
+  "allowCrossMarketplaceDependenciesOn": ["claude-plugins-official"],
+  "plugins": [
+    {
+      "name": "coven",
+      "source": "./",
+      "description": "Run work through a general manager and background project managers, with shared memory, routing instructions and a code standard."
+    }
+  ]
+}

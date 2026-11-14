@@ -1,0 +1,59 @@
+[project]
+name = "covenkit"
+version = "0.1.0"
+description = "A Claude Code plugin for running work through a general manager and project managers"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+coven = "coven.cli:main"
+
+[dependency-groups]
+dev = [
+    "diff-cover>=10.6.0",
+    "mypy>=2.4.0",
+    "pytest>=9",
+    "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8",
+    "ruff>=0.17.1",
+    "shellcheck-py>=0.11.0.1",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+sources = ["src"]
+only-include = ["src"]
+
+[tool.ruff]
+extend = ".coven/ruff.toml"
+
+[tool.mypy]
+strict = true
+files = ["src", "standard", "hooks"]
+enable_error_code = [
+    "ignore-without-code",
+    "possibly-undefined",
+    "truthy-bool",
+    "redundant-expr",
+    "exhaustive-match",
+]
+
+[tool.pytest.ini_options]
+strict = true
+filterwarnings = ["error"]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = [
+    "node: needs node and npm (npm ci of tests/fixtures/ts-project, cached in .pytest_cache); fails, never skips, when they are missing",
+    "shellcheck: needs the shellcheck binary (the dev group's shellcheck-py puts it in the venv); fails, never skips, when it is missing",
+]
+
+[tool.coverage.run]
+branch = true
+# Measure the hook scripts and the standard's check.py, which tests run as subprocesses of the
+# venv's interpreter (`python3 -I` hooks included).
+patch = ["subprocess"]

@@ -1,0 +1,9 @@
+{
+  "name": "coven",
+  "version": "0.1.0",
+  "description": "Run work through a general manager and background project managers, with shared memory, routing instructions and a code standard.",
+  "author": { "name": "WitchyNibbles" },
+  "license": "MIT",
+  "homepage": "https://github.com/WitchyNibbles/coven",
+  "dependencies": ["superpowers@claude-plugins-official"]
+}

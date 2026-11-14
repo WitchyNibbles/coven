@@ -1,0 +1,17 @@
+coven's own code is MIT licensed (see LICENSE). Some of its skills are adapted from other MIT
+licensed projects. Each adapted skill folder holds the upstream licence text in its LICENSE file.
+
+obra/superpowers  https://github.com/obra/superpowers
+  Copyright (c) 2025 Jesse Vincent
+  skills/subagent-driven-development, skills/requesting-code-review
+
+garrytan/gstack  https://github.com/garrytan/gstack
+  Copyright (c) 2026 Garry Tan
+  skills/ceo-review, skills/office-hours
+
+mattpocock/skills  https://github.com/mattpocock/skills
+  Copyright (c) 2026 Matt Pocock
+  skills/handoff, skills/grill-me
+
+coven also depends on the superpowers plugin at run time (it is installed separately, not
+bundled): https://github.com/obra/superpowers

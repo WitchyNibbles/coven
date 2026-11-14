@@ -1,0 +1,56 @@
+{
+  "description": "coven: secret guard, project-manager permissions, routing and memory context",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Glob|Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/fail-closed.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/deny_secrets.py\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/fail-closed.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/pm_permissions.py\" --pre-tool-use",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/fail-closed.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/pm_permissions.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/fail-closed.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session_context.py\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/fail-closed.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/memory_context.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
