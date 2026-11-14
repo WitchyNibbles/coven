@@ -33,7 +33,7 @@ def test_missing_routing_file_prints_nothing_and_logs(
 ) -> None:
     bare = tmp_path / "plugin" / "hooks"
     bare.mkdir(parents=True)
-    for name in ("session_context.py", "hooklog.py"):
+    for name in ("session_context.py", "hooklog.py", "hook_support.py"):
         shutil.copy(hooks_dir / name, bare / name)
     done = run_hook(bare / "session_context.py", {})
     assert done.returncode == 0
