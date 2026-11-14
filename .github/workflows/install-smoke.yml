@@ -15,10 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # COVEN_SMOKE_REQUIRE_INSTALL is left unset on purpose: a failed plugin install then falls
-      # back to a green run with a warning annotation. Add `COVEN_SMOKE_REQUIRE_INSTALL: "1"` here
-      # once the first run shows that install works in the container, so a broken install fails
-      # the job.
+      # The first run (2026-11-14) installed the plugin in the container, so a failed install now
+      # fails the job instead of falling back to a green run with a warning annotation.
+      COVEN_SMOKE_REQUIRE_INSTALL: "1"
       # The release coven was tested on: LAST_TESTED in src/coven/claude_version.py (a test keeps
       # the two equal).
       COVEN_SMOKE_CLAUDE_VERSION: "2.1.325"

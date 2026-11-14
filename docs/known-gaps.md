@@ -89,20 +89,21 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   builds a clean Debian container with Claude Code at the pinned version, runs
   `claude plugin validate . --strict`, adds the checkout as a marketplace, installs superpowers and
   coven, and runs the installed `coven doctor` and the toy walkthrough. It makes no model call and
-  has no API key. It has not run in CI yet.
+  has no API key. Its first CI run (2026-11-14, Claude Code 2.1.325) installed the plugin.
   - It is not hermetic: superpowers comes from the official marketplace over the network, and
     `uv sync` downloads the toy's tools, so an outside release or an outage can fail it.
   - It does not prove that hooks, skills and agents load in a session; that needs a model session
     and stays in the manual acceptance run.
-  - Plugin install may ask for a login a container does not have, and the first run decides which of
-    two things holds. If install works, the job proves a fresh install. If it does not, the script
+  - Plugin install could ask for a login a container does not have; the first run showed it does
+    not. If install ever fails and the switch below is unset, the script
     logs `FALLBACK`, raises a warning annotation on the run, and proves only what
     `claude plugin validate` and the checkout's own `bin/` prove (loading the plugin with
     `claude --plugin-dir` needs a session, so it is not part of the job). A fallback run is green
     but says nothing about the install itself. Adding the checkout as a marketplace never falls
     back: that failing is a coven bug.
-  - The switch `COVEN_SMOKE_REQUIRE_INSTALL=1` makes a failed install fatal. It is off in the
-    workflow until the first run shows install works; then flip it.
+  - The switch `COVEN_SMOKE_REQUIRE_INSTALL=1` makes a failed install fatal. The workflow sets it:
+    the first CI run (2026-11-14) installed the plugin in the container. Unset it to allow the
+    fallback again.
   - The plugin structure test also checks the manifests, the hooks file and the agent frontmatter,
     and runs `claude plugin validate` only on a machine that has `claude`.
 - Windows is untested. Linux, macOS and WSL 2 are the target platforms.

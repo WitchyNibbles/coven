@@ -52,12 +52,10 @@ def test_workflow_checkout_keeps_no_credentials() -> None:
     assert re.search(r"actions/checkout@\S+.*\n\s+with:\n\s+persist-credentials: false\n", text)
 
 
-def test_workflow_leaves_require_install_off_and_says_when_to_flip_it() -> None:
-    comments = [x for x in lines(WORKFLOW) if x.lstrip().startswith("#")]
-    assert any("COVEN_SMOKE_REQUIRE_INSTALL" in x for x in comments)
+def test_workflow_requires_the_install_and_passes_the_switch_on() -> None:
+    # The first CI run (2026-11-14) installed the plugin, so a failed install now fails the job.
     code = [x for x in lines(WORKFLOW) if not x.lstrip().startswith("#")]
-    assert not any(re.search(r"COVEN_SMOKE_REQUIRE_INSTALL\s*[:=]", x) for x in code)
-    # It still reaches the container once someone sets it.
+    assert any(re.search(r'COVEN_SMOKE_REQUIRE_INSTALL:\s*"1"', x) for x in code)
     assert any("--env COVEN_SMOKE_REQUIRE_INSTALL" in x for x in code)
 
 
