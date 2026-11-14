@@ -101,6 +101,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import NoReturn, TextIO
 
 # Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
@@ -108,7 +109,15 @@ sys.dont_write_bytecode = True
 # `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
-hook_support = importlib.import_module("hook_support")
+# A crash here would exit 2, which Claude Code ignores for a PermissionRequest: the permission
+# prompt would stay open. So a broken or missing hook_support is kept and answered by main().
+try:
+    hook_support = importlib.import_module("hook_support")
+    SUPPORT_ERROR: str | None = None
+except Exception as exc:
+    logging.exception("coven pm-permissions: hook_support cannot be loaded")
+    hook_support = ModuleType("hook_support")  # never used: main() refuses before any check runs
+    SUPPORT_ERROR = type(exc).__name__
 
 HOOK = "pm-permissions"
 PREFIX = f"coven {HOOK}:"
@@ -142,6 +151,10 @@ GH_HINT = (
 UNCHECKED = (
     f"{PREFIX} could not check this request ({{why}}); refused. Send the step to the GM as a"
     " QUESTION."
+)
+DAMAGED = (
+    f"{PREFIX} could not check this request (coven's hook files are damaged: {{error}}); refused."
+    " Reinstall the coven plugin, and send the step to the GM as a QUESTION."
 )
 FORCE_REASON = "a force push (--force, --force-with-lease, -f or a +refspec)"
 TOO_SLOW = "the check took too long"
@@ -1018,6 +1031,17 @@ def _answer(decision: Decision) -> int:
     return 0
 
 
+def _refuse_damaged(argv: Sequence[str], error: str) -> int:
+    """Refuse a PM session's request because hook_support is unusable. It leans on nothing else in
+    hooks/: not the log, not a sibling."""
+    message = DAMAGED.format(error=error)
+    if _guarding(argv):
+        print(message, file=sys.stderr)
+        return 2
+    print(_verdict(message))
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     stdin: TextIO | None = None,
@@ -1026,6 +1050,8 @@ def main(
     if (os.environ if environ is None else environ).get(ROLE_VAR) != PM_ROLE:
         return 0  # not a PM session: stay out of the way
     args = sys.argv[1:] if argv is None else argv
+    if SUPPORT_ERROR is not None:
+        return _refuse_damaged(args, SUPPORT_ERROR)
     previous = signal.signal(signal.SIGALRM, _past_deadline)
     try:
         decision = _checked(args, sys.stdin if stdin is None else stdin)

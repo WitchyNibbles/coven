@@ -3,6 +3,7 @@ at module top, so a missing or broken one crashes the hook, and fail-closed.sh m
 into a block."""
 
 import importlib.util
+import json
 import os
 import shutil
 import stat
@@ -104,26 +105,58 @@ def test_a_broken_hook_support_blocks_deny_secrets_through_the_wrapper(
     assert proc.stderr.endswith("coven: deny-secrets failed (exit 1); blocking\n")
 
 
+def run_pm(
+    run_hook: Run, hooks: Path, env: dict[str, str], tmp_path: Path, *argv: str
+) -> subprocess.CompletedProcess[str]:
+    """pm_permissions through fail-closed.sh, asked about `git status`."""
+    return run_hook(
+        hooks / "fail-closed.sh",
+        bash_payload("git status", tmp_path),
+        env,
+        args=(str(hooks / "pm_permissions.py"), *argv),
+    )
+
+
 @pytest.mark.parametrize("breakage", sorted(BROKEN_SUPPORT))
-@pytest.mark.parametrize("argv", [(), ("--pre-tool-use",)], ids=["permission", "pre-tool-use"])
-def test_a_broken_hook_support_ends_a_pm_session_with_exit_2_not_an_allow(
-    run_hook: Run,
-    tmp_path: Path,
-    modern_python: dict[str, str],
-    breakage: str,
-    argv: tuple[str, ...],
+def test_a_pm_permission_request_is_denied_when_hook_support_is_broken(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str], breakage: str
+) -> None:
+    # Exit 2 is not honoured for a PermissionRequest, so the answer must be the deny verdict.
+    hooks = copy_hooks(tmp_path)
+    env = {**modern_python, ROLE: "pm"}
+    intact = run_pm(run_hook, hooks, env, tmp_path)
+    break_module(hooks, SUPPORT, BROKEN_SUPPORT[breakage])
+    proc = run_pm(run_hook, hooks, env, tmp_path)
+    decision = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert (intact.returncode, "damaged" in intact.stdout) == (0, False)
+    assert proc.returncode == 0
+    assert decision["hookEventName"] == "PermissionRequest"
+    assert decision["decision"]["behavior"] == "deny"
+    assert "hook files are damaged" in decision["decision"]["message"]
+    assert "reinstall" in decision["decision"]["message"].lower()
+
+
+@pytest.mark.parametrize("breakage", sorted(BROKEN_SUPPORT))
+def test_a_pm_pre_tool_use_guard_blocks_with_exit_2_when_hook_support_is_broken(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str], breakage: str
 ) -> None:
     hooks = copy_hooks(tmp_path)
-    payload = bash_payload("git status", tmp_path)
-    env = {**modern_python, ROLE: "pm"}
-    args = (str(hooks / "pm_permissions.py"), *argv)
-    intact = run_hook(hooks / "fail-closed.sh", payload, env, args=args)
     break_module(hooks, SUPPORT, BROKEN_SUPPORT[breakage])
-    proc = run_hook(hooks / "fail-closed.sh", payload, env, args=args)
-    assert intact.returncode == 0
+    proc = run_pm(run_hook, hooks, {**modern_python, ROLE: "pm"}, tmp_path, "--pre-tool-use")
     assert proc.returncode == 2
     assert proc.stdout == ""
-    assert proc.stderr.endswith("coven: pm-permissions failed (exit 1); blocking\n")
+    assert "coven pm-permissions: " in proc.stderr
+    assert "hook files are damaged" in proc.stderr
+
+
+@pytest.mark.parametrize("argv", [(), ("--pre-tool-use",)], ids=["permission", "pre-tool-use"])
+def test_outside_a_pm_session_a_broken_hook_support_prints_nothing_and_allows(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str], argv: tuple[str, ...]
+) -> None:
+    hooks = copy_hooks(tmp_path)
+    break_module(hooks, SUPPORT, None)
+    proc = run_pm(run_hook, hooks, modern_python, tmp_path, *argv)
+    assert (proc.returncode, proc.stdout) == (0, "")
 
 
 @pytest.mark.parametrize("hook", ["session_context.py", "memory_context.py"])
@@ -211,3 +244,21 @@ def test_running_the_hooks_writes_no_bytecode_into_the_hooks_folder(
     run_hook(hooks / "memory_context.py", {"cwd": str(repo)}, BYTECODE_ALLOWED)
     assert list(hooks.rglob("__pycache__")) == []
     assert list(hooks.rglob("*.pyc")) == []
+
+
+def test_log_failure_survives_a_failing_sibling_loader(
+    support: ModuleType, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def refuse(name: str) -> ModuleType:
+        raise ImportError(name)
+
+    monkeypatch.setattr(support, "sibling", refuse)
+    assert support.log_failure("demo", "something failed") is None
+    assert "coven demo: could not write the hook log" in caplog.text
+
+
+def test_no_hook_is_named_like_a_standard_library_module() -> None:
+    # Each hook puts its folder first on sys.path, so such a name would shadow the real module.
+    names = {path.stem for path in HOOKS.glob("*.py")}
+    assert names
+    assert names & sys.stdlib_module_names == set()
