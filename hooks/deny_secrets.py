@@ -74,8 +74,7 @@ handled in case a call still arrives under that name.
 """
 
 import errno
-import functools
-import importlib.util
+import importlib
 import json
 import logging
 import os
@@ -83,8 +82,14 @@ import re
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import ModuleType
 from typing import NamedTuple
+
+# Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
+sys.dont_write_bytecode = True
+# `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
+hook_support = importlib.import_module("hook_support")
 
 HOOK = "deny-secrets"
 ENV_FILE = re.compile(r"(?<![\w.\-])(?<![\w.\-]\\)(\.env[\w.\-]*)(?=$|[^\w.\-])")
@@ -134,38 +139,9 @@ def strings(value: object) -> Iterator[str]:
             yield from strings(item)
 
 
-@functools.cache
-def _sibling(name: str) -> ModuleType:
-    """The module `<name>.py` next to this script, loaded by path: `python3 -I` leaves this folder
-    off sys.path and the hooks are not a package.
-
-    Loaded on first use, inside main()'s catch-all, so a missing or broken module blocks the call."""
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"coven_hook_{name}", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
-
-
 def _without_data() -> Callable[[str], str]:
-    function: Callable[[str], str] = _sibling("shell_words").without_data
+    function: Callable[[str], str] = hook_support.sibling("shell_words").without_data
     return function
-
-
-def _log_failure(error: str) -> None:
-    """Record a failure in the hook log; the log is best effort, so this never raises."""
-    try:
-        _sibling("hooklog").log_event(HOOK, {"error": error})
-    except Exception:
-        # A broken log module must not change the verdict: the caller blocks or allows as before.
-        logging.exception("coven %s: could not write the hook log", HOOK)
 
 
 def is_absolute_form(text: str) -> bool:
@@ -386,7 +362,7 @@ def run() -> int:
             raise ValueError("payload is not an object")
     except ValueError as exc:
         print(f"coven {HOOK}: could not parse hook input ({exc}); blocking", file=sys.stderr)
-        _log_failure(f"could not parse hook input ({exc})")
+        hook_support.log_failure(HOOK, f"could not parse hook input ({exc})")
         return 2
     hit = blocked(payload)
     if hit:
@@ -403,7 +379,7 @@ def main() -> int:
     except Exception as exc:
         print(f"coven {HOOK}: internal error ({exc!r}); blocking", file=sys.stderr)
         logging.exception("coven %s: internal error; blocking", HOOK)
-        _log_failure(f"internal error ({exc!r})")
+        hook_support.log_failure(HOOK, f"internal error ({exc!r})")
         return 2
 
 

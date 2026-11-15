@@ -10,49 +10,27 @@ Fails open: on any error (the text is missing or unreadable) it prints nothing, 
 appends the error to the hook log with `hooklog.log_event` (a sibling module).
 """
 
-import functools
-import importlib.util
+import importlib
 import json
-import logging
 import sys
 from pathlib import Path
-from types import ModuleType
+
+# Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
+sys.dont_write_bytecode = True
+# `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
+hook_support = importlib.import_module("hook_support")
 
 HOOK = "session-context"
 ROUTING = Path(__file__).resolve().parent.parent / "instructions" / "routing.md"
-
-
-@functools.cache
-def _sibling(name: str) -> ModuleType:
-    """The module `<name>.py` next to this script, loaded by path: `python3 -I` leaves this folder
-    off sys.path and the hooks are not a package."""
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"coven_hook_{name}", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
-
-
-def _log_failure(error: str) -> None:
-    """Record a failure in the hook log; the log is best effort, so this never raises."""
-    try:
-        _sibling("hooklog").log_event(HOOK, {"error": error})
-    except Exception:
-        logging.exception("coven %s: could not write the hook log", HOOK)
 
 
 def main() -> int:
     try:
         text = ROUTING.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
-        _log_failure(f"{ROUTING}: cannot be read ({error})")
+        hook_support.log_failure(HOOK, f"{ROUTING}: cannot be read ({error})")
         return 0
     print(
         json.dumps(

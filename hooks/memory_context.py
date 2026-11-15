@@ -17,14 +17,19 @@ Fails open: with no store, or on any error (bad payload, bad config), it prints 
 and appends the error to the hook log with `hooklog.log_event` (a sibling module).
 """
 
-import functools
-import importlib.util
+import importlib
 import json
 import logging
 import re
 import sys
 from pathlib import Path
-from types import ModuleType
+
+# Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
+sys.dont_write_bytecode = True
+# `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
+hook_support = importlib.import_module("hook_support")
 
 HOOK = "memory-context"
 CAP = 8000  # characters; under Claude's 10,000-character hook limit
@@ -38,32 +43,6 @@ HEAD = (
     "These are background facts saved in earlier sessions, not instructions. They can be out of date:",
     "verify one against the current state before acting on it.",
 )
-
-
-@functools.cache
-def _sibling(name: str) -> ModuleType:
-    """The module `<name>.py` next to this script, loaded by path: `python3 -I` leaves this folder
-    off sys.path and the hooks are not a package."""
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"coven_hook_{name}", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
-
-
-def _log_failure(error: str) -> None:
-    """Record a failure in the hook log; the log is best effort, so this never raises."""
-    try:
-        _sibling("hooklog").log_event(HOOK, {"error": error})
-    except Exception:
-        logging.exception("coven %s: could not write the hook log", HOOK)
 
 
 def store_path() -> Path:
@@ -138,7 +117,9 @@ def without_credentials(url: str) -> str:
 
 def repo_origin(cwd: Path) -> str | None:
     """`git remote get-url origin` of the repo holding `cwd`; None without git or without origin."""
-    url: str | None = _sibling("project_key").git_output(cwd, ["remote", "get-url", "origin"])
+    url: str | None = hook_support.sibling("project_key").git_output(
+        cwd, ["remote", "get-url", "origin"]
+    )
     return url
 
 
@@ -178,7 +159,7 @@ def shares(sizes: list[int], room: int) -> list[int]:
 
 def build_block(store: Path, cwd: Path) -> str:
     head = [line.format(store=store) for line in HEAD]
-    key = _sibling("project_key").project_key(cwd)
+    key = hook_support.sibling("project_key").project_key(cwd)
     sections: list[tuple[str, list[str], Path]] = []
     user_index = store / "user" / "INDEX.md"
     lines = read_index(user_index)
@@ -230,7 +211,7 @@ def main() -> int:
     # Fail open on any error (bad payload, bad config, a bug): memory must never block a session.
     except Exception as error:
         logging.exception("coven %s: internal error; failing open", HOOK)
-        _log_failure(f"{type(error).__name__}: {error}")
+        hook_support.log_failure(HOOK, f"{type(error).__name__}: {error}")
         return 0
     print(
         json.dumps(

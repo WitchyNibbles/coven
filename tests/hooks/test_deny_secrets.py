@@ -279,6 +279,7 @@ def test_bash_command_with_a_ssh_dir_in_a_message_only_is_allowed(bash: Run) -> 
 def test_missing_shell_words_module_blocks(run_hook: Run, tmp_path: Path) -> None:
     lone = tmp_path / SCRIPT.name
     shutil.copy(SCRIPT, lone)
+    shutil.copy(HOOKS / "hook_support.py", tmp_path / "hook_support.py")
     payload = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
     proc = run_hook(lone, payload)
     assert proc.returncode == 2
@@ -356,7 +357,7 @@ def test_a_broken_hook_log_still_blocks_when_run_without_the_wrapper(
 ) -> None:
     lone = tmp_path / "hooks"
     lone.mkdir()
-    for name in ("deny_secrets.py", "shell_words.py"):
+    for name in ("deny_secrets.py", "shell_words.py", "hook_support.py"):
         shutil.copy(HOOKS / name, lone / name)
     (lone / "hooklog.py").write_text(BROKEN_LOGS[breakage], encoding="utf-8")
     proc = run_hook(lone / "deny_secrets.py", payload)

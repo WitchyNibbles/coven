@@ -89,8 +89,7 @@ DEADLINE blocks too. It is best effort against an agent that follows its role: G
 protection on the default branch is the real wall.
 """
 
-import functools
-import importlib.util
+import importlib
 import json
 import logging
 import os
@@ -104,6 +103,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import NoReturn, TextIO
+
+# Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
+sys.dont_write_bytecode = True
+# `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
+# A crash here would exit 2, which Claude Code ignores for a PermissionRequest: the permission
+# prompt would stay open. So a broken or missing hook_support is kept and answered by main().
+try:
+    hook_support = importlib.import_module("hook_support")
+    SUPPORT_ERROR: str | None = None
+except Exception as exc:
+    logging.exception("coven pm-permissions: hook_support cannot be loaded")
+    hook_support = ModuleType("hook_support")  # never used: main() refuses before any check runs
+    SUPPORT_ERROR = type(exc).__name__
 
 HOOK = "pm-permissions"
 PREFIX = f"coven {HOOK}:"
@@ -137,6 +151,10 @@ GH_HINT = (
 UNCHECKED = (
     f"{PREFIX} could not check this request ({{why}}); refused. Send the step to the GM as a"
     " QUESTION."
+)
+DAMAGED = (
+    f"{PREFIX} could not check this request (coven's hook files are damaged: {{error}}); refused."
+    " Reinstall the coven plugin, and send the step to the GM as a QUESTION."
 )
 FORCE_REASON = "a force push (--force, --force-with-lease, -f or a +refspec)"
 TOO_SLOW = "the check took too long"
@@ -537,7 +555,7 @@ def _body_file_problem(value: str, cwd: str, directories: Sequence[str]) -> str 
     if ".." in value.split("/"):
         return "has a .. segment"
     root = os.path.realpath(cwd)
-    guard = _sibling("deny_secrets")
+    guard = hook_support.sibling("deny_secrets")
     for directory in directories:
         if os.path.commonpath([root, os.path.realpath(os.path.join(directory, value))]) != root:
             return "leads outside the worktree"
@@ -984,25 +1002,6 @@ def _checked(argv: Sequence[str], stdin: TextIO) -> Decision:
         return Decision(UNCHECKED.format(why=f"internal error {exc!r}"), guard=_guarding(argv))
 
 
-@functools.cache
-def _sibling(name: str) -> ModuleType:
-    """The module `<name>.py` next to this script, loaded by path: `python3 -I` leaves this folder
-    off sys.path and the hooks are not a package. Loaded on first use, so a missing or broken one
-    fails the check that needs it (denied) or the log (best effort)."""
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"coven_hook_{name}", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
-
-
 def _record(decision: Decision) -> None:
     """Log the decision. The log is best effort: a broken one must not change the answer."""
     command = decision.command
@@ -1013,7 +1012,7 @@ def _record(decision: Decision) -> None:
         "message": decision.message,
     }
     try:
-        _sibling("hooklog").log_event(HOOK, record)
+        hook_support.sibling("hooklog").log_event(HOOK, record)
     except Exception:
         logging.exception("coven %s: could not write the hook log", HOOK)
 
@@ -1032,6 +1031,17 @@ def _answer(decision: Decision) -> int:
     return 0
 
 
+def _refuse_damaged(argv: Sequence[str], error: str) -> int:
+    """Refuse a PM session's request because hook_support is unusable. It leans on nothing else in
+    hooks/: not the log, not a sibling."""
+    message = DAMAGED.format(error=error)
+    if _guarding(argv):
+        print(message, file=sys.stderr)
+        return 2
+    print(_verdict(message))
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     stdin: TextIO | None = None,
@@ -1040,6 +1050,8 @@ def main(
     if (os.environ if environ is None else environ).get(ROLE_VAR) != PM_ROLE:
         return 0  # not a PM session: stay out of the way
     args = sys.argv[1:] if argv is None else argv
+    if SUPPORT_ERROR is not None:
+        return _refuse_damaged(args, SUPPORT_ERROR)
     previous = signal.signal(signal.SIGALRM, _past_deadline)
     try:
         decision = _checked(args, sys.stdin if stdin is None else stdin)
