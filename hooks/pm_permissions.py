@@ -973,11 +973,11 @@ def run(argv: Sequence[str], stdin: TextIO) -> Decision:
     try:
         if argv and not guard:
             raise PayloadError(USAGE)
-        payload = json.loads(stdin.read())
+        payload = hook_support.loads(stdin.read())
         if not isinstance(payload, dict):
             raise PayloadError("payload is not an object")
         call = _call(payload)
-    except (PayloadError, json.JSONDecodeError) as exc:
+    except ValueError as exc:  # PayloadError, bad JSON or nesting past the limit
         return Decision(UNCHECKED.format(why=f"bad input: {exc}"), guard=guard)
     if guard and not (call.command and _is_guarded(call.command)):
         return Decision(None, call.tool, call.command, guard=True)
@@ -995,8 +995,8 @@ def _checked(argv: Sequence[str], stdin: TextIO) -> Decision:
             signal.setitimer(signal.ITIMER_REAL, 0)
     except DeadlineError:
         raise
-    # Fail closed on any error (closed stdin, RecursionError on deeply nested input, a bug): Claude
-    # lets the call through to the prompt on anything but a decision.
+    # Fail closed on any error (closed stdin, a broken sibling module, a bug): Claude lets the call
+    # through to the prompt on anything but a decision.
     except Exception as exc:
         logging.exception("coven %s: internal error; refusing", HOOK)
         return Decision(UNCHECKED.format(why=f"internal error {exc!r}"), guard=_guarding(argv))

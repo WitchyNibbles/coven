@@ -9,11 +9,14 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+from coven import safe_json
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 SUPPORT = "hook_support.py"
@@ -262,3 +265,45 @@ def test_no_hook_is_named_like_a_standard_library_module() -> None:
     names = {path.stem for path in HOOKS.glob("*.py")}
     assert names
     assert names & sys.stdlib_module_names == set()
+
+
+def test_loads_decodes_up_to_the_depth_limit_and_refuses_past_it(support: ModuleType) -> None:
+    assert support.loads("[" * 512 + "]" * 512)
+    with pytest.raises(ValueError, match="nested deeper than 512"):
+        support.loads("[" * 513 + "]" * 513)
+    with pytest.raises(ValueError, match="nested deeper than 512"):
+        support.loads('{"a":' * 100_000)
+
+
+def test_loads_does_not_count_brackets_inside_strings(support: ModuleType) -> None:
+    text = '{"k": "' + "[{" * 1000 + r"\"" + "[" * 1000 + '", "l": ["\\\\"]}'
+    assert support.loads(text) == json.loads(text)
+
+
+def test_loads_and_coven_safe_json_agree(support: ModuleType) -> None:
+    """The hooks cannot import coven (they run `python3 -I` from the plugin folder), so the guard
+    exists twice; this keeps the two from drifting."""
+    depths = (1, 511, 512, 513, 5000)
+    samples = [
+        *("[" * depth + "]" * depth for depth in depths),
+        r'{"a": "[[[[", "b": ["\\"]}',
+        "[1,",
+        "",
+        '"' + "[" * 2000 + '"',
+    ]
+    for text in samples:
+        outcomes = []
+        for loads in (support.loads, safe_json.loads):
+            try:
+                outcomes.append(("value", loads(text)))
+            except ValueError as error:
+                outcomes.append(("error", type(error).__name__))
+        assert outcomes[0] == outcomes[1], text[:40]
+
+
+def test_loads_checks_an_unterminated_string_in_linear_time(support: ModuleType) -> None:
+    line = '{"text": "' + '\\"' * 30_000  # input cut off mid-string
+    started = time.perf_counter()
+    with pytest.raises(json.JSONDecodeError):
+        support.loads(line)
+    assert time.perf_counter() - started < 1

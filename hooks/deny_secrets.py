@@ -75,7 +75,6 @@ handled in case a call still arrives under that name.
 
 import errno
 import importlib
-import json
 import logging
 import os
 import re
@@ -357,7 +356,7 @@ def blocked(payload: dict[str, object]) -> Hit | None:
 
 def run() -> int:
     try:
-        payload = json.load(sys.stdin)
+        payload = hook_support.loads(sys.stdin.read())
         if not isinstance(payload, dict):
             raise ValueError("payload is not an object")
     except ValueError as exc:
@@ -374,8 +373,8 @@ def run() -> int:
 def main() -> int:
     try:
         return run()
-    # Fail closed on any error (closed stdin, RecursionError on deeply nested input, a bug): Claude
-    # treats every exit code but 2 as non-blocking.
+    # Fail closed on any error (closed stdin, a broken sibling module, a bug): Claude treats every
+    # exit code but 2 as non-blocking.
     except Exception as exc:
         print(f"coven {HOOK}: internal error ({exc!r}); blocking", file=sys.stderr)
         logging.exception("coven %s: internal error; blocking", HOOK)
