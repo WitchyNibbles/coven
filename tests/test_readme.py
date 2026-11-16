@@ -52,6 +52,32 @@ def test_relative_links_resolve(doc: Path) -> None:
         assert (doc.parent / path).exists(), f"{doc.name}: {target} does not resolve"
 
 
+def readme_images() -> tuple[list[tuple[str, str]], list[str]]:
+    """The README's markdown images as (alt, target) and its HTML <img> tags."""
+    text = readme()
+    return re.findall(r"!\[([^\]]*)\]\(([^)\s]+)\)", text), re.findall(r"<img\b[^>]*>", text)
+
+
+def test_every_readme_image_has_alt_text() -> None:
+    markdown_images, html_images = readme_images()
+    assert markdown_images or html_images, "the README shows no image"
+    for alt, target in markdown_images:
+        assert alt.strip(), f"markdown image {target} has no alt text"
+    for tag in html_images:
+        assert re.search(r'\balt="[^"]*"', tag), f"{tag} has no alt attribute"
+
+
+def test_every_local_readme_image_source_resolves() -> None:
+    markdown_images, html_images = readme_images()
+    sources = [target for _, target in markdown_images]
+    sources += [src for tag in html_images for src in re.findall(r'\bsrc="([^"]+)"', tag)]
+    sources += re.findall(r'\bsrcset="([^"]+)"', readme())
+    local = [source for source in sources if not re.match(r"[a-z][a-z0-9+.-]*:", source)]
+    assert local, "the README shows no image from the repo"
+    for source in local:
+        assert (REPO / source).is_file(), f"{source} does not resolve"
+
+
 def test_the_readme_has_the_sections_the_spec_promises() -> None:
     headings = {h.lower() for h in re.findall(r"^#+ +(.+)$", readme(), re.MULTILINE)}
     for wanted in (
