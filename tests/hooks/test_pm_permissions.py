@@ -655,6 +655,7 @@ def test_the_decision_has_the_permission_request_shape(repo):
     [
         ("not json", "bad input"),
         ("", "bad input"),
+        ('{"tool_name": "Read", "tool_input": {"x": ' + "[" * 600 + "]" * 600 + "}}", "deeper"),
         ("[]", "payload is not an object"),
         ('"x"', "payload is not an object"),
         ({"cwd": "/tmp"}, "tool_name"),
