@@ -15,3 +15,6 @@ mattpocock/skills  https://github.com/mattpocock/skills
 
 coven also depends on the superpowers plugin at run time (it is installed separately, not
 bundled): https://github.com/obra/superpowers
+
+The logo and divider files in docs/assets/ are original work made for coven and are covered by
+its MIT license (see LICENSE).
