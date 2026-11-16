@@ -8,7 +8,6 @@ fails the whole listing.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from collections.abc import Callable
@@ -16,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from coven import safe_json
 from coven.errors import CovenError
 from coven.pm.text import clean_line
 
@@ -106,8 +106,8 @@ def _entries(document: object) -> list[object]:
 def parse_rows(raw: str) -> list[Row]:
     """The rows in the CLI's JSON output: a list, or an object holding one list."""
     try:
-        document = json.loads(_json_text(raw))
-    except (ValueError, RecursionError) as error:  # bad JSON, a huge integer, or nesting too deep
+        document = safe_json.loads(_json_text(raw))
+    except ValueError as error:  # bad JSON, a huge integer, or nesting past safe_json.MAX_DEPTH
         raise PmError(NOT_JSON) from error
     return [_row(entry) for entry in _entries(document) if isinstance(entry, dict)]
 

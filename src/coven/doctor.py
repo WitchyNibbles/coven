@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from coven import claude_version, paths, settings
+from coven import claude_version, paths, safe_json, settings
 from coven.claude_version import dotted
 from coven.config import load_config
 from coven.errors import CovenError
@@ -141,10 +141,10 @@ def _is_install(entry: object) -> bool:
 def _superpowers(_now: datetime) -> Outcome:
     file = paths.installed_plugins_file()
     try:
-        data = json.loads(file.read_text(encoding="utf-8", errors="replace"))
+        data = safe_json.loads(file.read_text(encoding="utf-8", errors="replace"))
     except FileNotFoundError:
         return Outcome("fail", f"{file} does not exist; run claude plugin install {SUPERPOWERS}")
-    except (OSError, ValueError, RecursionError) as error:
+    except (OSError, ValueError) as error:
         return Outcome("fail", f"{file} cannot be read: {_one_line(str(error))}")
     plugins = data.get("plugins") if isinstance(data, dict) else None
     entry = plugins.get(SUPERPOWERS) if isinstance(plugins, dict) else None
@@ -263,8 +263,8 @@ def _hook_errors() -> list[tuple[datetime | None, str]]:
             continue
         for line in lines:
             try:
-                record = json.loads(line)
-            except (ValueError, RecursionError):  # a line of nothing but "[" is a log, not a bug
+                record = safe_json.loads(line)
+            except ValueError:  # a line of nothing but "[" is a log, not a bug
                 continue
             if not isinstance(record, dict) or not isinstance(record.get("error"), str):
                 continue

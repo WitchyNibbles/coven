@@ -9,7 +9,6 @@ say `unknown` when nothing was.
 
 from __future__ import annotations
 
-import json
 import re
 import uuid
 from dataclasses import dataclass, field, replace
@@ -17,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from coven import safe_json
 from coven.pm.text import GM_PREFIXES, UNKNOWN_KEY, Head, clean_line, parse_head
 
 SEND_TOOL = "SendMessage"
@@ -116,8 +116,8 @@ class _Reader:
         if not self._wanted(line):
             return
         try:
-            entry = json.loads(line)
-        except (ValueError, RecursionError):  # bad JSON, a huge integer, or nesting too deep
+            entry = safe_json.loads(line)
+        except ValueError:  # bad JSON, a huge integer, or nesting past safe_json.MAX_DEPTH
             self.facts.skipped += 1
             return
         if not isinstance(entry, dict):

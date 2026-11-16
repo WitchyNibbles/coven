@@ -304,10 +304,23 @@ def test_non_object_payload_blocks(run: Run) -> None:
     assert "could not parse hook input" in proc.stderr
 
 
-def test_unexpected_error_blocks(run: Run) -> None:
-    proc = run("[" * 100000)
+def test_unexpected_error_blocks(run_hook: Run, tmp_path: Path) -> None:
+    folder = tmp_path / "hooks"
+    shutil.copytree(HOOKS, folder, ignore=shutil.ignore_patterns("__pycache__"))
+    (folder / "shell_words.py").write_text("raise RuntimeError('broken sibling')\n")
+    payload = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+    proc = run_hook(folder / SCRIPT.name, payload)
     assert proc.returncode == 2
     assert "internal error" in proc.stderr
+    assert "broken sibling" in proc.stderr
+
+
+def test_input_nested_past_the_limit_blocks_as_unparseable(run: Run) -> None:
+    deep = '{"tool_name": "Read", "tool_input": {"x": ' + "[" * 600 + "]" * 600 + "}}"
+    proc = run(deep)
+    assert proc.returncode == 2
+    assert "could not parse hook input" in proc.stderr
+    assert "nested deeper than 512" in proc.stderr
 
 
 def test_closed_stdin_blocks() -> None:

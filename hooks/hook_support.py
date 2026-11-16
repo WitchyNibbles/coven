@@ -1,4 +1,5 @@
-"""What the hooks share: a loader for the modules next to them and a never-failing failure log.
+"""What the hooks share: a loader for the modules next to them, a depth-limited JSON reader and a
+never-failing failure log.
 
 Hooks run as `python3 -I <hook>`, which leaves this folder off sys.path, and they are not a
 package. Each hook therefore puts this folder on sys.path itself and imports this module by name
@@ -13,10 +14,20 @@ into a block.
 
 import functools
 import importlib.util
+import json
 import logging
+import re
 import sys
+from itertools import accumulate
 from pathlib import Path
 from types import ModuleType
+
+MAX_DEPTH = 512
+# A string literal, or one bracket; `findall` gives "" for a string. See src/coven/safe_json.py,
+# which this copies: a hook runs `python3 -I` from the plugin folder and cannot import coven. The
+# closing quote is optional so that a cut-off string cannot make the scan quadratic.
+_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.?[^"\\]*)*"?|([\[\]{}])', re.DOTALL)
+_STEP = {"[": 1, "{": 1, "]": -1, "}": -1}
 
 
 @functools.cache
@@ -44,3 +55,13 @@ def log_failure(hook: str, error: str) -> None:
         sibling("hooklog").log_event(hook, {"error": error})
     except Exception:
         logging.exception("coven %s: could not write the hook log", hook)
+
+
+def loads(text: str) -> object:
+    """`json.loads(text)`, or a ValueError when it nests deeper than MAX_DEPTH. Python 3.12/3.13
+    raise RecursionError on deep input and 3.14 decodes it as far as the C stack allows; this
+    gives every version the same answer."""
+    brackets = "".join(_STRING_OR_BRACKET.findall(text))
+    if max(accumulate(map(_STEP.__getitem__, brackets)), default=0) > MAX_DEPTH:
+        raise ValueError(f"JSON nested deeper than {MAX_DEPTH} levels")
+    return json.loads(text)
