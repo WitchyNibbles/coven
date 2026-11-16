@@ -17,8 +17,10 @@ from itertools import accumulate
 MAX_DEPTH = 512
 
 # A string literal, or one bracket. `findall` gives the bracket, or "" for a string, so brackets
-# and escaped quotes inside strings are dropped without a Python loop over the characters.
-_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|([\[\]{}])', re.DOTALL)
+# and escaped quotes inside strings are dropped without a Python loop over the characters. The
+# closing quote is optional so that a string cut off mid-line still matches, once: a pattern that
+# fails there is retried at every later quote, which is quadratic.
+_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.?[^"\\]*)*"?|([\[\]{}])', re.DOTALL)
 _STEP = {"[": 1, "{": 1, "]": -1, "}": -1}
 
 

@@ -76,3 +76,11 @@ def test_a_multi_megabyte_line_is_checked_quickly():
     started = time.perf_counter()
     safe_json.loads(line)
     assert time.perf_counter() - started < 2
+
+
+def test_an_unterminated_string_is_checked_in_linear_time():
+    line = '{"text": "' + '\\"' * 30_000  # a line cut off mid-string
+    started = time.perf_counter()
+    with pytest.raises(json.JSONDecodeError):
+        safe_json.loads(line)
+    assert time.perf_counter() - started < 1

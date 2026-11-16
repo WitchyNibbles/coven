@@ -24,8 +24,9 @@ from types import ModuleType
 
 MAX_DEPTH = 512
 # A string literal, or one bracket; `findall` gives "" for a string. See src/coven/safe_json.py,
-# which this copies: a hook runs `python3 -I` from the plugin folder and cannot import coven.
-_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|([\[\]{}])', re.DOTALL)
+# which this copies: a hook runs `python3 -I` from the plugin folder and cannot import coven. The
+# closing quote is optional so that a cut-off string cannot make the scan quadratic.
+_STRING_OR_BRACKET = re.compile(r'"[^"\\]*(?:\\.?[^"\\]*)*"?|([\[\]{}])', re.DOTALL)
 _STEP = {"[": 1, "{": 1, "]": -1, "}": -1}
 
 

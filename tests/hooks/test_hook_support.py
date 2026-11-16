@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
@@ -298,3 +299,11 @@ def test_loads_and_coven_safe_json_agree(support: ModuleType) -> None:
             except ValueError as error:
                 outcomes.append(("error", type(error).__name__))
         assert outcomes[0] == outcomes[1], text[:40]
+
+
+def test_loads_checks_an_unterminated_string_in_linear_time(support: ModuleType) -> None:
+    line = '{"text": "' + '\\"' * 30_000  # input cut off mid-string
+    started = time.perf_counter()
+    with pytest.raises(json.JSONDecodeError):
+        support.loads(line)
+    assert time.perf_counter() - started < 1
