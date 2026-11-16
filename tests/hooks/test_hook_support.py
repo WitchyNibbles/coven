@@ -275,7 +275,7 @@ def test_loads_decodes_up_to_the_depth_limit_and_refuses_past_it(support: Module
 
 
 def test_loads_does_not_count_brackets_inside_strings(support: ModuleType) -> None:
-    text = '{"k": "' + "[{" * 1000 + r'\"' + "[" * 1000 + '", "l": ["\\\\"]}'
+    text = '{"k": "' + "[{" * 1000 + r"\"" + "[" * 1000 + '", "l": ["\\\\"]}'
     assert support.loads(text) == json.loads(text)
 
 
