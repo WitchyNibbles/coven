@@ -38,7 +38,7 @@ It works with Claude Code only. This is version 0.1.0; its rough edges are liste
 
 ## Requirements
 
-- Claude Code 2.1.224 or later. The hierarchy uses `claude --bg` (background sessions) and
+- ✧ Claude Code 2.1.224 or later. The hierarchy uses `claude --bg` (background sessions) and
   cross-session messaging; Claude Code calls background sessions a research preview, so they can
   change under coven.
 - Python 3.12 or later as `python3` on your `PATH`. coven's hooks and CLI use only the standard
@@ -53,6 +53,8 @@ It works with Claude Code only. This is version 0.1.0; its rough edges are liste
   its package manager instead.
 - Linux, macOS or WSL 2. Native Windows is untested.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Install
 
 ```sh
@@ -61,7 +63,7 @@ claude plugin install superpowers@claude-plugins-official
 claude plugin install coven@coven
 ```
 
-Then, inside Claude Code:
+✦ Then, inside Claude Code:
 
 ```
 /coven:setup
@@ -78,9 +80,11 @@ and covers an older Claude Code. `coven doctor` fails when it is missing.
 If superpowers is installed but disabled, Claude Code refuses to load coven. Enable it with
 `claude plugin enable superpowers@claude-plugins-official`.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## What changes when you install
 
-Installing coven changes every Claude Code session you start, in every repo, before you run
+⋆ Installing coven changes every Claude Code session you start, in every repo, before you run
 `/coven:setup`:
 
 - A short routing text is added to each session. It suggests `project-standard` where a repo has no
@@ -92,9 +96,11 @@ Installing coven changes every Claude Code session you start, in every repo, bef
 To switch it off, run `claude plugin disable coven@coven` (`claude plugin enable coven@coven`
 brings it back), and `coven setup --undo` to restore the settings that setup changed.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Setup
 
-`/coven:setup` is a guided first run. It runs `coven doctor`, explains each optional change, and
+✦ `/coven:setup` is a guided first run. It runs `coven doctor`, explains each optional change, and
 applies only the ones you pick. The changes:
 
 - read-deny rules for `./.env*`, `~/.ssh/**`, `~/.aws/**` and `~/.gnupg/**` in
@@ -115,9 +121,11 @@ your main model or permission mode.
 You can run the same steps by hand: `coven setup --dry-run --deny-secrets --shim` shows the plan,
 and the same line with `--yes` in place of `--dry-run` applies it.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Walkthrough: the toy project
 
-[examples/toy](examples/toy) is a tiny Python project (one function, one test) that passes the
+✧ [examples/toy](examples/toy) is a tiny Python project (one function, one test) that passes the
 standard. Clone the coven repo, copy the toy out of it and put the standard on it. The commands
 assume the `coven` shim from setup; without it, run the `coven` lines inside Claude Code as
 `!coven ...`.
@@ -148,9 +156,11 @@ Now try the pipeline in Claude Code, from `~/toy-demo`: ask it to add a feature,
 "add a `wrap` function that wraps a value around a range", and watch the routing: a spec, a plan,
 test-first work, and a full check before it says it is done. Throw the folder away afterwards.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## The hierarchy and what it costs
 
-You talk to the GM. Hand it a project ("manage my projects") and it starts one background PM
+✦ You talk to the GM. Hand it a project ("manage my projects") and it starts one background PM
 session for that project, answers the PM's questions from evidence, and brings you only real
 questions, production steps and results. A PM writes the code with its own helpers (an explorer, an
 implementer, a reviewer, a final reviewer), opens a pull request, and never merges.
@@ -182,9 +192,11 @@ too. The more PMs run at once, the faster you spend. The cap is a setting, `pm_c
 setup asks for it and the manager skill reads it. The hierarchy was designed for at most 4. coven
 does not show what a PM has cost yet.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## The code standard
 
-`coven project PATH` installs the standard in a repo: `.coven/check.py` and its parts, a ruff
+✧ `coven project PATH` installs the standard in a repo: `.coven/check.py` and its parts, a ruff
 config, and one GitHub Actions workflow (plus `tsconfig.base.json` and an ESLint config for
 TypeScript). It refuses to overwrite a workflow or config that differs from coven's, shows the diff,
 and overwrites only with `--force`. It prints the wiring it cannot do itself: dev dependencies to
@@ -194,9 +206,11 @@ The check runs formatting, lint, strict types, tests with coverage and a few rep
 suppressions, no agent co-author trailers). `python3 .coven/check.py fast <tests>` is for use while
 you work; `python3 .coven/check.py full --base <ref>` is for the pull request, in CI too.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Memory store
 
-A git repo of short Markdown notes (default `~/coven-memory`): facts about you, standing rules,
+☾ A git repo of short Markdown notes (default `~/coven-memory`): facts about you, standing rules,
 facts per project, and handoff notes. Every session reads a short block from it at start. Only the
 GM, or a plain session, writes to it; PMs read it and send facts up. A pre-commit hook in the store
 refuses text that looks like a token and rebuilds its index files. `coven memory init` creates it
@@ -205,9 +219,11 @@ and `coven memory sync` fetches, rebases and pushes.
 **The remote must be private.** The store holds personal notes. Setup asks `gh repo view` whether the
 remote is private when it can, and warns when it cannot check. A remote is optional.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Uninstall
 
-1. `coven setup --undo` shows what it would restore; add `--yes` to do it. It restores only the keys
+1. ⋆ `coven setup --undo` shows what it would restore; add `--yes` to do it. It restores only the keys
    setup wrote and skips, by name, any key that has changed since. `--undo --yes` also removes the
    shim and the `config.json` setup created; an empty `~/.config/coven` folder may remain. The
    timestamped backups beside `~/.claude/settings.json` are for you to read; coven never restores
@@ -218,21 +234,27 @@ remote is private when it can, and warns when it cannot check. A remote is optio
    the path you chose). The store is your notes: copy out what you keep first. Logs live in
    `${XDG_CACHE_HOME:-~/.cache}/coven`.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Known gaps
 
-[docs/known-gaps.md](docs/known-gaps.md) lists what coven assumes about Claude Code, what it has
+✧ [docs/known-gaps.md](docs/known-gaps.md) lists what coven assumes about Claude Code, what it has
 not verified and what it does not protect against. Read it before you let a PM loose on a repo.
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
 ## Credits
 
-Some skills are adapted from MIT-licensed projects: [obra/superpowers](https://github.com/obra/superpowers),
+⋆ Some skills are adapted from MIT-licensed projects: [obra/superpowers](https://github.com/obra/superpowers),
 [garrytan/gstack](https://github.com/garrytan/gstack) and
 [mattpocock/skills](https://github.com/mattpocock/skills). Their notices are in [NOTICE](NOTICE)
 and in each skill's `LICENSE`. See [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## License
 
-MIT, see [LICENSE](LICENSE).
+✦ MIT, see [LICENSE](LICENSE).
 
 <br>
 

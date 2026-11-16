@@ -78,6 +78,40 @@ def test_every_local_readme_image_source_resolves() -> None:
         assert (REPO / source).is_file(), f"{source} does not resolve"
 
 
+BRAND_GLYPHS = ("✦", "✧", "⋆", "☾", "🕯️")
+
+
+def section_lead_lines() -> dict[str, str]:
+    """The first line of body text under each `##` heading, outside code fences and HTML."""
+    leads: dict[str, str] = {}
+    heading, fenced = "", False
+    for line in readme().splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+        elif line.startswith("## "):
+            heading = line[3:]
+        elif heading and heading not in leads and not fenced and line.strip():
+            if not line.lstrip().startswith("<"):
+                leads[heading] = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line)
+    return leads
+
+
+def test_every_section_lead_line_opens_with_a_brand_glyph() -> None:
+    leads = section_lead_lines()
+    assert len(leads) == len(re.findall(r"^## ", readme(), re.MULTILINE))
+    for heading, lead in leads.items():
+        assert lead.startswith(BRAND_GLYPHS), f"{heading}: {lead}"
+
+
+def test_brand_glyphs_stay_out_of_headings_and_code() -> None:
+    text = readme()
+    headings = re.findall(r"^#+ +(.+)$", text, re.MULTILINE)
+    code = re.findall(r"^```.*?^```", text, re.MULTILINE | re.DOTALL)
+    code += re.findall(r"`([^`\n]+)`", text)
+    for chunk in headings + code:
+        assert not any(glyph in chunk for glyph in BRAND_GLYPHS), chunk
+
+
 def test_the_readme_has_the_sections_the_spec_promises() -> None:
     headings = {h.lower() for h in re.findall(r"^#+ +(.+)$", readme(), re.MULTILINE)}
     for wanted in (
