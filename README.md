@@ -1,4 +1,29 @@
-# coven
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
+    <img src="docs/assets/logo-light.svg" alt="coven" width="220">
+  </picture>
+</h1>
+
+<p align="center"><em>Plan, build test-first, review: one working method for your Claude Code agents.</em></p>
+
+<div align="center">
+
+[![coven-check](https://img.shields.io/github/actions/workflow/status/WitchyNibbles/coven/coven-check.yml?branch=main&label=coven-check&labelColor=171025)](https://github.com/WitchyNibbles/coven/actions/workflows/coven-check.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-7042B2?labelColor=171025)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-77D9FF?labelColor=171025)](#requirements)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-FFD477?labelColor=171025)](#install)
+
+</div>
+
+<div align="center">
+
+[Install](#install) ⋆ [Setup](#setup) ⋆ [Walkthrough](#walkthrough-the-toy-project) ⋆
+[Hierarchy](#the-hierarchy-and-what-it-costs) ⋆ [Code standard](#the-code-standard) ⋆
+[Known gaps](#known-gaps)
+
+</div>
 
 A Claude Code plugin for building software with agents. It packs one working method:
 
@@ -152,7 +177,7 @@ nothing itself:
 - Each repo needs one interactive trust prompt the first time a PM starts there: run `claude` in
   that repo once and accept it.
 
-**Cost.** Each PM is a separate background session on the opus model, and its final reviews use opus
+🕯️ **Cost.** Each PM is a separate background session on the opus model, and its final reviews use opus
 too. The more PMs run at once, the faster you spend. The cap is a setting, `pm_cap`, with default 2;
 setup asks for it and the manager skill reads it. The hierarchy was designed for at most 4. coven
 does not show what a PM has cost yet.
@@ -208,3 +233,15 @@ and in each skill's `LICENSE`. See [CHANGELOG.md](CHANGELOG.md) for what changed
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+<br>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/divider-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/divider-light.svg">
+    <img src="docs/assets/divider-light.svg" alt="" width="320">
+  </picture>
+</p>
+
+<p align="center"><sub>☾ brewed by <a href="https://github.com/WitchyNibbles">WitchyNibbles</a></sub></p>
