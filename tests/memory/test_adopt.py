@@ -641,6 +641,32 @@ def test_folders_and_the_state_record_are_renamed_with_git_mv_and_entries_stay_b
         assert (root / rel).read_bytes() == before[rel]
 
 
+def test_an_empty_untracked_keyed_folder_is_kept_and_adopt_succeeds(
+    lab: Lab, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    (root / "handoffs" / "My Proj").mkdir()
+    assert run_adopt(root) == 0
+    plan = capsys.readouterr().out
+    assert "kept as they are (not tracked): handoffs/My Proj" in plan
+    assert "handoffs/My Proj ->" not in plan
+
+    assert run_adopt(root, "--yes") == 0
+
+    assert (root / "handoffs" / "My Proj").is_dir()
+    assert list((root / "handoffs" / "My Proj").iterdir()) == []
+    assert not (root / "handoffs" / "my-proj").exists()
+    assert (root / "handoffs" / "orders-app" / "handoff-1.md").is_file()  # tracked ones still move
+
+
+def test_an_untracked_folder_does_not_clash_with_a_tracked_one_of_the_same_key(lab: Lab) -> None:
+    root = seed(lab)
+    (root / "handoffs" / "ORDERS APP").mkdir()
+    assert run_adopt(root, "--yes") == 0
+    assert (root / "handoffs" / "ORDERS APP").is_dir()
+    assert (root / "handoffs" / "orders-app" / "handoff-1.md").is_file()
+
+
 def test_a_case_only_rename_goes_through_a_temporary_name(
     lab: Lab, monkeypatch: pytest.MonkeyPatch
 ) -> None:

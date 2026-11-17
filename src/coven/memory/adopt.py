@@ -202,8 +202,30 @@ class Rename:
         return f"{self.source} -> {self.target}{state}"
 
 
+def _folders(root: Path, scope: str) -> tuple[list[str], list[str]]:
+    """The folders of `scope` as (tracked, untracked): `git mv` moves only a folder that holds a
+    tracked file, so a folder git does not track (an empty one, say) is left as it is."""
+    listed = store.git(root, "ls-files", "-z", "--", scope).stdout
+    tracked = {path.split("/")[1] for path in listed.split("\0") if path.count("/") >= 2}
+    names = sorted(p.name for p in (root / scope).iterdir() if p.is_dir())
+    return [n for n in names if n in tracked], [n for n in names if n not in tracked]
+
+
+def untracked_folders(root: Path) -> list[str]:
+    """The folders under `projects/` and `handoffs/` that need a new name but are not tracked, so
+    they are kept as they are."""
+    key_form = _key_form()
+    return [
+        f"{scope}/{name}"
+        for scope in KEYED_SCOPES
+        if (root / scope).is_dir()
+        for name in _folders(root, scope)[1]
+        if key_form(name) != name
+    ]
+
+
 def plan_renames(root: Path) -> list[Rename]:
-    """The folders under `projects/` and `handoffs/` not yet in key form.
+    """The tracked folders under `projects/` and `handoffs/` not yet in key form.
 
     Raises `CovenError` before anything changes when two folders (or a state record and a file
     beside it) would end up with the same name.
@@ -216,7 +238,7 @@ def plan_renames(root: Path) -> list[Rename]:
         if not base.is_dir():
             continue
         groups: dict[str, list[str]] = defaultdict(list)
-        for folder in sorted(p.name for p in base.iterdir() if p.is_dir()):
+        for folder in _folders(root, scope)[0]:
             groups[key_form(folder)].append(folder)
         for key, names in groups.items():
             if len(names) > 1:
@@ -466,6 +488,7 @@ class Plan:
     unknown_folders: list[str]
     symlinked_indexes: list[str]
     renames: list[Rename]
+    untracked_folders: list[str]
     backup_name: str
     foreign_hook: Path | None
     moved_hook_name: str
@@ -603,6 +626,7 @@ def plan_adoption(root: Path, when: str) -> Plan:
         unknown_folders=_unknown_folders(root),
         symlinked_indexes=symlinked_indexes(root),
         renames=renames,
+        untracked_folders=untracked_folders(root),
         backup_name=_free_name(backups_folder(), f"{root.name}-{when}", ".tar.gz"),
         foreign_hook=_foreign_hook(root),
         moved_hook_name=_free_name(hooks, f"{MOVED_HOOK_PREFIX}{when}"),
@@ -635,6 +659,8 @@ def describe(plan: Plan) -> list[str]:
         lines.append(f"  kept as is, outside coven's scopes: {', '.join(plan.unknown_folders)}")
     if plan.symlinked_indexes:
         lines.append(f"  kept as they are (symlinks): {', '.join(plan.symlinked_indexes)}")
+    if plan.untracked_folders:
+        lines.append(f"  kept as they are (not tracked): {', '.join(plan.untracked_folders)}")
     backups = backups_folder()
     lines.append(f"  backup: {backups / plan.backup_name}.tar.gz, with a .sha256 file beside it")
     if plan.foreign_hook:
