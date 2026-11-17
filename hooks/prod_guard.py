@@ -445,6 +445,7 @@ class Explanation:
     note: str  # said after a target refusal: an older guard.json is enforced
     message: str | None  # why this session's call is refused; None: allowed
     verdict: Verdict
+    unreadable: str | None = None  # why the store or the config could not be read, when it could not
 
 
 # --- config ---
@@ -738,12 +739,6 @@ def _call(payload: Mapping[str, object]) -> Call:
 def _reaches_out(call: Call) -> bool:
     """Bash and MCP tools: the calls that can reach a system the guard cannot see without the store."""
     return call.bash is not None or call.tool.startswith(MCP_PREFIX)
-
-
-def _may_repair(call: Call, role: str | None) -> bool:
-    """Calls allowed while no version of guard.json is valid: reads, and an unrestricted
-    session's edits."""
-    return call.tool in READ_TOOLS or (role is None and call.tool in EDIT_TOOLS)
 
 
 # --- the rules for restricted sessions ---
@@ -2681,10 +2676,14 @@ def _restricted_refusal(call: Call, store: Path, role: str, now: datetime) -> st
     return None
 
 
+def _store_problem(store: Path, exc: StoreError) -> str:
+    return f"cannot read the committed memory store at {store} ({exc})"
+
+
 def _unreadable_store(store: Path, exc: StoreError) -> str:
     return (
-        f"{PREFIX} cannot read the committed memory store at {store} ({exc}); Bash and MCP tools"
-        " are blocked until git can read it: run coven doctor"
+        f"{PREFIX} {_store_problem(store, exc)}; Bash and MCP tools are blocked until git can"
+        " read it: run coven doctor"
     )
 
 
@@ -2761,18 +2760,32 @@ class _Reading:
     note: str = ""
     everyone: str | None = None  # the refusal every session meets
     restricted_only: str | None = None  # the refusal only a restricted session meets
+    unreadable: str | None = None  # why git could not read the store
 
 
-def _read_store(call: Call, store: Path, role: str | None, now: datetime) -> _Reading:
+def _no_valid_guard_reading(call: Call, store: Path, exc: GuardError) -> _Reading:
+    """While no version of guard.json is valid, reads work; an unrestricted session may also edit,
+    so the file can be repaired (a restricted one may not); everything else is refused."""
+    if call.tool in READ_TOOLS:
+        return _Reading([])
+    refusal = _no_valid_guard(store, exc)
+    if call.tool in EDIT_TOOLS:
+        return _Reading([], restricted_only=refusal)
+    return _Reading([], everyone=refusal)
+
+
+def _read_store(call: Call, store: Path, now: datetime) -> _Reading:
     out = _reaches_out(call)
     try:
         enforced = load_targets(store)
     except StoreError as exc:
-        return _Reading([], everyone=_unreadable_store(store, exc) if out else None)
-    except GuardError as exc:
         return _Reading(
-            [], everyone=None if _may_repair(call, role) else _no_valid_guard(store, exc)
+            [],
+            everyone=_unreadable_store(store, exc) if out else None,
+            unreadable=_store_problem(store, exc),
         )
+    except GuardError as exc:
+        return _no_valid_guard_reading(call, store, exc)
     if enforced.targets is None:
         missing = f"{PREFIX} {GUARD_FILE} is missing from the committed store; ask the user"
         return _Reading([], restricted_only=missing if out else None)
@@ -2781,7 +2794,9 @@ def _read_store(call: Call, store: Path, role: str | None, now: datetime) -> _Re
         hits = _hits(call, enforced.targets, store, now)
     except StoreError as exc:
         # Only a call that reaches a target reads approvals: refuse it, whatever tool it is.
-        return _Reading([], note, everyone=_unreadable_store(store, exc))
+        return _Reading(
+            [], note, everyone=_unreadable_store(store, exc), unreadable=_store_problem(store, exc)
+        )
     return _Reading(hits, note, everyone=_target_refusal(hits, note))
 
 
@@ -2800,7 +2815,7 @@ def explain(
     unknown included, restricts it. `restricted` is the refusal a restricted session meets even
     when `role` is None, and `message` is the refusal this session meets."""
     call = _call(payload)
-    reading = _read_store(call, store, role, now)
+    reading = _read_store(call, store, now)
     rule = _restricted_refusal(call, store, ASSUMED_ROLE if role is None else role, now)
     restricted = rule or reading.restricted_only
     message = restricted if role is not None and restricted else reading.everyone
@@ -2811,7 +2826,19 @@ def explain(
         reading.note,
         message,
         _verdict(reading.everyone, restricted),
+        reading.unreadable,
     )
+
+
+def explain_without_config(
+    payload: Mapping[str, object], exc: ConfigError, role: str | None
+) -> Explanation:
+    """What the guard decides for a tool call when coven's config cannot be read: a restricted
+    session loses Bash and MCP tools, any other goes on as if the guard were off."""
+    call = _call(payload)
+    refusal = _config_refusal(exc, call)
+    message = refusal if role is not None else None
+    return Explanation(call, [], refusal, "", message, _verdict(None, refusal), str(exc))
 
 
 def decide(
@@ -2871,6 +2898,16 @@ def _guard(store: Path, role: str | None, stdin: TextIO) -> int:
     return 0
 
 
+def _config_refusal(exc: ConfigError, call: Call) -> str | None:
+    """Why a restricted session may not make this call while the config cannot be read."""
+    if not _reaches_out(call):
+        return None
+    return (
+        f"{PREFIX} {CONFIG_ERROR} ({exc}); Bash and MCP tools are blocked in this session: run"
+        " coven doctor"
+    )
+
+
 def _unreadable_config(exc: ConfigError, role: str | None, stdin: TextIO) -> int:
     """A config that cannot be read: a restricted session loses Bash and MCP tools, any other
     session goes on as if the guard were off."""
@@ -2881,13 +2918,10 @@ def _unreadable_config(exc: ConfigError, role: str | None, stdin: TextIO) -> int
         call = _call(_payload(stdin))
     except PayloadError as bad:
         return _refuse_bad_input(bad)
-    if not _reaches_out(call):
+    refusal = _config_refusal(exc, call)
+    if refusal is None:
         return 0
-    print(
-        f"{PREFIX} {CONFIG_ERROR} ({exc}); Bash and MCP tools are blocked in this session: run"
-        " coven doctor",
-        file=sys.stderr,
-    )
+    print(refusal, file=sys.stderr)
     return 2
 
 

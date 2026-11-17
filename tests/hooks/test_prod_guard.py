@@ -4369,3 +4369,125 @@ def test_the_hook_names_the_subcommands_that_write_the_store_or_the_config() -> 
         "memory init",
         "memory sync",
     }
+
+
+# --- explain gives the verdict the hook gives, in every state of the store ---
+
+
+def _state_valid(path: Path) -> Path:
+    return make_store(path)
+
+
+def _state_no_valid_guard(path: Path) -> Path:
+    made = make_store(path, committed=False, guard={"targets": "nope"})
+    commit(made)
+    return made
+
+
+def _state_invalid_head_with_a_valid_version(path: Path) -> Path:
+    made = make_store(path)
+    break_guard(made)
+    return made
+
+
+def _state_guard_absent_at_head(path: Path) -> Path:
+    made = make_store(path)
+    (made / "systems/guard.json").unlink()
+    commit(made)
+    return made
+
+
+def _state_no_commits(path: Path) -> Path:
+    return make_store(path, committed=False)
+
+
+def _state_no_folder(path: Path) -> Path:
+    return path
+
+
+STORE_STATES = {
+    "valid": _state_valid,
+    "no-valid-guard": _state_no_valid_guard,
+    "invalid-head-with-a-valid-version": _state_invalid_head_with_a_valid_version,
+    "guard-absent-at-head": _state_guard_absent_at_head,
+    "no-commits": _state_no_commits,
+    "no-folder": _state_no_folder,
+}
+VERDICT_PAYLOADS = {
+    "ls": bash("ls"),
+    "production": bash(PROD_COMMAND),
+    "start-claude": bash("claude -p hi"),
+    "mcp-send": tool("mcp__mail__send"),
+    "mcp-read": tool("mcp__x__read"),
+    "read": tool("Read", file_path="/tmp/x"),
+    "grep": tool("Grep", pattern="x"),
+    "write": tool("Write", file_path="/tmp/x", content=""),
+    "edit": tool("Edit", file_path="/tmp/x", old_string="a", new_string="b"),
+    "task": tool("Task", prompt="x"),
+}
+
+
+@pytest.mark.parametrize("name", VERDICT_PAYLOADS)
+@pytest.mark.parametrize("state", STORE_STATES)
+def test_the_verdict_is_what_the_hook_gives_an_unrestricted_and_a_restricted_session(
+    state: str, name: str
+) -> None:
+    path = STORE_STATES[state](home() / "coven-memory")
+    payload = VERDICT_PAYLOADS[name]
+    now = datetime.now(UTC)
+    refused_for_user = pg.decide(payload, path, None, now) is not None
+    refused_for_a_pm = pg.decide(payload, path, "pm", now) is not None
+    expected = (
+        "refused for every session"
+        if refused_for_user
+        else "refused for a PM"
+        if refused_for_a_pm
+        else "allowed"
+    )
+    for role in (None, "pm", ""):
+        assert pg.explain(payload, path, role, now).verdict == expected, role
+
+
+@pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
+def test_with_no_valid_guard_an_edit_is_refused_for_a_pm_only(tool_name: str) -> None:
+    path = _state_no_valid_guard(home() / "coven-memory")
+    payload = tool(tool_name, file_path="/tmp/x")
+    unrestricted = explanation(payload, path)
+    assert (unrestricted.verdict, unrestricted.message) == ("refused for a PM", None)
+    assert NO_VALID_GUARD in unrestricted.restricted
+    restricted = explanation(payload, path, "pm")
+    assert restricted.verdict == "refused for a PM"
+    assert restricted.message == unrestricted.restricted
+
+
+def test_with_no_valid_guard_a_read_is_allowed_and_bash_is_refused_for_every_session() -> None:
+    path = _state_no_valid_guard(home() / "coven-memory")
+    assert explanation(tool("Read", file_path="/tmp/x"), path).verdict == "allowed"
+    refused = explanation(bash("ls"), path)
+    assert refused.verdict == "refused for every session"
+    assert NO_VALID_GUARD in refused.message
+
+
+def test_explain_says_when_the_store_could_not_be_read() -> None:
+    path = _state_no_commits(home() / "coven-memory")
+    found = explanation(bash("ls"), path)
+    assert "no commits" in found.unreadable
+    assert found.verdict == "refused for every session"
+    assert explanation(tool("Read", file_path="/tmp/x"), path).unreadable is not None
+    assert explanation(bash("ls"), _state_valid(home() / "other")).unreadable is None
+
+
+@pytest.mark.parametrize("name", VERDICT_PAYLOADS)
+def test_explain_without_a_readable_config_gives_the_verdict_the_hook_gives(
+    run: Run, name: str
+) -> None:
+    write_config("{nope")
+    payload = VERDICT_PAYLOADS[name]
+    problem = pg.ConfigError("bad config")
+    found = pg.explain_without_config(payload, problem, None)
+    refused_for_a_pm = run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == (2 if found.message else 0)
+    assert found.verdict == ("refused for a PM" if refused_for_a_pm else "allowed")
+    assert (found.message, found.hits) == (None, [])
+    assert found.unreadable == "bad config"
+    assert pg.explain_without_config(payload, problem, "pm").message == found.restricted
