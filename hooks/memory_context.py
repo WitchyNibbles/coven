@@ -4,14 +4,15 @@
 Reads the hook payload on stdin (only its `cwd`) and prints
 `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": <block>}}`.
 The block holds the store path, the project key, the user index, the systems index (only when
-`systems/INDEX.md` exists), the index of the project for that key and the latest handoff, in at most CAP characters. A section that does not fit is cut
-and ends in a `… N more entries in <index>` line.
+`systems/INDEX.md` exists), the index of the project for that key and the latest handoff, in at
+most CAP characters. A section that does not fit is cut and ends in a `… N more entries in
+<index>` line.
 
 The store is `memory_path` of `~/.config/coven/config.json` (read as plain JSON: hooks cannot
 import `coven`), `~/coven-memory` when the file or the key is missing. Layout: `user/INDEX.md`,
-`systems/INDEX.md`, `projects/<key>/INDEX.md`, `handoffs/<key>/YYYY-MM-DD-HHMM.md`. When the project index has an
-`origin: <url>` line that differs from this repo's `origin` remote, the block says so (two repos
-with the same folder name share a key).
+`systems/INDEX.md`, `projects/<key>/INDEX.md`, `handoffs/<key>/YYYY-MM-DD-HHMM.md`. When the
+project index has an `origin: <url>` line that differs from this repo's `origin` remote, the block
+says so (two repos with the same folder name share a key).
 
 Fails open: with no store, or on any error (bad payload, bad config), it prints nothing, exits 0
 and appends the error to the hook log with `hooklog.log_event` (a sibling module).

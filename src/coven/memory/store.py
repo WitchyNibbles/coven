@@ -74,11 +74,23 @@ def is_store(path: Path) -> bool:
 def is_guarded(path: Path) -> bool:
     """Whether the store's HEAD commit holds `systems/guard.json` (the work tree does not count).
 
-    False for a folder that is not itself a git repo: git would otherwise look at a repo above it.
+    False when the folder has no `.git` (git would otherwise look at a repo above it), when HEAD
+    does not exist yet and when HEAD lacks the file. Any other git failure (a repo git refuses, a
+    damaged one) raises `CovenError` with git's message: a guard must not read as off because git
+    could not answer.
     """
     if not (path / ".git").exists():
         return False
-    return _git(path, "cat-file", "-e", f"HEAD:{GUARD_FILE}", check=False).returncode == 0
+    head = _git(path, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
+    if head.returncode == 1 and not head.stderr.strip():
+        return False  # `--quiet` makes a missing HEAD exit 1 without a message
+    if head.returncode != 0:
+        raise CovenError(f"git rev-parse failed in {path}: {_last_line(head.stderr)}")
+    if _git(path, "cat-file", "-e", f"HEAD:{GUARD_FILE}", check=False).returncode == 0:
+        return True
+    # cat-file words a missing path and a real failure alike; ls-tree tells them apart by output.
+    listed = _git(path, "ls-tree", "--name-only", "HEAD", "--", GUARD_FILE)
+    return bool(listed.stdout.strip())
 
 
 def pause() -> None:

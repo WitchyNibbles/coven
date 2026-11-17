@@ -556,3 +556,41 @@ def test_a_store_without_a_guard_file_sets_no_latch(store: Path):
     assert run_setup("--yes", "--memory-path", str(store)) == 0
 
     assert "guard" not in read_config()
+
+
+def test_an_empty_existing_folder_takes_the_fresh_init_path_without_a_latch(tmp_path: Path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    assert run_setup("--yes", "--memory-path", str(empty)) == 0
+
+    assert (empty / ".git").is_dir()
+    assert "guard" not in read_config()
+
+
+def test_a_git_repo_without_commits_takes_the_fresh_init_path_without_a_latch(tmp_path: Path):
+    unborn = tmp_path / "unborn"
+    unborn.mkdir()
+    git("init", "-q", cwd=unborn)
+
+    assert run_setup("--yes", "--memory-path", str(unborn)) == 0
+
+    assert (unborn / "user").is_dir()
+    assert "guard" not in read_config()
+
+
+def test_a_folder_git_cannot_read_is_a_clean_error_before_any_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    broken = tmp_path / "broken"
+    (broken / ".git").mkdir(parents=True)
+
+    code = run_setup("--yes", "--cross-session-accept", "--memory-path", str(broken))
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("coven: ")
+    assert "Traceback" not in captured.err
+    assert not settings_file().exists()
+    assert not config.config_file().exists()
+    assert not (paths.config_dir() / "owned.json").exists()

@@ -303,6 +303,41 @@ def test_is_guarded_is_false_for_a_missing_folder_and_a_folder_inside_another_re
     assert not store.is_guarded(outer / "inner")
 
 
+def test_is_guarded_is_false_before_the_first_commit(tmp_path: Path, lab: Lab) -> None:
+    lab.git(tmp_path, "init", "-q")
+    assert not store.is_guarded(tmp_path)
+
+
+def test_is_guarded_is_false_when_head_has_no_guard_file(lab: Lab) -> None:
+    root = lab.store("a")
+    lab.write(root, "systems/orders-db.md", "orders-db", "the orders database")
+    lab.commit(root, "a system without a guard")
+    assert not store.is_guarded(root)
+
+
+def test_is_guarded_raises_when_git_cannot_read_the_repo(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()  # a folder git does not accept as a repo
+    with pytest.raises(CovenError, match="git"):
+        store.is_guarded(tmp_path)
+
+
+def test_is_guarded_raises_on_a_damaged_head(lab: Lab) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    (root / ".git" / "HEAD").write_text("garbage\n")
+    with pytest.raises(CovenError, match="git"):
+        store.is_guarded(root)
+
+
+def test_sync_on_a_store_git_cannot_read_pushes_nothing(lab: Lab, bare_remote: Path) -> None:
+    root = lab.store("a", bare_remote)
+    commit_guard(lab, root)
+    (root / ".git" / "HEAD").write_text("garbage\n")
+    with pytest.raises(CovenError):
+        store.sync_store(root)
+    assert heads(lab, bare_remote) == ""
+
+
 def test_sync_on_a_guarded_store_commits_but_never_pushes(lab: Lab, bare_remote: Path) -> None:
     root = lab.store("a", bare_remote)
     store.sync_store(root)
