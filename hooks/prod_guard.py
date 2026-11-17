@@ -60,9 +60,16 @@ Code text. `shell_words.code_text` blanks data only where the command runs nothi
 commit message, a grep pattern, quoted echo text); a shell, an interpreter, `$(...)`, backticks or
 anything the scanner cannot follow is read whole.
 
+A write into a folder that holds a zone (`rm -rf ~/.claude`, `rsync -a x/ ~/`, `tar -C ~ -xf`,
+`cp -r x/coven ~/.config/`, `cd ~ && cp -r x/.claude .`) is refused as a write to the zone: it can
+replace the hooks as well as an edit can. A zone named only as the source of a copy, or listed, is
+a read and stays allowed. The zone variables (`$HOME`, `$CLAUDE_CONFIG_DIR`, `$XDG_CONFIG_HOME`,
+`$CLAUDE_PLUGIN_ROOT`, plain, quoted or braced) are read with the hook's value and with their
+default, since the command may run under others.
+
 Known limits of the restricted rules: a path built from strings or variables
-(`python3 -c "...'~/cov'+'en-memory'"`, `d=coven-mem; ... ~/${d}ory`) and a write into a folder that
-holds a zone (`rsync -a x/ ~/`, `tar -C ~ -xf`, `cp -r x/coven ~/.config/`) are not read.
+(`python3 -c "...'~/cov'+'en-memory'"`, `d=coven-mem; ... ~/${d}ory`, `for d in ~/.claude; do rm
+-rf $d; done`, `echo ~/.claude | xargs rm -rf`) is not read.
 
 Limits. The whole check has a deadline of DEADLINE seconds and each git call a timeout; past either,
 the call is refused. The guard is best effort against a session that follows its role: its rules are
@@ -304,6 +311,23 @@ CLAUDE_FOLDER = ".claude"
 SETTINGS_FILES = ("settings.json", "settings.local.json")
 PLUGINS_FOLDER = "plugins"
 PLUGIN_ENTRIES = ("cache", "marketplaces", "data", "installed_plugins.json")
+# Variables that can name a zone, and what a session may have set them to instead of the hook's
+# own value: the default of each (the plugin root is a folder under the plugins folder).
+ZONE_VARIABLES = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_PLUGIN_ROOT", "XDG_CONFIG_HOME")
+ZONE_VARIABLE = re.compile(
+    rf"\$(?:\{{({'|'.join(ZONE_VARIABLES)})(?::?[-=?+]([^}}]*))?\}}|({'|'.join(ZONE_VARIABLES)})(?!\w))"
+)
+PLUGIN_ROOT_DEFAULT = ("cache", "plugin")
+# Commands whose every operand, or whose last one (the destination), they change or replace.
+CHANGES_OPERANDS = frozenset(
+    {"rm", "rmdir", "unlink", "mv", "ln", "chmod", "chown", "chgrp", "truncate", "shred", "tee"}
+)
+CHANGES_DESTINATION = frozenset({"cp", "install", "rsync"})
+TARGET_DIRECTORY = re.compile(r"(?:-t|--target-directory=?)(.*)")
+OUTPUT_REDIRECT = re.compile(r"\d*>>?\|?(.*)")
+FIND_ACTIONS = frozenset(
+    {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
+)
 # Fields whose value is a path in the built-in edit tools.
 PATH_KEYS = frozenset({"file_path", "notebook_path", "path"})
 
@@ -1908,30 +1932,36 @@ def claude_dir() -> Path:
     return Path(os.path.abspath(configured)) if configured else Path.home() / CLAUDE_FOLDER
 
 
+def _claude_folders() -> tuple[Path, ...]:
+    """Claude Code's user folder as this hook sees it, and the default one: a command may run
+    under another CLAUDE_CONFIG_DIR than the hook's."""
+    return tuple(dict.fromkeys((claude_dir(), Path.home() / CLAUDE_FOLDER)))
+
+
 def _settings_zone() -> _Zone:
     """Claude Code's settings files, the user's and any project's: they register the hooks."""
-    folder = claude_dir()
+    folders = _claude_folders()
     return _Zone(
-        tuple(folder / name for name in SETTINGS_FILES),
+        tuple(folder / name for folder in folders for name in SETTINGS_FILES),
         "Claude Code's settings files",
         frozenset(f"{CLAUDE_FOLDER}/{name}" for name in SETTINGS_FILES),
         frozenset(SETTINGS_FILES),
         (),
-        (CLAUDE_FOLDER, folder.name),
+        (CLAUDE_FOLDER, *(folder.name for folder in folders)),
         tuple((CLAUDE_FOLDER, name) for name in SETTINGS_FILES),
     )
 
 
 def _plugins_zone() -> _Zone:
     """Claude Code's plugins folder: it holds the installed hooks themselves."""
-    folder = claude_dir()
+    folders = _claude_folders()
     return _Zone(
-        (folder / PLUGINS_FOLDER,),
-        f"Claude Code's plugins folder ({folder / PLUGINS_FOLDER})",
+        tuple(folder / PLUGINS_FOLDER for folder in folders),
+        f"Claude Code's plugins folder ({folders[0] / PLUGINS_FOLDER})",
         frozenset({f"{CLAUDE_FOLDER}/{PLUGINS_FOLDER}"}),
         frozenset({PLUGINS_FOLDER}),
         PLUGIN_ENTRIES,
-        (CLAUDE_FOLDER, folder.name),
+        (CLAUDE_FOLDER, *(folder.name for folder in folders)),
     )
 
 
@@ -2075,9 +2105,235 @@ def _names_token(text: str, names: Iterable[str]) -> bool:
     )
 
 
+def _default_value(name: str) -> str:
+    """What a variable holds when the command sets it itself: the usual place, and for the plugin
+    root a folder under the plugins folder, which it is whatever the hook's own value."""
+    home = Path.home()
+    return {
+        "HOME": str(home),
+        "CLAUDE_CONFIG_DIR": str(home / CLAUDE_FOLDER),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "CLAUDE_PLUGIN_ROOT": str(claude_dir().joinpath(PLUGINS_FOLDER, *PLUGIN_ROOT_DEFAULT)),
+    }[name]
+
+
+def _expanded(text: str, *, default: bool) -> str:
+    """`text` with the zone variables written out, plain, quoted or braced (`${NAME:-word}` too),
+    from the hook's environment or from their defaults."""
+
+    def value(match: re.Match[str]) -> str:
+        name = match[1] or match[3]
+        found = _default_value(name) if default else os.environ.get(name, "")
+        return found or match[2] or ""
+
+    return ZONE_VARIABLE.sub(value, text)
+
+
+def _expansions(text: str) -> list[str]:
+    """The text as written, and with its zone variables expanded each way: the check reads them
+    all, since the command may run under other values than the hook sees."""
+    return list(
+        dict.fromkeys((text, _expanded(text, default=False), _expanded(text, default=True)))
+    )
+
+
+def _operands(args: Sequence[str]) -> list[str]:
+    """The words that are not options (everything after `--` is an operand)."""
+    found: list[str] = []
+    options = True
+    for word in args:
+        if options and word == "--":
+            options = False
+        elif not options or not word.startswith("-"):
+            found.append(word)
+    return found
+
+
+def _target_directory(args: Sequence[str]) -> list[str]:
+    """The folder given as `-t DIR`, `-tDIR`, `--target-directory DIR` or `=DIR`."""
+    for index, word in enumerate(args):
+        match = TARGET_DIRECTORY.fullmatch(word)
+        if match:
+            return [match[1]] if match[1] else list(args[index + 1 : index + 2])
+    return []
+
+
+def _option_folders(args: Sequence[str], short: str, long: str | None = None) -> list[str]:
+    """The folders of tar's `-C DIR` and unzip's `-d DIR`: the option alone, glued to its folder,
+    or a letter in a cluster (`-xCf DIR file`: the words after it), and `--directory`."""
+    found: list[str] = []
+    for index, word in enumerate(args):
+        if long and word.startswith(long + "="):
+            found.append(word.partition("=")[2])
+        elif long and word == long:
+            found += args[index + 1 : index + 2]
+        elif word.startswith("-") and not word.startswith("--") and short in word[1:]:
+            glued = word.partition(short)[2]
+            found += [glued] if glued else []
+            found += [] if glued and not glued.isalpha() else args[index + 1 : index + 3]
+        elif index == 0 and not word.startswith("-") and short in word and word.isalpha():
+            found += args[index + 1 : index + 3]  # tar's old style: `tar xCf DIR file`
+    return found
+
+
+def _unpacks_here(args: Sequence[str], short: str, long: str) -> list[str]:
+    """`["."]` when an archive command unpacks into the current folder: tar with its extract
+    option, unzip unless it only lists, prints or tests (`-l`, `-p`, `-t`, `-v`, `-z`)."""
+    letters = "".join(word[1:] for word in args if word.startswith("-") and word[:2] != "--")
+    if long == "":
+        return [] if set(letters) & set("lptvz") else ["."]
+    old_style = bool(args) and not args[0].startswith("-") and short in args[0]
+    return ["."] if short in letters or long in args or old_style else []
+
+
+def _find_targets(args: Sequence[str]) -> list[str]:
+    """The places `find` starts from, when it deletes or runs something."""
+    if not FIND_ACTIONS.intersection(args):
+        return []
+    start = next((i for i, word in enumerate(args) if word[:1] in "-(!"), len(args))
+    return list(args[:start])
+
+
+def _command_targets(words: Sequence[str], index: int) -> list[str]:
+    """The words a command at `index` changes or replaces: what it deletes, moves, links or
+    changes the mode of, the destination of a copy, the folder an archive unpacks into."""
+    name, args = _basename(words[index]), words[index + 1 :]
+    if name in CHANGES_OPERANDS:
+        return [*_operands(args), *_target_directory(args)]
+    if name in CHANGES_DESTINATION:
+        return _target_directory(args) or _operands(args)[-1:]
+    if name == "tar":
+        return _option_folders(args, "C", "--directory") or _unpacks_here(args, "x", "--extract")
+    if name == "unzip":
+        return _option_folders(args, "d") or _unpacks_here(args, "", "")
+    return _find_targets(args) if name == "find" else []
+
+
+def _redirect_targets(words: Sequence[str]) -> list[str]:
+    """The files a simple command's output redirections write."""
+    found: list[str] = []
+    for index, word in enumerate(words):
+        match = OUTPUT_REDIRECT.fullmatch(word)
+        if match is None:
+            continue
+        target = match[1] or "".join(words[index + 1 : index + 2])
+        if target and not target.startswith("&"):
+            found.append(target)
+    return found
+
+
+class _Step(NamedTuple):
+    """One simple command of a text: the words it changes or replaces, and whether it moves the
+    session to another folder (`folder` is where, None when that cannot be told)."""
+
+    targets: list[str]
+    moves: bool = False
+    folder: str | None = None
+
+
+def _step(words: Sequence[str]) -> _Step:
+    targets = _redirect_targets(words)
+    for index in _runnable(words):
+        targets += _command_targets(words, index)
+    first = _basename(words[0]) if words else ""
+    if first in CHANGE_DIR:
+        operands = _operands(words[1:])
+        return _Step(targets, True, operands[0] if operands else "~")
+    # `popd`, or a `cd` further in (`(cd x; ...)`, `env -C`): the folder is not followed.
+    return _Step(targets, first == "popd" or bool(CHANGE_DIR.intersection(words)))
+
+
+def _write_targets(text: str) -> list[_Step]:
+    """The simple commands of a text, in order, with what each changes or replaces: the operands
+    of rm, mv, ln, chmod and the like, the destination of cp, install and rsync, the folder tar
+    and unzip unpack into, a redirect's file, and what tee writes. A copy's source is only read."""
+    return [
+        _step(_split_env_strings(_unquoted(segment).split()))
+        for segment in COMMAND_SPLIT.split(text)
+    ]
+
+
+def _is_root_or_parent(path: str, zone: _Zone) -> bool:
+    """Whether a resolved path is a root of the zone or a folder that holds one (`~`, `~/.claude`),
+    or a `.claude` folder, which holds the settings files of its project."""
+    for root in zone.roots:
+        for place in {str(root), os.path.realpath(root)}:
+            if path == place or place.startswith(path.rstrip(os.sep) + os.sep):
+                return True
+    parts = Path(path).parts
+    return any(
+        len(suffix) > 1 and parts[-len(suffix) + 1 :] == suffix[:-1] for suffix in zone.suffixes
+    )
+
+
+def _holder_names(zone: _Zone) -> set[str]:
+    """The names of the folders that hold the zone, below the home folder: what a relative
+    operand can name after a `cd` that moved the session somewhere unknown."""
+    home = Path.home().parts
+    names: set[str] = {suffix[0] for suffix in zone.suffixes}
+    for root in zone.roots:
+        parts = root.parts[:-1]
+        names.update(parts[len(home) :] if parts[: len(home)] == home else parts[1:])
+    return names
+
+
+def _may_hold_zone(target: str, zone: _Zone) -> bool:
+    """Whether a relative operand, after a `cd` to somewhere unknown, can be a folder that holds
+    the zone: `.`, `..`, or a name or glob that can stand for one of its holders (`.claude`,
+    `.c*`, `.*`), not a bare `*`."""
+    parts = [part for part in target.split("/") if part not in ("", ".", "..")]
+    if not parts:
+        return True
+    names = _holder_names(zone)
+    return not _has_no_literal(parts[0]) and _matches_any(names, parts[0])
+
+
+def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
+    """Whether something in the text changes or replaces a root of the zone or a folder holding
+    one. The folder a relative operand is read from follows the `cd`s of the text; after one that
+    cannot be followed (`cd "$X"`, `cd -`), a relative operand counts when it can name a holder."""
+    current: str | None = cwd
+    for step in _write_targets(text):
+        if any(_changes_holder(target, current, zone) for target in step.targets):
+            return True
+        if step.moves:
+            current = _after_cd(current, step.folder)
+    return False
+
+
+def _after_cd(current: str | None, folder: str | None) -> str | None:
+    """Where the session is after `cd folder`; None when that cannot be told."""
+    if current is None or folder is None or folder == "-" or "$" in folder:
+        return None
+    return None if GLOB_CHARS.intersection(folder) else _resolve(folder, current)
+
+
+def _changes_holder(target: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a changed word is a root of the zone or a folder that holds one, read from the
+    folder `current` (None: unknown, so a relative word counts when it can name a holder)."""
+    if current is None and not target.startswith(("/", "~", "$")):
+        return _may_hold_zone(target, zone)
+    base = current or os.sep
+    if GLOB_CHARS.intersection(target):
+        roots = [root.parts for root in zone.roots]
+        return _glob_reaches(target, base, roots)
+    resolved = _resolve(target, base)
+    return resolved is not None and _is_root_or_parent(resolved, zone)
+
+
 def _text_reaches(text: str, cwd: str, zone: _Zone, *, cwd_known: bool) -> bool:
+    """Whether a command-like text reaches the zone as written or with its variables expanded
+    each way (`${CLAUDE_CONFIG_DIR}`, `$XDG_CONFIG_HOME`, `$HOME`, `$CLAUDE_PLUGIN_ROOT`)."""
+    return any(
+        _expanded_text_reaches(variant, cwd, zone, cwd_known=cwd_known)
+        for variant in _expansions(text)
+    )
+
+
+def _expanded_text_reaches(text: str, cwd: str, zone: _Zone, *, cwd_known: bool) -> bool:
     """Whether a command-like text names the zone, has a word that resolves into it (~, $VARS,
-    symlinks), or has a glob that can match it, a parent of it or a path inside it.
+    symlinks), or has a glob that can match it, a parent of it or a path inside it, or changes
+    or replaces the zone or a folder that holds it.
 
     `cwd_known` is False when the text may run elsewhere than `cwd` (an MCP tool's own working
     directory): a relative glob that can name the zone's directory then counts without a `cd`.
@@ -2105,7 +2361,7 @@ def _text_reaches(text: str, cwd: str, zone: _Zone, *, cwd_known: bool) -> bool:
             return True
         if _in_zone(_resolve(word, cwd), zone):
             return True
-    return False
+    return _changes_zone_holder(text, cwd, zone)
 
 
 def _in_zone(path: str | None, zone: _Zone) -> bool:

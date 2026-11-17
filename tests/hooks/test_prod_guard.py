@@ -4058,6 +4058,179 @@ def test_a_restricted_session_reads_claude_settings_and_runs_ordinary_commands(
     assert proc.returncode == 0, proc.stderr
 
 
+# --- a write into the parent of a zone: replacing `~/.claude` replaces the hooks inside it ---
+
+PARENT_WRITES = {
+    "rm-claude-folder": "rm -rf ~/.claude",
+    "mv-claude-folder-away": "mv ~/.claude /tmp/old",
+    "mv-over-claude-folder": "rm -rf ~/.claude && mv /tmp/c ~/.claude",
+    "rm-config-folder": "rm -rf ~/.config",
+    "rm-home": "rm -rf ~",
+    "rm-home-variable": "rm -rf $HOME",
+    "rm-quoted-home-variable": 'rm -rf "${HOME}/.claude"',
+    "sudo-rm-home": "sudo rm -rf ~",
+    "cp-into-claude-folder": "cp /tmp/x/settings.json ~/.claude/",
+    "cp-into-relative-claude-folder": "cp /tmp/x/settings.json .claude/",
+    "cp-target-directory-option": "cp -t ~/.claude /tmp/x/settings.json",
+    "cp-into-config-folder": "cp -r /tmp/evil/coven ~/.config/",
+    "install-into-claude-folder": "install -m 600 /tmp/x/settings.json ~/.claude",
+    "rsync-into-home": "rsync -a /tmp/evil/ ~/",
+    "tar-into-home": "tar -C ~ -xf x.tar",
+    "tar-directory-option": "tar --directory=~/.config -xf x.tar",
+    "tar-cluster-into-home": "tar -xCf ~ x.tar",
+    "unzip-into-home": "unzip -d ~ x.zip",
+    "rm-then-link": "rm -rf .claude && ln -s /tmp/e .claude",
+    "link-over-claude-folder": "ln -sfn /tmp/e ~/.claude",
+    "chmod-claude-folder": "chmod -R 777 ~/.claude",
+    "tee-into-claude-folder": "echo x | tee ~/.claude",
+    "redirect-into-home": "echo x > ~",
+    "cd-home-then-rm-claude": "cd ~ && rm -rf .claude",
+    "cd-home-then-rm-dotted-glob": "cd ~ && rm -rf .c*",
+    "cd-home-then-rm-all-dotted": "cd ~ && rm -rf .*",
+    "cd-home-then-mv-config": "cd ~ && mv .config /tmp/c",
+    "cd-then-rm-parent": "cd ~/proj && rm -rf ..",
+    "find-delete-home": "find ~ -delete",
+    "cd-home-then-untar": "cd ~ && tar -xf /tmp/x.tar",
+    "cd-config-then-rsync-here": "cd ~/.config && rsync -a /tmp/evil/ .",
+    "cd-home-then-copy-here": "cd ~ && cp -r /tmp/evil/.claude .",
+    "cd-home-then-move-in": "cd ~ && mv /tmp/c .claude",
+    "cd-variable-then-rm-sibling": "cd $HOME/.config && rm -rf ../.claude",
+    "cd-unknown-then-rm-claude": "cd $SOMEWHERE && rm -rf .claude",
+    "path-around-home": "rm -rf ~/x/../.claude",
+    "shell-string": "bash -c 'rm -rf ~/.claude'",
+    "braced-operator": "rm -rf ${HOME:?}/.claude",
+}
+
+
+@pytest.mark.parametrize("name", PARENT_WRITES)
+def test_a_restricted_session_cannot_replace_a_folder_that_holds_a_zone(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(PARENT_WRITES[name], cwd=str(project_dir()))
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+    assert run(payload).returncode == 0
+
+
+def test_the_copy_edit_replace_sequence_is_refused_at_its_last_step(run: Run, store: Path) -> None:
+    """Copy the folder, edit the copy's hook, put the copy back: the first step only reads."""
+    copy = run(bash("cp -a ~/.claude /tmp/c"), role="pm")
+    assert copy.returncode == 0, copy.stderr
+    swap = run(bash("rm -rf ~/.claude && mv /tmp/c ~/.claude"), role="pm")
+    assert swap.returncode == 2
+    assert "cannot write to" in swap.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp -a ~/.claude /tmp/c",
+        "cp -a ~ /tmp/backup",
+        "ls ~",
+        "ls ~/.config ~/.claude",
+        "cd ~ && ls -a",
+        "cat ~/.config/git/config",
+        "cp /tmp/x ~/note.md",
+        "rm -rf ~/scratch",
+        "mv /tmp/a ~/.cache/b",
+        "echo x > ~/note.md",
+        "tar -xf x.tar -C /tmp/out",
+        "tar -cf /tmp/x.tar ~/.claude",
+        "unzip -d /tmp/out x.zip",
+        "rsync -a ~/proj/ /tmp/backup/",
+        "cd src && rm -rf build",
+        "cd src && rm -rf coven/__pycache__",
+        "rm -rf .git/hooks-old",
+        "cd ~/proj && rm -rf ../scratch",
+        "find ~ -name '*.pyc'",
+        "cd src && cp /tmp/a .",
+        "cd src && tar -xf /tmp/x.tar",
+        "cd ~/proj && rsync -a /tmp/x/ .",
+        "cd .. && rm -rf proj",
+        "cd ~ && tar -cf /tmp/x.tar .",
+        "unzip -l x.zip",
+    ],
+)
+def test_a_restricted_session_reads_folders_that_hold_a_zone(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(project_dir())), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- variables that name a zone: `$CLAUDE_CONFIG_DIR`, `${XDG_CONFIG_HOME}`, `$CLAUDE_PLUGIN_ROOT` ---
+
+VARIABLE_WRITES = {
+    "cd-config-dir-rm-plugins": "cd $CLAUDE_CONFIG_DIR && rm -rf plugins",
+    "cd-quoted-config-dir-write-settings": 'cd "$CLAUDE_CONFIG_DIR" && echo {} > settings.json',
+    "rm-braced-plugins": "rm -rf ${CLAUDE_CONFIG_DIR}/plugins",
+    "redirect-braced-settings": "echo {} > ${CLAUDE_CONFIG_DIR}/settings.json",
+    "rm-quoted-plugins": 'rm -rf "$CLAUDE_CONFIG_DIR/plugins"',
+    "rm-quoted-braced-plugins": 'rm -rf "${CLAUDE_CONFIG_DIR}/plugins"',
+    "rm-braced-with-default": "rm -rf ${CLAUDE_CONFIG_DIR:-~/.claude}/plugins",
+    "rm-config-dir-itself": "rm -rf $CLAUDE_CONFIG_DIR",
+    "cd-xdg-rm-coven": "cd ${XDG_CONFIG_HOME} && rm -rf coven",
+    "redirect-xdg-config": "echo {} > $XDG_CONFIG_HOME/coven/config.json",
+    "rm-braced-xdg": 'rm -rf "${XDG_CONFIG_HOME}"',
+    "sed-plugin-root": "sed -i d ${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json",
+    "rm-plugin-root-hooks": "rm -rf ${CLAUDE_PLUGIN_ROOT}/hooks",
+    "rm-unbraced-plugin-root": "rm -rf $CLAUDE_PLUGIN_ROOT/hooks",
+    "write-quoted-plugin-root": 'echo x > "${CLAUDE_PLUGIN_ROOT}/hooks/prod_guard.py"',
+    "rm-home-claude-braced": "rm -rf ${HOME}/.claude",
+    "write-home-settings": "echo {} > ${HOME}/.claude/settings.json",
+}
+# What the hook sees of each variable: as the test environment sets them, none of them, or
+# somewhere else. The command may run under the others, so every state is refused.
+VARIABLE_STATES = {
+    "set": {},
+    "unset": {"CLAUDE_CONFIG_DIR": None, "XDG_CONFIG_HOME": None, "CLAUDE_PLUGIN_ROOT": None},
+    "empty": {"CLAUDE_CONFIG_DIR": "", "XDG_CONFIG_HOME": "", "CLAUDE_PLUGIN_ROOT": ""},
+    "elsewhere": {
+        "CLAUDE_CONFIG_DIR": "/srv/elsewhere/claude",
+        "XDG_CONFIG_HOME": "/srv/elsewhere/xdg",
+        "CLAUDE_PLUGIN_ROOT": "/srv/elsewhere/plugin",
+    },
+}
+
+
+@pytest.mark.parametrize("state", VARIABLE_STATES)
+@pytest.mark.parametrize("name", VARIABLE_WRITES)
+def test_a_restricted_session_cannot_reach_a_zone_through_a_variable(
+    run: Run, store: Path, monkeypatch: pytest.MonkeyPatch, name: str, state: str
+) -> None:
+    for variable, value in VARIABLE_STATES[state].items():
+        if value is None:
+            monkeypatch.delenv(variable, raising=False)
+        else:
+            monkeypatch.setenv(variable, value)
+    payload = bash(VARIABLE_WRITES[name], cwd=str(project_dir()))
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo $CLAUDE_CONFIG_DIR",
+        'echo "${XDG_CONFIG_HOME}"',
+        "cd $HOME && ls",
+        "ls $HOME/projects",
+        "cd ${XDG_CONFIG_HOME}/git && ls",
+        "rm -rf $HOME/scratch",
+        "cd src && rm -rf plugins",
+        "ls $OTHER_DIR/plugins",
+    ],
+)
+def test_a_restricted_session_may_name_a_variable_without_writing_a_zone(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(project_dir())), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- who is restricted, and what no approval lifts ---
 
 
