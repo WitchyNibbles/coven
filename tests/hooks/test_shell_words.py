@@ -257,7 +257,7 @@ def spaced(command, *data):
         ),
         ("cd docs && grep -n x a.md | head -3", ["x"]),
         ("git commit -m x && git status", ["x"]),
-        # the live false positive: a heredoc appending a note that names the headless claude flag
+        # a heredoc appending a note that names a claude flag is data, not code
         (
             "cat >> progress.md <<'EOF'\nrefused: claude -p in a note\nEOF",
             ["refused: claude -p in a note\n"],
