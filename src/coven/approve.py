@@ -265,7 +265,7 @@ def _store() -> Path:
 
 def _git(store: Path, *args: str) -> str:
     """git's stdout in the store, through the store's own git runner."""
-    return memory_store._git(store, *args).stdout
+    return memory_store.git(store, *args).stdout
 
 
 def _status(store: Path) -> list[str]:

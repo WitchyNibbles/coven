@@ -608,7 +608,7 @@ def test_a_change_staged_meanwhile_stays_out_of_the_commit(
     store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Whatever else is in the index when git commits, only the approval files are committed."""
-    original = memory_store._git
+    original = memory_store.git
 
     def stage_unrelated_first(path: Path, *args: str, **kwargs: Any) -> Any:
         if args[0] == "add":
@@ -616,7 +616,7 @@ def test_a_change_staged_meanwhile_stays_out_of_the_commit(
             original(path, "add", "--", "notes.txt")
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(memory_store, "_git", stage_unrelated_first)
+    monkeypatch.setattr(memory_store, "git", stage_unrelated_first)
     start = head(store)
     approved(store, "step-20", f"{ORDERS}\n")
     assert git(store, "diff", "--name-only", start, "HEAD").split() == ["approvals/step-20.json"]
@@ -649,7 +649,7 @@ def test_a_commit_that_fails_for_another_reason_rolls_back_too(
 
 
 def commit_times_out(monkeypatch: pytest.MonkeyPatch, *, lands: bool) -> None:
-    original = memory_store._git
+    original = memory_store.git
 
     def fake(path: Path, *args: str, **kwargs: Any) -> Any:
         if args[0] == "commit":
@@ -658,7 +658,7 @@ def commit_times_out(monkeypatch: pytest.MonkeyPatch, *, lands: bool) -> None:
             raise CovenError("git commit took longer than 60 seconds")
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(memory_store, "_git", fake)
+    monkeypatch.setattr(memory_store, "git", fake)
 
 
 def test_a_commit_that_timed_out_but_landed_is_a_success(
@@ -689,7 +689,7 @@ def test_a_commit_that_timed_out_and_did_not_land_leaves_no_json_file(
 def test_when_it_cannot_tell_whether_the_commit_landed_it_deletes_nothing(
     store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original = memory_store._git
+    original = memory_store.git
     heads = {"read": 0}
 
     def fake(path: Path, *args: str, **kwargs: Any) -> Any:
@@ -701,7 +701,7 @@ def test_when_it_cannot_tell_whether_the_commit_landed_it_deletes_nothing(
             raise CovenError("git commit took longer than 60 seconds")
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(memory_store, "_git", fake)
+    monkeypatch.setattr(memory_store, "git", fake)
     refused(store, "step-24", f"{ORDERS}\n", "cannot tell")
     assert (store / "approvals/step-24.json").is_file()
     assert (store / "approvals/step-24.step").is_file()
@@ -710,13 +710,13 @@ def test_when_it_cannot_tell_whether_the_commit_landed_it_deletes_nothing(
 def test_approve_never_pushes_or_fetches(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     git(store, "remote", "add", "origin", "https://example.invalid/memory.git")
     seen: list[str] = []
-    original = memory_store._git
+    original = memory_store.git
 
     def recording(path: Path, *args: str, **kwargs: Any) -> Any:
         seen.append(args[0])
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(memory_store, "_git", recording)
+    monkeypatch.setattr(memory_store, "git", recording)
     approved(store, "step-np", f"{ORDERS}\n")
     approve.revoke("step-np")
     assert seen
