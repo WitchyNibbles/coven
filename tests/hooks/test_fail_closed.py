@@ -391,6 +391,47 @@ def guarded_store(
     (home / ".config" / "coven" / "config.json").write_text(json.dumps(config, indent=2))
 
 
+def raw_config(text: str) -> None:
+    config = Path(os.environ["HOME"]) / ".config" / "coven"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(text)
+
+
+# JSON allows a newline between a key, its colon and its value; python parses these the same as
+# the one-line forms, so the fallback must too.
+SPLIT_LATCHES = [
+    '{"guard":\n "required"}',
+    '{"guard"\n : "required"}',
+    '{\n"guard"\r\n:\r\n"required"\n}',
+]
+
+
+@pytest.mark.parametrize("text", SPLIT_LATCHES)
+@pytest.mark.parametrize("folder", [False, True], ids=["no-folder", "folder-no-guard-file"])
+def test_old_python_reads_a_latch_split_over_lines(
+    run_hook: Run, old_python: dict[str, str], text: str, folder: bool
+) -> None:
+    raw_config(text)
+    if folder:
+        (Path(os.environ["HOME"]) / "coven-memory").mkdir()
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
+
+
+@pytest.mark.parametrize("text", ['{{"memory_path":\n "{}"}}', '{{"memory_path"\n : "{}"}}'])
+def test_old_python_reads_a_memory_path_split_over_lines(
+    run_hook: Run, old_python: dict[str, str], tmp_path: Path, text: str
+) -> None:
+    store = tmp_path / "elsewhere"
+    (store / "systems").mkdir(parents=True)
+    (store / "systems" / "guard.json").write_text('{"targets": []}')
+    raw_config(text.format(store))
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
+
+
 @pytest.mark.parametrize("python", ["old_python", "no_python"])
 @pytest.mark.parametrize("tool", ["Bash", "mcp__mail__send", "mcp__x__y"])
 def test_old_python_refuses_bash_and_mcp_while_the_guard_is_on(

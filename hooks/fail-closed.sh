@@ -81,8 +81,13 @@ fallback_deny_secrets() {
 # Python 3.12+, which the message says.
 guard_is_on() {
     config="${HOME}/.config/coven/config.json"
-    store=
-    [ -f "$config" ] && store=$(sed -n 's/.*"memory_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | sed 1q)
+    # JSON allows a newline between a key, its colon and its value, and sed and grep read line by
+    # line: the config is joined into one line first (a newline cannot occur inside a JSON string).
+    text=
+    if [ -f "$config" ]; then
+        text=$(tr -d '\n\r' <"$config") || return 0 # unreadable: not knowing is not "off"
+    fi
+    store=$(printf '%s' "$text" | sed -n 's/.*"memory_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed 1q)
     [ -n "$store" ] || store="${HOME}/coven-memory"
     case $store in
     \~) store=$HOME ;;
@@ -90,7 +95,7 @@ guard_is_on() {
     esac
     found=1
     if [ -f "$config" ]; then
-        grep -q '"guard"[[:space:]]*:[[:space:]]*"required"' "$config"
+        printf '%s' "$text" | grep -q '"guard"[[:space:]]*:[[:space:]]*"required"'
         found=$?
     fi
     [ "$found" -eq 1 ] || return 0 # the latch (or a grep that failed: not knowing is not "off")
