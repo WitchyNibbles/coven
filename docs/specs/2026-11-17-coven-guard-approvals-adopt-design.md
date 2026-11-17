@@ -159,12 +159,26 @@ names the exact command (whitespace-stripped) or tool. A command that matches tw
 live approval for each.
 
 **Restricted rules (role set), checked first; no approval lifts them.**
-- Any write to the store: Write, Edit and NotebookEdit under its path, and Bash that names the
-  store path and is not a read. PMs read the store with Read, Grep and `rg`; they never write it.
+- Any write to the store: Write, Edit and NotebookEdit under its path, and any Bash that reaches
+  the store, reads included (as the private guard). PMs read the store with the Read, Grep and Glob
+  tools; they never write it.
+- Writes to the files that switch the guard off: coven's config file, Claude Code's
+  `settings.json` and `settings.local.json` (in `${CLAUDE_CONFIG_DIR:-~/.claude}` and in any
+  folder's `.claude/`), and the `plugins/` folder where the hooks live. A PM reads them with the
+  Read tool.
+- A write target (`rm`, `mv`, `ln`, `chmod`, a `cp`/`rsync`/`install` destination, `tar -C`,
+  `unzip -d`, a redirect) that is one of those zones or a folder holding one (`~`, `~/.config`,
+  `~/.claude`, the store's parents), so a PM cannot swap a whole folder back in.
+- `$HOME`, `$CLAUDE_CONFIG_DIR`, `$CLAUDE_PLUGIN_ROOT` and `$XDG_CONFIG_HOME`, braced or not, are
+  resolved with the hook's value and with their default; either reaching a zone refuses.
 - Changing `COVEN_SESSION_ROLE`, starting `claude` sessions, and `coven approve` (a PM cannot
   approve its own step).
 - A remote CLI (ssh, scp, rsync, psql, pg_dump, mysql, curl, wget and the like) whose host is not
   written out, since a target pattern could not see it.
+
+Known limits (the private guard shares them; listed in known-gaps): a path built by a loop, a
+variable assignment, a pipe into `xargs`, a substitution or interpreter code; a script written in
+one call and run in a later one; plugins loaded with `--plugin-dir`.
 
 **Code text.** Data is blanked only where the command runs nothing it is given (a commit message, a
 grep pattern, quoted echo text); a shell, an interpreter, `$(...)`, backticks or anything the
@@ -403,6 +417,10 @@ run any CLI the user installs.
   `coven memory adopt|init|sync`: the latch and the store path live in the config — precedent:
   the private guard refuses a PM its own installer commands — cost if wrong: a PM asks the GM for
   a setup change.
+- Restricted sessions may not write Claude Code's settings files or `plugins/`, nor a folder that
+  holds a guarded zone — source: a review showed a PM could set `disableAllHooks` or swap
+  `~/.claude` back in with an edited hook; the private guard has the same gap — cost if wrong: a PM
+  asks the GM for a settings change or a cleanup in `~`.
 - The store's pre-commit hook refuses commits when the role variable has any value, not only
   `pm` (hook version bump) — source: the stricter role rule — cost if wrong: none for sessions
   that never set it.
