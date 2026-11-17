@@ -88,8 +88,18 @@ def run(approval_id: str, *, now: datetime = NOW, **fields: Any) -> list[str]:
 
 
 def approved(store: Path, approval_id: str, text: str, **kwargs: Any) -> list[str]:
+    """A successful approve, which must leave the store committed and clean."""
     write_step(store, approval_id, text)
-    return run(approval_id, **kwargs)
+    lines = run(approval_id, **kwargs)
+    assert git(store, "status", "--porcelain", "--untracked-files=all") == ""
+    return lines
+
+
+def revoked(approval_id: str) -> list[str]:
+    """A successful revoke in the default store, which must leave it committed and clean."""
+    lines = approve.revoke(approval_id)
+    assert git(home() / "coven-memory", "status", "--porcelain", "--untracked-files=all") == ""
+    return lines
 
 
 def refused(store: Path, approval_id: str, text: str, message: str, **kwargs: Any) -> str:
@@ -524,14 +534,32 @@ def test_a_staged_change_stops_the_run(store: Path) -> None:
     assert head(store) == start
 
 
-def test_the_step_file_may_be_a_tracked_file_that_was_modified(store: Path) -> None:
+def test_a_step_file_that_is_already_tracked_is_refused_and_nothing_is_touched(
+    store: Path,
+) -> None:
     write_step(store, "step-16c", "ls\n")
     git(store, "add", "-A")
     git(store, "commit", "-q", "-m", "keep a step")
     write_step(store, "step-16c", f"{ORDERS}\n")
+    start = head(store)
+    with pytest.raises(CovenError, match="history") as caught:
+        run("step-16c")
+    assert "approvals/step-16c.step" in str(caught.value)
+    assert approval_files(store) == []
     assert git(store, "status", "--porcelain") == " M approvals/step-16c.step\n"
-    run("step-16c")
-    assert committed(store, "step-16c.json")["commands"] == [ORDERS]
+    assert head(store) == start
+
+
+def test_a_target_that_lists_the_bash_tool_cannot_be_approved_by_command(store: Path) -> None:
+    """The guard would judge every Bash call through that target's `tools`, which a command in an
+    approval file does not answer: approving would print `approved` and the guard would still refuse."""
+    shell = {"system": "shell", "kind": "gated", "match": [], "tools": ["Bash"]}
+    shared = make_store(home() / "shell-memory", {"targets": [*GUARD["targets"], shell]})
+    start = head(shared)
+    message = refused(shared, "step-sh", f"{ORDERS}\n", "shell")
+    assert "Bash" in message
+    assert approval_files(shared) == []
+    assert head(shared) == start
 
 
 def test_an_existing_approval_is_never_overwritten(store: Path) -> None:
@@ -618,7 +646,8 @@ def test_a_change_staged_meanwhile_stays_out_of_the_commit(
 
     monkeypatch.setattr(memory_store, "git", stage_unrelated_first)
     start = head(store)
-    approved(store, "step-20", f"{ORDERS}\n")
+    write_step(store, "step-20", f"{ORDERS}\n")
+    run("step-20")
     assert git(store, "diff", "--name-only", start, "HEAD").split() == ["approvals/step-20.json"]
     assert git(store, "diff", "--cached", "--name-only").split() == ["notes.txt"]
 
@@ -718,7 +747,7 @@ def test_approve_never_pushes_or_fetches(store: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(memory_store, "git", recording)
     approved(store, "step-np", f"{ORDERS}\n")
-    approve.revoke("step-np")
+    revoked("step-np")
     assert seen
     assert not {"push", "fetch", "pull", "remote", "ls-remote"} & set(seen)
 
@@ -799,7 +828,7 @@ def test_revoke_removes_the_ids_files_in_one_commit(store: Path) -> None:
     approved(store, "step-40", f"{ORDERS_AND_AUDIT}\n")
     approved(store, "other-40", f"{ORDERS}\n")
     start = head(store)
-    lines = approve.revoke("step-40")
+    lines = revoked("step-40")
     assert git(store, "rev-list", "--count", f"{start}..HEAD").strip() == "1"
     assert git(store, "log", "-1", "--format=%s").strip() == "revoke step-40"
     assert approval_files(store) == ["other-40.json"]
@@ -809,15 +838,25 @@ def test_revoke_removes_the_ids_files_in_one_commit(store: Path) -> None:
 
 def test_revoke_of_one_file_id_removes_that_file(store: Path) -> None:
     approved(store, "step-41", f"{ORDERS}\n")
-    assert approve.revoke("step-41") == ["revoked step-41.json"]
+    assert revoked("step-41") == ["revoked step-41.json"]
     assert approval_files(store) == []
 
 
 def test_revoke_leaves_another_id_that_starts_with_the_same_name(store: Path) -> None:
     approved(store, "step-42", f"{ORDERS_AND_AUDIT}\n")
     approved(store, "step-42-extra", f"{ORDERS}\n")
-    approve.revoke("step-42")
+    revoked("step-42")
     assert approval_files(store) == ["step-42-extra.json"]
+
+
+def test_revoke_leaves_a_file_named_for_the_id_that_holds_another_id(store: Path) -> None:
+    write_approval(store, "step-47.json", NOW + timedelta(hours=1), id="someone-else")
+    commit_approvals(store)
+    start = head(store)
+    with pytest.raises(CovenError, match="no approval"):
+        approve.revoke("step-47")
+    assert approval_files(store) == ["step-47.json"]
+    assert head(store) == start
 
 
 def test_revoke_of_an_unknown_id_is_refused_and_changes_nothing(store: Path) -> None:
@@ -832,7 +871,7 @@ def test_revoke_of_an_unknown_id_is_refused_and_changes_nothing(store: Path) -> 
 def test_revoke_needs_no_step_file(store: Path) -> None:
     approved(store, "step-44", f"{ORDERS}\n")
     assert not (store / "approvals/step-44.step").exists()
-    approve.revoke("step-44")
+    revoked("step-44")
     assert approval_files(store) == []
 
 
@@ -875,9 +914,20 @@ def test_the_command_reads_the_step_file_and_prints_what_it_approved(
     assert out[0].startswith("approved step-25.json system=orders-db expires=")
     assert out[1:] == [f"  command: {json.dumps(ORDERS)}"]
     assert committed(store, "step-25.json")["commands"] == [ORDERS]
+    assert git(store, "status", "--porcelain", "--untracked-files=all") == ""
     expires = datetime.fromisoformat(committed(store, "step-25.json")["expires"])
     assert expires.utcoffset() is not None
     assert timedelta(minutes=29) < expires - datetime.now(UTC) <= timedelta(minutes=30)
+
+
+def test_non_ascii_characters_are_printed_as_escapes_so_none_hides(store: Path) -> None:
+    sneaky = "psql -h orders-db.example.internal -c 'select 1' \u202e\u200b"
+    lines = approved(store, "step-uni", f"{sneaky}\n")
+    assert (
+        lines[1] == "  command: \"psql -h orders-db.example.internal -c 'select 1' \\u202e\\u200b\""
+    )
+    assert all(line.isascii() for line in lines)
+    assert committed(store, "step-uni.json")["commands"] == [sneaky]
 
 
 def test_the_system_option_reaches_the_command(
@@ -899,6 +949,7 @@ def test_the_revoke_option_removes_the_files(
     assert cli.main(["approve", "--revoke", "step-26b"]) == 0
     assert capsys.readouterr().out == "revoked step-26b.json\n"
     assert approval_files(store) == []
+    assert git(store, "status", "--porcelain", "--untracked-files=all") == ""
 
 
 def test_a_refusal_is_one_error_line_and_exit_1(
@@ -964,7 +1015,7 @@ def test_the_guard_allows_exactly_the_approved_command_until_it_is_revoked(store
     assert guard_exit(bash(other)) == 2
     assert guard_exit(bash(f"{ORDERS} && {other}")) == 2
     assert guard_exit(bash("ls -la")) == 0  # not guarded at all
-    approve.revoke("e2e-1")
+    revoked("e2e-1")
     assert guard_exit(bash(ORDERS)) == 2
 
 
@@ -1014,15 +1065,26 @@ def test_an_approval_longer_than_the_guards_cap_would_be_ignored_so_none_is_writ
 # --- the guard module approve depends on ---
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def broken(:\n",
+        "import no_such_module_anywhere\n",
+        "raise SystemExit(3)\n",
+        "raise RuntimeError('boom')\n",
+    ],
+    ids=["syntax", "import", "exit", "runtime"],
+)
 def test_a_guard_that_cannot_load_is_an_error_not_a_traceback(
-    store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     broken = tmp_path / "prod_guard.py"
-    broken.write_text("def broken(:\n")
+    broken.write_text(source)
     monkeypatch.setattr(guard, "HOOK", broken)
     guard.load_guard.cache_clear()
     try:
-        refused(store, "step-g", f"{ORDERS}\n", "production guard")
+        message = refused(store, "step-g", f"{ORDERS}\n", "production guard")
     finally:
         guard.load_guard.cache_clear()
+    assert str(broken) in message
     assert approval_files(store) == []

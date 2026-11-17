@@ -45,6 +45,10 @@ def load_guard() -> ModuleType:
         spec.loader.exec_module(module)
     except (OSError, SyntaxError, ImportError) as error:
         raise CovenError(f"cannot load the production guard at {HOOK}: {error}") from error
+    except (Exception, SystemExit) as error:  # a hook that fails or exits as it loads
+        raise CovenError(
+            f"cannot load the production guard at {HOOK}: {type(error).__name__}: {error}"
+        ) from error
     finally:
         sys.path[:], sys.dont_write_bytecode = path, no_bytecode
     return module

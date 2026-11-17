@@ -192,8 +192,16 @@ def _owners(
         raise CovenError(f"not a call the guard can judge: {error}") from error
     if found.unreadable:
         raise CovenError(found.unreadable)
-    via = "command" if payload["tool_name"] == "Bash" else "tool"
-    return {hit.system for hit in found.hits if hit.via == via}
+    if payload["tool_name"] != "Bash":
+        return {hit.system for hit in found.hits if hit.via == "tool"}
+    for hit in found.hits:
+        if hit.via == "tool":
+            # An approval file cannot answer a target that lists the Bash tool itself.
+            raise CovenError(
+                f"the target of {hit.system} lists the {hit.trigger} tool, so the guard judges every"
+                " Bash call by it: no command approval can lift that; change guard.json"
+            )
+    return {hit.system for hit in found.hits}
 
 
 def _chosen(owners: set[str], system: str | None, what: str) -> set[str]:
@@ -273,13 +281,18 @@ def _status(store: Path) -> list[str]:
 
 
 def _require_only(store: Path, step_file: Path) -> None:
-    """The store holds nothing but the one step file (new, or changed since it was committed), so
-    the commit can hold nothing else."""
+    """The store holds nothing but the one new, untracked step file, so the commit can hold nothing
+    else and deleting the step file afterwards leaves the store clean."""
     rel = step_file.relative_to(store).as_posix()
-    status = _status(store)
-    if status not in ([f"?? {rel}"], [f" M {rel}"]):
+    if _git(store, "ls-files", "--", rel).strip():
         raise CovenError(
-            f"{store} must hold nothing but the one step file {rel}; git status shows:\n"
+            f"{rel} is already tracked in {store}: approving would leave its deletion uncommitted;"
+            " remove it from the store's history first, then write the step file again"
+        )
+    status = _status(store)
+    if status != [f"?? {rel}"]:
+        raise CovenError(
+            f"{store} must hold nothing but the one new step file {rel}; git status shows:\n"
             + ("\n".join(status) or "(nothing)")
         )
 
@@ -358,12 +371,11 @@ def _expired(store: Path, now: datetime) -> tuple[str, ...]:
 
 def _files_of(store: Path, approval_id: str) -> tuple[str, ...]:
     """`<id>.json` and each `<id>-*.json` whose own id is this one (`a-b.json` may belong to the
-    approval `a-b`, which `a` must not remove)."""
+    approval `a-b`, which `a` must not remove, and `a.json` may hold another id)."""
+    own = (f"{approval_id}{JSON_SUFFIX}", f"{approval_id}-")
     names = []
     for name in _approval_names(store):
-        if name == f"{approval_id}{JSON_SUFFIX}":
-            names.append(name)
-        elif name.startswith(f"{approval_id}-"):
+        if name.startswith(own[1]) or name == own[0]:
             record = _record(store / APPROVALS_DIR / name)
             if record is not None and record.get("id") == approval_id:
                 names.append(name)
@@ -540,9 +552,9 @@ def _report(files: dict[str, str], grants: dict[str, Grant], expires: str) -> li
             f" commands={len(grant.commands)} tools={len(grant.tools)}"
         )
         lines += [
-            f"  command: {json.dumps(command, ensure_ascii=False)}" for command in grant.commands
+            f"  command: {json.dumps(command, ensure_ascii=True)}" for command in grant.commands
         ]
-        lines += [f"  tool: {json.dumps(tool, ensure_ascii=False)}" for tool in grant.tools]
+        lines += [f"  tool: {json.dumps(tool, ensure_ascii=True)}" for tool in grant.tools]
     return lines
 
 
