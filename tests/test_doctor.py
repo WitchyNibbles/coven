@@ -734,6 +734,8 @@ def refusal(
         "tool": "Bash",
         "command": command,
         "message": message,
+        "role": "pm",
+        "system": "orders-db",
         **more,
     }
 
@@ -765,7 +767,7 @@ def test_refusals_show_newest_first_one_line_each_without_warning(world):
     assert "last command" in lines[0]
     assert "first command" in lines[1]
     assert "2026-11-13T11:00:00" in lines[0]
-    assert "'orders-db' is production" in lines[0]
+    assert " | pm | orders-db | " in lines[0]
 
 
 def test_only_the_last_five_refusals_show(world):
@@ -797,29 +799,40 @@ def test_older_refusals_come_from_the_rotated_log_when_the_current_one_is_short(
 
 @pytest.mark.parametrize(
     ("role", "shown"),
-    [("pm", "pm"), ("gm", "other"), ("", "other"), (None, "unset")],
-    ids=["pm", "other", "empty", "none"],
+    [("pm", "pm"), ("other", "other"), ("unset", "unset"), ("gm", "other"), (None, "other")],
+    ids=["pm", "other", "unset", "raw-value", "null"],
 )
-def test_the_role_is_pm_other_or_unset_and_never_the_raw_value(world, role, shown):
+def test_the_logged_role_class_shows_and_anything_else_reads_as_other(world, role, shown):
     world.log("prod-guard", refusal(role=role))
     [line] = refusal_lines()[1]
-    assert f" {shown} " in line
+    assert f" | {shown} | " in line
     if role == "gm":
         assert "gm" not in line
 
 
-def test_a_record_with_no_role_field_says_the_role_was_not_logged(world):
-    world.log("prod-guard", refusal())
+def test_an_old_record_with_no_role_or_system_says_they_were_not_logged(world):
+    old = {k: v for k, v in refusal().items() if k not in ("role", "system")}
+    world.log("prod-guard", old)
     [line] = refusal_lines()[1]
-    assert " role not logged " in line
+    assert " | role not logged | system not logged | " in line
 
 
-def test_a_role_value_in_a_restricted_message_is_not_printed(world):
+def test_the_system_is_what_the_hook_logged_not_parsed_from_the_message(world):
     message = "coven prod-guard: a 'secret-role-7' session cannot run claude; ask the GM"
-    world.log("prod-guard", refusal(message=message, role="secret-role-7"))
+    world.log("prod-guard", refusal(message=message, role="other", system="claude-start"))
     [line] = refusal_lines()[1]
+    assert " | other | claude-start | " in line
     assert "secret-role-7" not in line
-    assert "session cannot run claude" in line
+    assert "session cannot" not in line
+
+
+def test_a_system_is_cut_and_stays_on_one_printable_line(world):
+    world.log("prod-guard", refusal(system="orders-db\n\u202e\u200b\x00" + "y" * 500))
+    [line] = refusal_lines()[1]
+    assert "\n" not in line
+    assert all(ch.isprintable() for ch in line)
+    assert line.count("y") <= 80
+    assert len(line) < 400
 
 
 def test_a_command_is_cut_to_80_characters_on_one_printable_line(world):
@@ -839,12 +852,6 @@ def test_a_refusal_with_no_command_shows_the_tool(world):
     assert "mcp__orders__write" in line
 
 
-def test_a_long_reason_is_cut_too(world):
-    world.log("prod-guard", refusal(message="coven prod-guard: " + "y" * 500))
-    [line] = refusal_lines()[1]
-    assert len(line) < 400
-
-
 def test_hostile_log_lines_are_skipped_silently(world):
     folder = paths.logs_dir()
     folder.mkdir(parents=True, exist_ok=True)
@@ -854,10 +861,8 @@ def test_hostile_log_lines_are_skipped_silently(world):
         '"just a string"',
         "null",
         "{not json at all",
-        json.dumps({"decision": "deny"}),  # no message
-        json.dumps(
-            {"decision": "deny", "message": 5, "tool": "Bash", "ts": at(timedelta(hours=1))}
-        ),
+        json.dumps({"decision": "deny"}),  # no ts, tool or command
+        json.dumps({**refusal(), "system": ["orders-db"]}),
         json.dumps({**refusal(), "tool": ["Bash"]}),
         json.dumps({**refusal(), "command": {"a": 1}}),
         json.dumps({**refusal(), "ts": 12}),

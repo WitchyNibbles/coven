@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -39,9 +38,7 @@ GUARD_LOG: Final = "prod-guard"
 REFUSALS_SHOWN: Final = 5
 REFUSAL_TAIL_BYTES: Final = 64 * 1024
 REFUSAL_FIELD_LIMIT: Final = 80
-GUARD_PREFIX: Final = "coven prod-guard:"
-# "a '<role>' session ...": the role is the user's variable, so it is cut out before display.
-ROLE_IN_MESSAGE: Final = re.compile(r"^a '.*' session ", re.DOTALL)
+ROLE_CLASSES: Final = ("pm", "unset", "other")  # what the hook logs; never a raw role
 SETUP_FIX: Final = "run coven setup --yes"
 EARLIEST: Final = datetime.min.replace(tzinfo=UTC)
 
@@ -400,14 +397,17 @@ def _guard(now: datetime) -> Outcome:
 
 def _refusal_role(record: dict[str, object]) -> str:
     if "role" not in record:
-        return "role not logged"  # the hook's record carries none yet
+        return "role not logged"  # a record from before the hook logged it
     role = record["role"]
-    return "unset" if role is None else "pm" if role == "pm" else "other"
+    return role if isinstance(role, str) and role in ROLE_CLASSES else "other"
 
 
-def _refusal_reason(message: str) -> str:
-    text = ROLE_IN_MESSAGE.sub("session ", message.removeprefix(GUARD_PREFIX).strip())
-    return _one_line(text.split(";", 1)[0], REFUSAL_FIELD_LIMIT)
+def _refusal_system(record: dict[str, object]) -> str | None:
+    """The logged target system or rule name; None when it has the wrong type."""
+    if record.get("system") is None:
+        return "system not logged"
+    system = record["system"]
+    return _one_line(system, REFUSAL_FIELD_LIMIT) if isinstance(system, str) else None
 
 
 def _refusal(line: str) -> str | None:
@@ -419,15 +419,15 @@ def _refusal(line: str) -> str | None:
     if not isinstance(record, dict) or record.get("decision") != "deny":
         return None
     when, tool, command = _stamp(record.get("ts")), record.get("tool"), record.get("command")
-    message = record.get("message")
-    if when is None or not isinstance(tool, str) or not isinstance(message, str):
+    system = _refusal_system(record)
+    if when is None or system is None or not isinstance(tool, str):
         return None
     if command is not None and not isinstance(command, str):
         return None
     fields = (
         when.isoformat(timespec="seconds"),
         _refusal_role(record),
-        _refusal_reason(message),
+        system,
         _one_line(command or tool, REFUSAL_FIELD_LIMIT),
     )
     return "  " + " | ".join(fields)
