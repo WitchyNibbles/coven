@@ -127,10 +127,15 @@ def configure(store: Path, *, latch: bool = False) -> None:
     write_config(json.dumps(fields))
 
 
+def home() -> Path:
+    return Path(os.environ["HOME"])
+
+
 @pytest.fixture
-def store(tmp_path: Path) -> Path:
-    """A committed store with GUARD; the guard is on because the working tree has a guard.json."""
-    path = make_store(tmp_path / "coven-memory")
+def store() -> Path:
+    """A committed store with GUARD, at ~/coven-memory (the restricted rules read `~` forms); the
+    guard is on because the working tree has a guard.json."""
+    path = make_store(home() / "coven-memory")
     configure(path)
     return path
 
@@ -159,8 +164,8 @@ def run(run_hook: Run) -> Run:
     return runner
 
 
-def bash(command: str) -> Payload:
-    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": "/tmp"}
+def bash(command: str, cwd: str = "/tmp") -> Payload:
+    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}
 
 
 def tool(name: str, **tool_input: object) -> Payload:
@@ -1478,7 +1483,7 @@ def test_the_fallback_note_is_in_the_explanation(store: Path) -> None:
 @pytest.fixture
 def branch_store(tmp_path: Path) -> Path:
     """A store that also guards pushes to main."""
-    path = make_store(tmp_path / "coven-memory", guard=BRANCH_GUARD)
+    path = make_store(home() / "coven-memory", guard=BRANCH_GUARD)
     configure(path)
     return path
 
@@ -1537,7 +1542,10 @@ def test_the_dangerous_twin_is_refused(
     proc = run(bash(TWINS[name]), role=role)
     assert proc.returncode == 2
     assert "internal error" not in proc.stderr  # refused by a rule, not by a crash
-    assert "is production" in proc.stderr or "is gated" in proc.stderr
+    if role is None:
+        assert "is production" in proc.stderr or "is gated" in proc.stderr
+    else:  # a restricted rule may speak first: a shell run on text whose host is not written out
+        assert proc.stderr.startswith(PREFIX)
 
 
 def test_an_approval_still_matches_the_whole_command(run: Run, store: Path) -> None:
@@ -1607,9 +1615,10 @@ def test_a_note_naming_a_target_passes(
 
 
 @pytest.fixture
-def short(tmp_path: Path) -> Path:
+def short() -> Path:
     """A store named `work`: the name is also an ordinary word and a prefix of other names."""
-    path = make_store(tmp_path / "work")
+    (home() / "proj").mkdir()
+    path = make_store(home() / "work")
     configure(path)
     return path
 
@@ -1650,3 +1659,2372 @@ def test_a_restricted_session_may_echo_the_store_name_as_text(
 ) -> None:
     proc = run(bash(command), role="pm")
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~ && rm -rf work/systems",
+        "cd ~ && rm -rf work",
+        "cat ~/work/systems/x.md",
+        "echo x > $HOME/work/approvals/a.json",
+        "cp x $y/work/.git/HEAD",
+        "rm ../work/systems/guard.json",
+        "X=work; rm -rf ~/$X/systems",
+        "echo work | xargs -I{} rm -rf ~/{}/systems",
+        "d=work && cp x ~/`echo $d`/.git/HEAD",
+    ],
+)
+def test_a_restricted_session_cannot_reach_a_short_named_store(
+    run: Run, short: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(home() / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to the memory store" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat 'coven-memory'", 'cat "coven-memory"', "ls /x/coven-memory/", "f(coven-memory,1)"],
+)
+def test_the_store_name_as_a_whole_token_is_refused(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to the memory store" in proc.stderr
+
+
+# --- restricted sessions: any set COVEN_SESSION_ROLE ---
+
+STORE_REFUSAL = f"{PREFIX} a 'pm' session cannot write to the memory store"
+CONFIG_REFUSAL = f"{PREFIX} a 'pm' session cannot write to coven's config"
+HOST_REFUSAL = "a host that is not written out"
+CLAUDE_REFUSAL = "cannot start claude sessions"
+INSTALLER_REFUSAL = "cannot run coven "
+
+
+def project_dir() -> Path:
+    path = home() / "proj"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def pm_write_calls(store):
+    approvals = store / "approvals"
+    return [
+        {"tool_name": "Write", "tool_input": {"file_path": f"{approvals}/a.json", "content": "{}"}},
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": f"{approvals}/a.json",
+                "old_string": "a",
+                "new_string": "b",
+            },
+        },
+        bash(f"echo x > {approvals}/a.json"),
+        bash(f"cp a {approvals}/"),
+        bash(f"echo x | tee {approvals}/b"),
+        bash(f"mkdir -p {approvals}"),
+        bash(f"cd {store} && echo x > approvals/c.json"),
+        bash("echo x > approvals/d.json", cwd=str(store)),
+        bash("echo x > ../coven-memory/approvals/e.json", cwd=str(store.parent / "proj")),
+        bash("echo x > ~/coven-memory/approvals/f.json"),
+        bash("echo x >$HOME/coven-memory/approvals/g.json"),
+        bash(f'cp a "{approvals}/h.json"'),
+        {"tool_name": "Write", "tool_input": {"file_path": "approvals/i.json"}, "cwd": str(store)},
+        {"tool_name": "mcp__fs__write", "tool_input": {"args": {"path": f"{approvals}/j.json"}}},
+        {
+            "tool_name": "mcp__fs__write",
+            "tool_input": {"n": 1, "sources": ["/tmp/x"], "dest": [f"{approvals}/m"]},
+        },
+        {"tool_name": "Write", "tool_input": {"file_path": f"{store / 'link'}/k.json"}},
+        bash(f"echo x > {store / 'link'}/l.json"),
+        bash(f"rm {store}/systems/guard.json"),
+        bash(f"mv {store}/systems/guard.json /tmp/g"),
+        bash(f"cp /tmp/empty.json {store}/systems/guard.json"),
+        bash(f"echo '{{}}' | tee {store}/systems/guard.json"),
+        bash(f"echo '{{\"targets\": []}}' > {store}/systems/guard.json"),
+        bash("rm systems/guard.json", cwd=str(store)),
+        bash(f"cat {store}/systems/orders-db.md"),
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": f"{store}/systems/guard.json", "content": "{}"},
+        },
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": f"{store}/systems/guard.json",
+                "old_string": "a",
+                "new_string": "b",
+            },
+        },
+        {"tool_name": "Write", "tool_input": {"file_path": f"{store}/systems/x.md"}},
+        {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": f"{store}/n.ipynb"}},
+        {"tool_name": "mcp__fs__delete", "tool_input": {"path": f"{store}/systems/guard.json"}},
+        bash(f"cp -t{store}/systems a.md"),
+        bash("cd ~ && rm coven-memory/systems/guard.json"),
+        bash("rm ~/coven*/systems/guard.json"),
+        bash("rm -rf ~/coven-memor?"),
+        bash("rm -rf ~/*"),
+        bash("rm -rf ../*", cwd=str(store.parent / "proj")),
+        bash("rm -rf ../[c]oven-mem*/systems", cwd=str(store.parent / "proj")),
+        bash(f"echo x > {store.parent / 'alias'}/a.json"),
+        bash("cd ~ && cp /tmp/e.json coven-memor?/systems/guard.json"),
+        bash("cd ~ && rm coven*/systems/guard.json"),
+        bash("cd && cd coven* && cp /tmp/e.json systems/guard.json"),
+        bash("pushd ~; rm -rf ./c*"),
+        bash("cd ~ && cp x */.git/HEAD"),
+        bash("cd ~ && cp x */.git/refs/heads/main"),
+        bash("cd ~ && rm -rf */.git"),
+        bash("cd ~ && cp -r /tmp/forge/.git/objects/. */.git/objects/"),
+        bash("cd ~/cov''en-memory && git reset --hard HEAD~1"),
+        bash('cd ~/"coven-memory" && git reset --hard HEAD~1'),
+        bash("cd ~/cov\\en-memory && git reset --hard HEAD~1"),
+        bash("cd ~ && cp x */systems/guard.json"),
+        bash("cd ~ && cp x */approvals/a.json"),
+        bash(
+            "python3 - <<'EOF'\nfrom pathlib import Path\n"
+            '(Path.home() / "coven-memory" / "approvals" / "a.json").write_text("{}")\nEOF'
+        ),
+        bash(
+            "python3 -c \"import os; open(os.path.join(os.path.expanduser('~'), 'coven-memory',"
+            " 'approvals', 'a.json'), 'w').write('{}')\""
+        ),
+        bash("find ~ -maxdepth 1 -name coven-memory -exec rm -rf {} +"),
+        bash("env -C ~ rm -rf coven-memory"),
+        bash("git -C ~ rm -rf coven-memory"),
+        {"tool_name": "mcp__fs__write", "tool_input": {"file_path": f"{approvals}/a b.json"}},
+        {
+            "tool_name": "mcp__fs__move_file",
+            "tool_input": {"source": "/tmp/a.json", "destination": f"{approvals}/a b.json"},
+        },
+        {"tool_name": "mcp__fs__write", "tool_input": {"to": f"  {approvals}/a.json\n"}},
+        {
+            "tool_name": "mcp__slack__send",
+            "tool_input": {"text": f"{store}/systems/billing-api.md needs an update"},
+        },
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"command": f"cp /tmp/g.json {store}/systems/guard.json"},
+        },
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"command": f"mv /tmp/x.json {approvals}/x.json"},
+        },
+        {
+            "tool_name": "mcp__db__query",
+            "tool_input": {"sql": f"COPY t TO '{approvals}/x.json'"},
+        },
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"command": "cd ~ && cp x */approvals/a.json"},
+        },
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"args": ["-C", "~", "rm", "coven-memory"]},
+        },
+        {"tool_name": "mcp__x__y", "tool_input": {"a": {"b": "/tmp/c"}, "z": f"{store}\u0000"}},
+        {
+            "tool_name": "mcp__slack__send",
+            "tool_input": {"text": f"Please update {store}/systems/billing-api.md today"},
+        },
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {
+                "cwd": str(store.parent),
+                "command": "cp /tmp/g.json */systems/guard.json",
+            },
+        },
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"cwd": "~", "command": "cp /tmp/g.json */systems/guard.json"},
+        },
+    ]
+
+
+PM_WRITE_IDS = [
+    "write",
+    "edit",
+    "bash-redirect",
+    "bash-cp",
+    "bash-tee",
+    "bash-mkdir",
+    "bash-cd-store",
+    "bash-cwd-in-store",
+    "bash-relative",
+    "bash-tilde",
+    "bash-home-var",
+    "bash-quoted",
+    "write-relative",
+    "mcp-nested",
+    "mcp-list",
+    "write-symlink",
+    "bash-symlink",
+    "rm-guard",
+    "mv-guard",
+    "cp-guard",
+    "tee-guard",
+    "redirect-guard",
+    "rm-guard-from-store",
+    "bash-reads-store",
+    "write-guard",
+    "edit-guard",
+    "write-systems-entry",
+    "notebook-edit",
+    "mcp-delete-guard",
+    "bash-glued-option",
+    "cd-home-then-relative",
+    "glob-in-store",
+    "glob-is-store",
+    "glob-is-parent",
+    "relative-glob-is-parent",
+    "bracket-glob",
+    "outside-symlink",
+    "cd-then-glob-cp",
+    "cd-then-glob-rm",
+    "cd-into-glob",
+    "pushd-then-glob",
+    "cd-then-star-git-head",
+    "cd-then-star-git-ref",
+    "cd-then-star-git-dir",
+    "cd-then-star-git-objects",
+    "cd-empty-quotes-in-name",
+    "cd-quoted-name",
+    "cd-backslash-in-name",
+    "cd-then-star-guard",
+    "cd-then-star-approval",
+    "python-heredoc-path-parts",
+    "python-c-path-join",
+    "find-by-name",
+    "env-c",
+    "git-c",
+    "mcp-path-field-with-space",
+    "mcp-move-file-destination-with-space",
+    "mcp-padded-path",
+    "mcp-text-starting-with-store-path",
+    "mcp-command-cp-guard",
+    "mcp-command-mv-approval",
+    "mcp-sql-copy-to-approval",
+    "mcp-command-cd-then-star-approval",
+    "mcp-names-store",
+    "mcp-nul-after-store-path",
+    "mcp-sentence-mentioning-store",
+    "mcp-own-cwd-then-star-guard",
+    "mcp-own-cwd-home-then-star-guard",
+]
+
+
+@pytest.mark.parametrize("index", range(len(PM_WRITE_IDS)), ids=PM_WRITE_IDS)
+def test_a_restricted_session_cannot_write_or_reach_the_memory_store(
+    run: Run, store: Path, index: int
+) -> None:
+    (store / "link").symlink_to(store / "approvals")
+    (home() / "alias").symlink_to(store / "approvals")
+    project_dir()
+    payload = pm_write_calls(store)[index]
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+    assert "ask the GM" in proc.stderr
+    assert run(payload).returncode == 0
+
+
+def test_pm_cannot_write_approvals(run: Run, store: Path) -> None:
+    proc = run(bash(f"echo x > {store}/approvals/a.json"), role="pm")
+    assert proc.returncode == 2
+    assert f"cannot write to the memory store ({store})" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bash("ls -la"),
+        bash("git commit -m 'docs: approvals flow'"),
+        bash("cat docs/approvals.md"),
+        bash("ls *.py src/[a-z]*.md", cwd="/tmp"),
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/approvals/a.json", "content": "\0"},
+        },
+        {"tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}},
+        {"tool_name": "Read", "tool_input": {"file_path": "STORE/systems/orders-db.md"}},
+        {"tool_name": "Grep", "tool_input": {"pattern": "x", "path": "STORE/approvals"}},
+        {"tool_name": "Write", "tool_input": {"file_path": "/tmp/n.md", "content": "see STORE"}},
+        {"tool_name": "Task", "tool_input": {"prompt": "read STORE/systems/orders-db.md"}},
+        {"tool_name": "Write", "tool_input": {"file_path": "/tmp/n.md", "content": "STORE"}},
+        {"tool_name": "mcp__db__query", "tool_input": {"query": "select 1"}},
+        {"tool_name": "mcp__shell__exec", "tool_input": {"command": "ls src"}},
+        {"tool_name": "mcp__shell__exec", "tool_input": {"cwd": "~", "command": "ls src/*.py"}},
+        {"tool_name": "mcp__x__y", "tool_input": {"a": {"b": "/tmp/c"}, "z": "/tmp/c\u0000"}},
+    ],
+    ids=[
+        "ls",
+        "word-in-message",
+        "other-approvals-file",
+        "unrelated-globs",
+        "other-approvals-dir",
+        "read",
+        "read-map",
+        "grep-approvals",
+        "write-mentioning-store",
+        "task-mentioning-store",
+        "write-content-is-store-path",
+        "mcp-query-without-store",
+        "mcp-command-without-store",
+        "mcp-ordinary-glob",
+        "mcp-nul-without-store",
+    ],
+)
+def test_pm_runs_ordinary_calls(run: Run, store: Path, payload: Payload) -> None:
+    payload = json.loads(json.dumps(payload).replace("STORE", str(store)))
+    proc = run(payload, role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_restricted_session_cannot_write_approvals_and_the_message_names_the_store(
+    run: Run, store: Path
+) -> None:
+    proc = run(bash(f"echo x > {store}/approvals/a.json"), role="pm")
+    assert proc.returncode == 2
+    assert f"cannot write to the memory store ({store})" in proc.stderr
+
+
+def test_unknown_role_is_treated_as_restricted(run: Run, store: Path) -> None:
+    proc = run(bash(f"echo x > {store}/approvals/a.json"), role="gm")
+    assert proc.returncode == 2
+    assert "a 'gm' session cannot write to the memory store" in proc.stderr
+
+
+@pytest.mark.parametrize("role", ["", "PM"], ids=["empty", "other-case"])
+def test_any_set_role_is_restricted(run: Run, store: Path, role: str | None) -> None:
+    assert run(bash("claude -p hi"), role=role).returncode == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["printenv COVEN_SESSION_ROLE", "  printenv COVEN_SESSION_ROLE\n"],
+    ids=["exact", "surrounding-space"],
+)
+def test_pm_may_run_the_role_self_check(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env -u COVEN_SESSION_ROLE claude -p hi",
+        "unset COVEN_SESSION_ROLE; ls",
+        "COVEN_SESSION_ROLE= ./run.sh",
+        "echo $COVEN_SESSION_ROLE",
+        "printenv COVEN_SESSION_ROLE && unset COVEN_SESSION_ROLE",
+        "printenv COVEN_SESSION_ROLE\nunset COVEN_SESSION_ROLE",
+        "printenv COVEN_SESSION_ROLE > /tmp/role",
+        "export COVEN_SESSION_ROLE=",
+    ],
+    ids=[
+        "env-u",
+        "unset",
+        "reassign",
+        "read",
+        "self-check-then-unset",
+        "self-check-newline-unset",
+        "self-check-redirect",
+        "export-empty",
+    ],
+)
+def test_pm_cannot_touch_the_role_variable(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "coven prod-guard: a 'pm' session cannot change COVEN_SESSION_ROLE" in proc.stderr
+    assert run(bash(command)).returncode == 0
+
+
+SELF_CHECKS = [
+    f"printenv {ROLE} && git status",
+    f"printenv {ROLE}; pwd",
+    f"git status; printenv {ROLE}",
+    f"printenv {ROLE}\nls",
+    f"grep -rn {ROLE} src/",
+    f"rg {ROLE} docs",
+    f"git commit -m 'docs: {ROLE}'",
+    f"cat >> notes.md <<'EOF'\n{ROLE}\nEOF",
+    f"echo '{ROLE} is pm'",
+    f"printenv {ROLE} && cd x && ls",
+    f"printenv {ROLE} || pwd",
+    f"printenv {ROLE} & pwd",
+]
+ROLE_TWINS = [
+    f"read {ROLE}",
+    f"printf -v {ROLE} x",
+    f"declare -n r={ROLE}",
+    f"echo ${{{ROLE}:=x}}",
+    f"mapfile {ROLE} < f",
+    f"local {ROLE}",
+    f"export -n {ROLE}",
+    f"printenv {ROLE} x",
+    f"grep {ROLE} f; unset {ROLE}",
+    f"{ROLE}= git status",
+    f"cat <<'EOF' | sh\nunset {ROLE}\nEOF",
+    f"cat > x.sh <<'EOF'\nunset {ROLE}\nEOF\nsource x.sh",
+]
+# The self-check in a position where its output or its words may run or change something.
+SELF_CHECK_TWINS = [
+    f"echo $(printenv {ROLE})",
+    f'x="$(printenv {ROLE})"',
+    f"printenv {ROLE} | sh",
+    f"printenv {ROLE} |& sh",
+    f"printenv {ROLE} > /tmp/r",
+    f"env -u {ROLE} ls",
+    f"{ROLE}=x ls",
+    f"{ROLE}=x printenv {ROLE}",
+    # zsh reads the words of a parenthesised list as data: the lone command must stay code
+    f"for v (printenv {ROLE}) unset $v; ./child",
+    f"a=(printenv {ROLE}); unset $a; ./child",
+    f"a=(\nprintenv {ROLE}\n); unset $a; ./child",
+    f"for v (\nprintenv {ROLE}\n) unset $v; ./child",
+    f"foreach v (printenv {ROLE})\nunset $v\nend\n./child",
+    f"a=(printenv {ROLE}); env -u $a[2] make agent",
+    f"(printenv {ROLE})",
+    # a later command may read the blanked words back ($_, a trap, the execution string)
+    f"printenv {ROLE}; unset $_; ./child",
+    f'printenv {ROLE} && env -u "$_" ./child',
+    f"printenv {ROLE}; v=$_; unset $v; ./child",
+    f"printenv {ROLE}; sh -c 'unset $0; ./child' $_",
+    f"printenv {ROLE}; env -u$_ ./child",
+    f"printenv {ROLE} & unset $_",
+    f"trap 'unset ${{BASH_COMMAND#* }}' DEBUG\nprintenv {ROLE}\n./child",
+    f"trap 'unset ${{ZSH_DEBUG_CMD#* }}' DEBUG\nprintenv {ROLE}\n./child",
+    f"trap 'env -u ${{BASH_COMMAND#* }} ./child' DEBUG; printenv {ROLE}",
+    f'printenv {ROLE}; read a b c <<< "$ZSH_EXECUTION_STRING"; unset $b; ./child',
+    f'printenv {ROLE}; read a b c <<< "$BASH_EXECUTION_STRING"; unset $b; ./child',
+    f"printenv {ROLE} && make test",
+    # a word left as code that may expand ($_, arithmetic) keeps the whole line as code
+    f"git commit --allow-empty -m 'a[$(env -u {ROLE} ./child)]'; echo $[$_]",
+    f"git commit --allow-empty -m 'a[$(env -u {ROLE} ./child)]'; echo $(($_))",
+    f"printenv {ROLE}; echo $[$_=1]; git commit -m x",
+    f"printenv {ROLE}; ls $[$_=0]",
+    f'printenv {ROLE}; echo "-v $_"; printf $_ gm; git commit -m y',
+    f"printenv {ROLE}; printf $=_ x",
+]
+
+
+@pytest.mark.parametrize("command", SELF_CHECKS)
+def test_pm_may_use_the_role_variable_as_data_or_self_check(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", ROLE_TWINS + SELF_CHECK_TWINS)
+def test_pm_cannot_touch_the_role_variable_elsewhere(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert f"cannot change {ROLE}" in proc.stderr
+
+
+HEAD, TAIL = ROLE[: len(ROLE) // 2], ROLE[len(ROLE) // 2 :]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"unset {HEAD}''{TAIL}",
+        f'unset "{HEAD}"{TAIL}',
+        f"unset {HEAD}\\{TAIL}",
+        f'export {HEAD}""{TAIL}=',
+        f"unset {HEAD}\\\n{TAIL}; make agent",
+        f'unset "{HEAD}\\\n{TAIL}"; make agent',
+        f"unset {HEAD}$'{TAIL}'",
+        f'unset {HEAD}$"{TAIL}"',
+        f"export {HEAD}$'{TAIL}'=gm",
+        f"env -u {HEAD}$'{TAIL}' ./child",
+    ],
+)
+def test_pm_cannot_touch_the_role_variable_split_by_quotes(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert f"cannot change {ROLE}" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [f"grep -rn '{ROLE}' src/", f'git commit -m "docs: {ROLE}"', f"printenv {ROLE} && git status"],
+)
+def test_quoted_role_variable_as_data_or_self_check_still_passes(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_self_check_chained_to_claude_is_refused(run: Run, store: Path) -> None:
+    # claude is not inert, so the self-check stays code and the role rule, first, refuses it
+    proc = run(bash(f"printenv {ROLE}; claude -p x"), role="pm")
+    assert proc.returncode == 2
+    assert f"cannot change {ROLE}" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "claude --bg 'do x'",
+        "cd x && claude -p hi",
+        "ls || claude",
+        "ls; claude -p hi",
+        "echo hi | claude -p",
+        "(claude -p hi)",
+        "echo $(claude -p hi)",
+        "ls &\nclaude -p hi",
+        "FOO=1 claude -p hi",
+        "nohup claude -p hi &",
+        "env A=1 claude -p hi",
+        "/usr/local/bin/claude -p hi",
+        "~/.local/bin/claude",
+        "bash -c 'claude -p hi'",
+        "env -i claude -p hi",
+        "exec env -i claude -p hi",
+        "sudo -E claude -p hi",
+        "env -i HOME=/x claude -p hi",
+        "sudo -u me claude -p hi",
+        "timeout 9 claude -p hi",
+        "timeout -s KILL 9m claude",
+        "echo x | xargs claude -p",
+        "echo x | xargs -n1 -I{} claude -p {}",
+        '"claude" -p hi',
+        "'claude' -p hi",
+        '"/usr/local/bin/claude" -p hi',
+        "nohup env FOO=1 claude -p hi",
+        "exec -a x claude",
+        "nice -n 5 claude",
+        "if true; then claude -p hi; fi",
+        "for i in 1; do claude -p hi; done",
+        "while true; do claude -p hi; done",
+        "! claude -p hi",
+        "if claude -p hi; then :; fi",
+        "if false; then :; else claude -p hi; fi",
+        "\\claude -p hi",
+        "c\\laude -p hi",
+        "timeout infinity claude",
+        "timeout -s KILL infinity claude -p hi",
+        "timeout -k 5 infinity claude -p hi",
+        "eval claude -p hi",
+        "coproc claude -p hi",
+        "command claude -p hi",
+        "cl''aude -p hi",
+        '"cl"aude -p hi',
+        "nohup 'cl'\"au\"de -p hi",
+        "env -i claude",
+        "exec claude",
+        "command claude",
+        "sudo -E claude",
+        '"claude" -p',
+        "/usr/local/bin/claude -p",
+        "xargs claude",
+        # a line continuation joins the name (`cla\` newline `ude` is claude)
+        "cla\\\nude -p hi",
+        "c\\\nlaude",
+        # a newline after an escaped backslash, or after one in a comment, ends the command
+        "echo a\\\\\nclaude -p hi",
+        "ls # a \\\nclaude -p hi",
+        # a redirect may come before the command's name
+        ">out claude -p hi",
+        "> /dev/null claude -p hi",
+        "&>/dev/null claude -p hi",
+        "<n.md claude -p hi",
+        "2> err claude -p hi",
+        "nohup >out claude -p hi",
+        "<<'EOF' claude -p hi\nx\nEOF",
+        # more wrappers, and their command-string forms
+        'script -q -c "claude -p hi" /dev/null',
+        "script -q /dev/null claude -p hi",
+        "screen -dmS pm claude -p hi",
+        "tmux new-session -d -s pm 'claude -p hi'",
+        "tmux new -d 'cd x && claude -p hi'",
+        "su -c 'claude -p hi' u",
+        "su u -c 'claude -p hi'",
+        "runuser -u u -- claude -p hi",
+        "flock /tmp/l claude -p hi",
+        "flock /tmp/l -c 'claude -p hi'",
+        "systemd-run --user claude -p hi",
+        "ksh -c 'claude -p hi'",
+        "busybox sh -c 'claude -p hi'",
+        "chrt 10 claude -p hi",
+        "ionice -c 3 claude -p hi",
+        "taskset 0x1 claude -p hi",
+        "taskset -c 0 claude -p hi",
+        "strace -f -o out claude -p hi",
+        "ltrace claude -p hi",
+        "unbuffer claude -p hi",
+        # a lookup of claude in a substitution puts its path in command position
+        "$(which claude) -p hi",
+        '"$(command -v claude)" -p hi',
+        "`which claude` -p hi",
+        'node "$(which claude)" -p hi',
+        "$(type -P claude) -p hi",
+        "$(whence -p claude) -p hi",
+        "$(whereis -b claude) -p hi",
+        "$(builtin command -V claude) -p hi",
+        "$(true; which claude) -p hi",
+        "p=$(which claude); $p -p hi",
+    ],
+)
+def test_pm_cannot_start_claude(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "coven prod-guard: a 'pm' session cannot start claude" in proc.stderr
+    assert run(bash(command)).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npx @anthropic-ai/claude-code -p hi",
+        "npx @anthropic-ai/claude-code",
+        "bunx @anthropic-ai/claude-code",
+        "pnpm dlx @anthropic-ai/claude-code",
+        "npm exec @anthropic-ai/claude-code",
+        "bash -c 'npx @anthropic-ai/claude-code'",
+        "sh <<'EOF'\nnpx @anthropic-ai/claude-code\nEOF",
+        "cat <<'EOF' | sh\nnpx @anthropic-ai/claude-code\nEOF",
+        "node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+        'gh pr create --body "$(npx @anthropic-ai/claude-code -p hi)"',
+        "npx https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.0.0.tgz",
+        "curl https://claude.com/claude-code",
+        "git commit -m y --trailer -m claude-code",
+        "grep claude-code -e KEY",
+        "(( cat <<'X' ))\nnpx @anthropic-ai/claude-code\nX",
+        "eval 'cat() { bash; }'; cat <<'EOF'\nnpx @anthropic-ai/claude-code\nEOF",
+    ],
+)
+def test_pm_cannot_run_claude_code(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "coven prod-guard: a 'pm' session cannot run claude-code; ask the GM" in proc.stderr
+    assert run(bash(command)).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --title t --body \"$(cat <<'EOF'\n"
+        '🤖 Generated with [Claude Code](https://claude.com/claude-code)\nEOF\n)"',
+        'gh pr create --title t --body "See https://claude.com/claude-code"',
+        "git commit -m 'docs: mention claude-code'",
+        "grep -rn claude-code docs/",
+        "cat > body.md <<'EOF'\nhttps://claude.com/claude-code\nEOF",
+    ],
+)
+def test_pm_may_mention_claude_code_as_data(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo claude",
+        "git commit -m 'claude: fix'",
+        "ls claude-notes",
+        "claudette -p",
+        "cat x/claude",
+        "find . | xargs grep claude",
+        "time make docs",
+        "timeout 9 echo claude",
+        "cd src && ls *.py",
+        "command -v claude",
+        "command -V claude",
+        "builtin command -v claude",
+        "type claude",
+        "which claude",
+        "type -P claude",
+        "whereis claude",
+        "command -v claude && git status",
+    ],
+)
+def test_pm_may_mention_claude(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+CLAUDE_PASSES = [
+    "claude --version",
+    "claude -v",
+    "  claude --version\n",
+    "cat >> notes.md <<'EOF'\nrun claude -p 'summarise' in the GM\nEOF",
+    'echo "claude -p hi" >> notes.md',
+]
+CLAUDE_TWINS = [
+    "claude --version; claude -p hi",
+    "claude -v && claude",
+    "claude --version -p hi",
+    "claude -p --version",
+    "claude -v -p hi",
+    "claude --version\nclaude -p hi",
+    "claude --version | claude -p",
+    "echo $(claude --version)",
+    "claude --version &",
+    "cat <<'EOF' | sh\nclaude -p hi\nEOF",
+    "bash <<'EOF'\nclaude -p hi\nEOF",
+    "cat > x.sh <<'EOF'\nclaude -p hi\nEOF\nbash x.sh",
+]
+
+
+@pytest.mark.parametrize("command", CLAUDE_PASSES)
+def test_pm_may_query_the_version_or_write_claude_text(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", CLAUDE_TWINS)
+def test_pm_still_cannot_start_claude_around_those(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot start claude sessions" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "PATH=x claude --version",
+        "./claude --version",
+        "claude --version 2>&1",
+        "claude --version >/dev/null",
+        # a newline makes `--version` a second command, after a plain `claude`
+        "claude\n--version",
+        "claude \\\n--version",
+        # bash keeps \v and \x1c inside a word: `\v--version` is a prompt, not an option
+        "claude \x0b--version",
+        "claude\x1c-v",
+    ],
+)
+def test_only_the_exact_version_query_is_skipped(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot start claude sessions" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # the live false positive: a note whose own line names the headless flag
+        "cat >> notes.md <<'EOF'\nclaude -p 'summarise' in the GM\nEOF",
+        "git commit -m 'docs: notes\n\nclaude -p runs headless'",
+        "grep -c x <<'EOF'\nclaude -p hi\nEOF",
+        # a line continuation: claude is echo's argument
+        "echo a \\\nclaude",
+    ],
+)
+def test_pm_may_write_claude_lines_as_data(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat >> notes.md <<'EOF'\nx\nEOF\nclaude -p 'summarise' in the GM",
+        "git commit -m 'docs: notes'\nclaude -p hi",
+        "grep -c x <<'EOF' | sh\nclaude -p hi\nEOF",
+        "cat >> notes.md <<'EOF' && sh notes.md\nclaude -p hi\nEOF",
+        "cat >> ~/.bashrc <<'EOF'\nclaude -p hi\nEOF",
+        "cat > .git/hooks/pre-commit <<'EOF'\nclaude -p hi\nEOF",
+    ],
+)
+def test_pm_still_cannot_start_claude_from_those_lines(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot start claude sessions" in proc.stderr
+
+
+PYTHON_READS_CLAUDE = (
+    "python3 - <<'EOF'\nimport json\nraw = json.load(open('tiers.json'))\n"
+    'print(raw["tiers"]["deep"]["claude"])\nEOF'
+)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'claude -p hi' | sh",
+        "echo 'claude -p hi' | sh -s",
+        "echo 'claude -p hi' | bash -",
+        "echo 'claude -p hi' | zsh",
+        "echo 'claude -p hi' | ksh",
+        "echo 'claude -p hi' |& sh",
+        "echo 'claude -p hi' | (sh)",
+        "echo 'claude -p hi' | sudo -u me bash",
+        "printf 'cl''aude -p hi' | sh",
+        "echo 'claude -p hi' > >(sh)",
+        "sh <<< 'claude -p hi'",
+        "sh <(echo claude -p hi)",
+        "bash < <(echo claude -p hi)",
+        "source <(echo claude)",
+        "echo claude | . /dev/stdin",
+        "echo claude | xargs env",
+        "echo claude | xargs -I{} sh -c {}",
+        "echo claude | xargs nohup",
+        "echo 'claude -p hi' | parallel",
+        PYTHON_READS_CLAUDE.replace("<<'EOF'", "<<'EOF' | sh"),
+    ],
+)
+def test_pm_cannot_feed_claude_to_a_shell(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot start claude sessions" in proc.stderr
+    assert run(bash(command)).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg -l 'claude' | xargs sed -n 1p",
+        PYTHON_READS_CLAUDE,
+        # `.claude` is not claude
+        "ls ~/.claude | sh",
+        "echo claude | grep -c sh",
+        "echo claude | xargs",
+        "sh -c 'echo hi' <<< claude",
+        "bash x.sh <<< claude",
+        "echo claude; sh -s",
+    ],
+)
+def test_pm_may_feed_a_shell_without_claude(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- non-literal hosts ---
+
+EDGE_GUARD = {
+    "targets": [
+        {
+            "system": "edge",
+            "kind": "production",
+            "match": ["192\\.0\\.2\\.10", "192\\.0\\.2\\.20"],
+        }
+    ]
+}
+
+
+@pytest.fixture
+def edge_store() -> Path:
+    path = make_store(home() / "coven-memory", guard=EDGE_GUARD)
+    configure(path)
+    return path
+
+
+NON_LITERAL = [  # refused for a pm
+    "for h in $(cat hosts); do ssh $h uptime; done",
+    "while read h; do ssh $h uptime; done < hosts",
+    "ssh $(cat host)",
+    "ssh `cat host`",
+    "ssh ${hosts[0]} uptime",
+    "ssh $H uptime",
+    "h=$(cat f); ssh $h",
+    "h=192.0.2.10 ssh $h uptime",
+    "cat hosts | xargs -I{} ssh {} uptime",
+    "cat hosts | xargs ssh",
+    "xargs -n1 ssh < hosts",
+    "parallel ssh {} uptime ::: 192.0.2.10",
+    "sh -c 'for h in $(cat f); do ssh $h; done'",
+    'bash -c "ssh $H"',
+    "timeout 5 ssh $H",
+    "env -i ssh $H",
+    "sudo -u me ssh $H",
+    "nice -n 5 ssh $H",
+    "nohup ssh $H &",
+    "setsid -f ssh $H",
+    "command ssh $H",
+    "exec ssh $H",
+    'scp f "$H":/tmp',
+    'rsync -a src "$H":/dst',
+    "sftp $H",
+    "ssh -J $J 192.0.2.10",
+    "ssh -o ProxyJump=$J 192.0.2.10",
+    "nc $H 22",
+    "f() { ssh $1; }; f 192.0.2.10",
+    "eval ssh $H",
+]
+CONTROLS = [  # pass for a pm
+    'nc -z localhost "$port"',
+    'rsync -a "$src" "$dst"',
+    "ssh -p 2222 127.0.0.1 'echo $HOME'",
+    "rsync -a a/ b/",
+    "for h in localhost 127.0.0.1; do ssh $h true; done",
+    "h=localhost; ssh $h true",
+    "nc -l $port",
+    'git commit -m "ssh $H"',
+    'git commit -m "$(date) notes on ssh keys"',
+]
+LITERAL_EDGE = [  # the GM's shapes: refused for every session by the bare-host target
+    "for h in 192.0.2.10 192.0.2.20; do ssh $h uptime; done",
+    "h=192.0.2.20; ssh $h uptime",
+    "sh -c 'for h in 192.0.2.10; do ssh $h; done'",
+    "ssh 192.0.2.10 uptime",
+]
+# Twins of the controls and of the brief's shapes: a binding that may not hold where ssh runs, a
+# host in a glued option or after a user, a remote CLI fed to a shell, shells nested too deep.
+NON_LITERAL_TWINS = [
+    # a quoted command string given to a wrapper
+    "cat hosts | parallel 'ssh {} uptime'",
+    'parallel "ssh {} uptime" < hosts',
+    'watch -n5 "ssh $H uptime"',
+    "watch 'ssh $H'",
+    "env -S 'ssh ${H} uptime'",
+    # env -S splits its value into a command, also glued or in a cluster
+    'env -S"ssh $H"',
+    "env -S'ssh $H'",
+    "env -iS'ssh $H'",
+    "env --split-string='ssh $H'",
+    'env --split-string="ssh $H"',
+    # parallel runs each argument after ::: as a command
+    'parallel ::: "ssh $H1 uptime" "ssh $H2 uptime"',
+    'parallel ::: "ssh $H"',
+    'parallel -j2 ::: "ssh $H uptime"',
+    # ssh settings that run a command
+    "ssh -o ProxyCommand='ssh -W %h:%p $J' 127.0.0.1",
+    "ssh -o 'ProxyCommand=nc $H 22' x",
+    "scp -o 'ProxyCommand=nc $H 22' f x:/tmp",
+    "sftp -o 'ProxyCommand=nc $H 22' x",
+    "ssh -o PermitLocalCommand=yes -o 'LocalCommand=ssh $H' x",
+    'ssh -o "KnownHostsCommand=ssh $H cat k" x',
+    "ssh -o KnownHostsCommand='nc $H 22' x",
+    'sftp -D "ssh $H /usr/lib/openssh/sftp-server"',
+    "h=localhost; read h; ssh $h",
+    "read h < f; false && h=localhost; ssh $h",
+    "h=localhost; h+=$x; ssh $h",
+    "if true; then h=localhost; fi; ssh $h",
+    "h=localhost; for h in a $x; do :; done; ssh $h",
+    "for h; do ssh $h; done",
+    "for h in localhost; do h=$x; done; ssh $h",
+    "h=localhost & ssh $h",
+    "h=localhost | true; ssh $h",
+    "(h=localhost); ssh $h",
+    "y=localhost; h=x read y < f; ssh $y",
+    'h=localhost; printf -v h %s "$x"; ssh $h',
+    'h=localhost; printf -vh %s "$X"; ssh $h',
+    "h=localhost; read -rah < f; ssh $h",
+    "h=localhost; read h[0] < f; ssh $h",
+    'h=localhost; printf -v h[0] %s "$X"; ssh $h',
+    # zsh's print -v sets its name too
+    'h=localhost; print -v h "$X"; ssh $h uptime',
+    'h=localhost; print -vh "$X"; ssh $h uptime',
+    # an array assignment binds its name to words the guard does not read
+    'args=(-p 22 "$X"); ssh $args uptime',
+    "args+=(x); ssh ${args[@]} uptime",
+    "args=(x); ssh $args[1] uptime",
+    "h=localhost; h=(x); ssh $h uptime",
+    "h=localhost; h+=(x); ssh $h uptime",
+    # a launcher runs the program it names
+    'uv run psql "$DATABASE_URL"',
+    "poetry run ssh $H uptime",
+    'pdm run curl "http://$H/x"',
+    "conda run -n base ssh $H uptime",
+    "direnv exec . ssh $H uptime",
+    "mise exec -- ssh $H uptime",
+    "uvx --from x ssh $H uptime",
+    "sh -c 'uv run ssh $H uptime'",
+    # options between a launcher and its run word
+    "poetry --directory dir run ssh $H uptime",
+    'uv --project p run psql "$DATABASE_URL"',
+    'pdm -p dir run curl "http://$H/x"',
+    "nix shell nixpkgs#openssh -c ssh $H uptime",
+    "nix develop .#ops --command ssh $H uptime",
+    "mise exec node@20 -- ssh $H uptime",
+    # dash keeps a prefix assignment on a special builtin
+    "sh -c 'h=localhost; h=$X :; ssh $h'",
+    "h=localhost; h=$X :; ssh $h",
+    # an alias runs its value as a command
+    "alias s='ssh $H'\ns",
+    "alias a=ls s='ssh $H'\ns",
+    "alias s='TERM=xterm ssh $H'\ns",
+    "alias s='LC_ALL=C sudo ssh $H'\ns",
+    "builtin alias s='ssh $H'\ns",
+    "command alias s='ssh $H'\ns",
+    "BASH_ALIASES[s]='ssh $H'\ns",
+    "{ ssh $H; }",
+    "( ssh $H )",
+    "tmux new -d 'ssh $H'",
+    "su -c 'ssh $H' u",
+    'script -qc "ssh $H" /dev/null',
+    'read src < f; rsync -a "$src" /d',
+    "rsync -a src/ $H:/dst",
+    "rsync -a src/ rsync://$H/mod",
+    "ssh u@$H",
+    'ssh "$H"',
+    "ssh -J$J 192.0.2.10",
+    "ssh -oProxyJump=$J 192.0.2.10",
+    "ssh -vJ $J 192.0.2.10",
+    "ssh -W $H:22 192.0.2.10",
+    'ssh -o "hostname=$H" x',
+    "scp -J $J f 192.0.2.10:/tmp",
+    "sftp -J $J 192.0.2.10",
+    "nc -x $P 192.0.2.10 22",
+    "nohup >out ssh $H",
+    "git commit -m x; ssh $H",
+    'echo "ssh $H" | sh',
+    "cat hosts | xargs -I{} sh -c 'ssh {}'",
+    'sh -c "sh -c \'sh -c \\"sh -c ls\\"\'"',
+]
+LITERAL_CONTROLS = [  # pass for a pm: the host is written out, or there is none
+    "ssh $U@host.example.com true",
+    'rsync -a "$src/" "$dst"',
+    'h=localhost; ssh "$h" true',
+    "h=localhost && ssh $h true",
+    'h=localhost; print -v x "$X"; ssh $h true',
+    "h=localhost; args=(-v); ssh $h true",
+    "uv run psql -h db1 -c x",
+    "poetry -C dir run pytest",
+    'uv run pytest tests/test_ssh.py -k "$K"',
+    "python3 tools/report.py ssh $H",
+    "h=localhost\nssh $h true",
+    "tmux new -d 'ssh 127.0.0.1 true'",
+    "scp f 127.0.0.1:/tmp",
+    "ssh -o ConnectTimeout=$T 127.0.0.1 true",
+    "command -v ssh",
+    "nc -U /tmp/s",
+    "echo ssh | grep -c ssh",
+    "ssh user@build-1 uptime",
+    "scp f host:/tmp/",
+    "rsync -av d/ host:d/",
+    'ssh host "echo $HOME"',
+    'scp "$f" host:/tmp/',
+    "ssh -p $PORT host",
+    "ssh -o ProxyCommand='ssh -W %h:%p bastion' host",
+    "ssh -o ProxyJump=bastion host",
+    "alias ll='ls -l'\nll",
+]
+
+
+@pytest.mark.parametrize("command", NON_LITERAL + NON_LITERAL_TWINS)
+def test_pm_cannot_take_a_host_from_a_variable(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+    assert run(bash(command)).returncode == 0  # (e) is for pm sessions
+
+
+@pytest.mark.parametrize("command", CONTROLS + LITERAL_CONTROLS)
+def test_pm_literal_hosts_and_controls_pass(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", LITERAL_EDGE)
+@pytest.mark.parametrize("role", [None, "pm"], ids=["gm", "pm"])
+def test_literal_hosts_reach_the_bare_host_target(
+    run: Run, edge_store: Path, command: str, role: str | None
+) -> None:
+    proc = run(bash(command), role=role)
+    assert proc.returncode == 2
+    assert "'edge' is production" in proc.stderr
+
+
+def test_an_appended_host_is_not_written_out(run: Run, edge_store: Path) -> None:
+    """`h+=` builds a host no target pattern sees whole: the name is no longer literal."""
+    command = "h=192.0.2.; h+=10; ssh $h uptime"
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+    assert run(bash(command)).returncode == 0  # (e) is for pm sessions
+
+
+def test_an_approval_does_not_lift_the_host_rule(run: Run, store: Path) -> None:
+    """No approval lifts a restricted rule: the host is written out, or the command is refused."""
+    approve(store, commands=["ssh $H uptime"])
+    proc = run(bash("ssh $H uptime"), role="pm")
+    assert proc.returncode == 2
+    assert HOST_REFUSAL in proc.stderr
+    assert run(bash("ssh $H uptime")).returncode == 0
+
+
+def test_host_rule_names_the_cli_and_the_reason(run: Run, store: Path) -> None:
+    proc = run(bash("cat hosts | xargs ssh"), role="pm")
+    assert proc.stderr.strip() == (
+        "coven prod-guard: a 'pm' session cannot run ssh with a host that is not written out"
+        " in the command (xargs/parallel supplies its arguments); write the host literally"
+    )
+
+
+@pytest.mark.parametrize("command", ["ssh host <<X\nuptime\nX", "ssh host <<-X\n\tuptime\n\tX"])
+def test_an_unquoted_heredoc_names_the_fix(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+    assert "quote the heredoc delimiter" in proc.stderr
+    assert run(bash(command)).returncode == 0  # (e) is for pm sessions
+
+
+def test_a_heredoc_with_another_blocker_gives_the_generic_reason(run: Run, store: Path) -> None:
+    """Quoting the delimiter would not let the scanner follow this line: `$(...)` still blocks."""
+    command = "cat <<EOF\nx\nEOF\nssh $(hostfor x)"
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+    assert "cannot tell where its host comes from" in proc.stderr
+    assert "quote the heredoc delimiter" not in proc.stderr
+    assert run(bash(command)).returncode == 0  # (e) is for pm sessions
+
+
+def test_any_restricted_role_cannot_take_a_host_from_a_variable(run: Run, store: Path) -> None:
+    proc = run(bash("ssh $H uptime"), role="")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+
+
+DB_NON_LITERAL = [
+    'psql "$DATABASE_URL"',
+    "psql -h $H -c 'select 1'",
+    "psql --host=$H",
+    "PGHOST=$H psql",
+    "PGHOST=$(cat f); psql -c x",
+    'pg_dump -d "$URL" -f out.sql',
+    "pg_restore -h $H -d app x.dump",
+    "mysql -h $H app",
+    'mysql "mysql://u@$H/app"',
+    "sqlcmd -S $H -Q 'select 1'",
+    "SQLCMDSERVER=$H sqlcmd",
+    'curl "$URL"',
+    'curl -s "http://$H/x"',
+    "curl -K hosts.cfg",
+    "curl --config=hosts.cfg",
+    "curl -x $P https://example.com",
+    "wget -i urls.txt",
+    "wget $URL",
+    "wget -e http_proxy=$P https://example.com",
+]
+DB_CONTROLS = [
+    "until curl -sf localhost:8000/health; do sleep 1; done",
+    'DATABASE_URL=postgres://localhost:5432/app; psql "$DATABASE_URL"',
+    "psql -h localhost -c \"select * from t where a = '$x'\"",
+    "psql -h /var/run/postgresql app",
+    "psql -c 'select 1'",
+    "mysql -h 127.0.0.1 -p app",
+    'curl -s "http://localhost:8000/$path"',
+    "wget -q -O - http://127.0.0.1:8000/health",
+]
+# Twins of the brief's shapes: each tool's own flags, which must not hide the host after them;
+# option words in quotes, glued, long or abbreviated; a URL's host behind a user, a password or a
+# `#`; curl's URL globs; host variables set in the head, on the line or through input.
+DB_TWINS = [
+    # flags of one tool that another tool reads as taking a value
+    'psql -t "$URL"',
+    'psql -At "$URL" -c x',
+    'pg_dump -c "$URL"',
+    'pg_dump -v "$URL"',
+    'pg_restore -c -d "$URL" x.dump',
+    "mysql -pS -h $H app",
+    # an option word in quotes is still an option
+    'mysql "--host=$H" app',
+    'sqlcmd "-S$H" -Q x',
+    'pg_restore "-h$H" -d app x.dump',
+    'scp "-J$J" f host:/tmp',
+    'env "A=1" ssh $H',
+    'env "A=1" psql -h $H',
+    # an option name that may expand may be any option, a host option too
+    'mysql -"$O" app',
+    'psql --"$O"',
+    'ssh -"$O" 192.0.2.10',
+    # curl's variables fill the URL of an --expand- option from the environment or a file
+    'curl --variable %H --expand-url "https://{{H}}/"',
+    "curl --variable %H --expand-url=https://{{H}}/",
+    # glued, long and abbreviated forms
+    "psql -h$H",
+    'psql --host "$H"',
+    "psql --ho=$H",
+    "psql --dbname=$URL",
+    "mysql --host=$H app",
+    "mysql --ho $H app",
+    "sqlcmd -S$H -Q x",
+    'curl --url "$URL"',
+    "curl --proxy=$P https://example.com",
+    "curl --socks5-hostname $P https://example.com",
+    'curl --connect-to "example.com:443:$H:443" https://example.com',
+    'curl --resolve "example.com:443:$A" https://example.com',
+    "curl -sK hosts.cfg https://example.com",
+    "curl --config hosts.cfg",
+    "curl --conf=hosts.cfg",
+    "wget -qi urls.txt",
+    "wget --input-file=urls.txt",
+    'wget --execute "http_proxy=$P" https://example.com',
+    'wget -B "$BASE" https://example.com/x',
+    # a URL's scheme and authority (`scheme://[userinfo@]host[:port]`) must be written out:
+    # nothing may expand in them, and nothing may hide where they end
+    'curl "http://u:pw@$H/x"',
+    'curl "http://$H#@example.com/"',
+    'curl "http://$H?@example.com/"',
+    'curl "http://example.com$H/"',
+    'curl "http://example.com\\@$H/"',
+    'curl "https://u:$PW@example.com/x"',
+    'psql "postgresql://app:$PGPASSWORD@db1/app"',
+    'curl "http://localhost:$PORT/health"',
+    'curl "$S://example.com/"',
+    'curl "http://u@$H/"',
+    'curl "http://$H:8080/"',
+    'curl "http://[::1]:$PORT/"',
+    # a value in the userinfo or the port may carry `@host` and move the host; one the line binds
+    # to a literal is read through its value, which must not move or build the host
+    "PORT='1@orders-db'; curl \"http://localhost:$PORT/health\"",
+    "U='x@orders-db/'; curl \"http://$U@example.com/\"",
+    "U='http://pro-{db,x}/'; curl \"$U\"",
+    'H=pro; curl "http://$H-db/"',
+    'B=http://pro; curl "$B-db/x"',
+    'H=example.com; curl "http://$H$X/"',
+    "B='http://a b'; curl $B/x",
+    'H=pro; psql "postgresql://$H-db/app"',
+    'Q=x; psql "postgresql://db1/app?host=$Q"',
+    'H=db1; psql "host=$H dbname=app"',
+    # curl and wget read a URL with no scheme as http://, its authority the same way
+    "curl localhost:$PORT/x",
+    'curl "$U@example.com/x"',
+    'wget "localhost:$PORT"',
+    'psql "postgresql://app:pw@$H/app"',
+    'psql "host=$H dbname=app"',
+    # libpq reads a URL's host after a `?` or `#` too, and from its query: judged whole, like -d
+    'psql "postgresql://x?y@$H/app"',
+    'psql "postgresql://x#@$H/app"',
+    'psql "postgres://localhost?@$H/app"',
+    'psql "postgresql:///app?host=$H"',
+    'psql "postgresql://localhost/app?host=$H"',
+    'psql "postgresql://localhost/app?hostaddr=$A"',
+    'psql "postgresql://localhost/app?service=$S"',
+    'pg_dump "postgresql://localhost/app?host=$H"',
+    'psql "postgresql://db1/$DB"',
+    # curl expands {} and [] in a URL into hosts no target pattern sees whole
+    'curl "http://192.0.2.1{0,1}/x"',
+    'curl "http://example.[a-c]om/"',
+    "curl 'http://[1-3].example.com/'",
+    "curl 'http://[::g]/'",
+    "curl 'http://[::1]{a,b}/'",
+    "curl -g https://example.com; curl 'http://[1-3].x/'",
+    'curl -g "http://$H/"',
+    "curl 'http://u:{a,b}@[::1]/'",
+    # host variables
+    "PGHOST=$H; psql -c x",
+    "PGHOSTADDR=$A pg_dump app",
+    "env PGHOST=$H psql",
+    'env "PGHOST=$H" psql',
+    "sudo PGHOST=$H psql",
+    "PGHOST=$H sh -c 'psql -c x'",
+    "read PGHOST < f; psql -c x",
+    "PGHOST=db1; PGHOST+=x; psql -c x",
+    "PGHOST=db1; read PGHOST < f; psql",
+    "for PGHOST in $HOSTS; do psql -c x; done",
+    'DATABASE_URL=$U; psql "$DATABASE_URL"',
+    "SQLCMDSERVER=$S; sqlcmd -Q x",
+    "PGHOST=$H ssh 192.0.2.10 psql",
+    "MYSQL_HOST=$H mysql app",
+    "MYSQL_HOST=$H; mysql app",
+    "https_proxy=$P curl https://example.com",
+    "https_proxy=$P; curl https://example.com",
+    "ALL_PROXY=$P wget https://example.com",
+    "PGSERVICE=$S psql",
+    # more host options, files of hosts, host variables and routes to them
+    'curl --doh-url "$D" https://example.com',
+    'curl --dns-servers "$N" https://example.com',
+    'mysql --dns-srv-name "$N" app',
+    "wget --input-metalink=x.metalink",
+    "ftp_proxy=$P curl ftp://example.com/x",
+    "FTP_PROXY=$P; wget ftp://example.com/x",
+    "SQLCMDINI=$F sqlcmd -S db1 -Q x",
+    "PGSYSCONFDIR=$D psql -h db1",
+    # a connect meta-command picks a new host: none with a value that may expand
+    'psql -h localhost -c "\\connect $DATABASE_URL"',
+    'psql -h localhost -c "\\c - - $H"',
+    "psql -h localhost -v h=$H -c '\\c - - :h'",
+    'psql -h localhost --command="\\c - - $H"',
+    'psql -h localhost -c"\\c - - $H"',
+    'echo "\\c - - $H" | psql -h localhost',
+    "psql -h localhost -v h=$H <<'EOF'\n\\c - - :h\nEOF",
+    'mysql -h 127.0.0.1 -e "connect app $H"',
+    'mysql -h 127.0.0.1 --execute "connect app $H"',
+    'mysql -h 127.0.0.1 <<< "connect app $H"',
+    'sqlcmd -S localhost -Q ":connect $H"',
+    'sqlcmd -S localhost -q ":CONNECT $H"',
+    # wrappers, input runners and shells
+    'timeout 5 curl "$URL"',
+    "xargs curl < urls.txt",
+    "sh -c 'curl $U'",
+    'echo "curl $U" | sh',
+]
+DB_LITERAL_CONTROLS = [
+    "psql -h db1 -d app -c 'select 1'",
+    "curl https://example.com/x",
+    'curl -H "Authorization: Bearer $T" https://api.example.com',
+    "wget -O out https://example.com/f",
+    "mysql -h db1 -u u -p app",
+    "PGHOST=db1 psql",
+    "PGHOST=db1 psql -c a; PGHOST=db1 psql -c b",
+    "PGHOST=localhost; psql -c x",
+    "MYSQL_HOST=db1 mysql app",
+    "https_proxy=http://proxy.example.com:3128 curl https://example.com",
+    'psql -v "x=$X" -h db1 app',
+    'pg_dump -f "$OUT" -h db1 app',
+    'pg_restore -h db1 -d app "$DUMP"',
+    'mysql -p"$PW" -h db1 -e "$SQL" app',
+    'sqlcmd -S db1 -U "$U" -Q "$Q"',
+    'curl -sS -o "$OUT" -d "$BODY" --header="X-Token: $T" https://example.com/api',
+    # past the authority (path, query, fragment) a value may be unknown
+    'curl "https://example.com?q=$Q"',
+    'curl "https://example.com/items/$ID"',
+    'wget "https://example.com/$F"',
+    'curl "https://example.com#$F"',
+    'curl -s "https://u:pw@example.com:8443/x?a=$A"',
+    'URL=https://example.com/x; curl "$URL"',
+    "curl localhost:8080/x/$ID",
+    "curl example.com/$P",
+    # an IPv6 literal in brackets is a host, not a URL glob
+    "curl http://[::1]:8080/",
+    "curl 'http://[2001:db8::1]/'",
+    'curl "http://[::1]:8080/$p"',
+    'wget -q -O "$OUT" --header "X: $T" https://example.com/f',
+    "git commit -m 'psql -h $H'",
+    "echo curl | grep -c curl",
+    "SQLCMDINI=init.sql sqlcmd -S db1 -Q x",
+    "PGSYSCONFDIR=/etc/postgresql-common psql -h db1",
+    "curl --dns-servers 192.0.2.53 https://example.com",
+    'curl --proxy-header "X: $T" https://example.com',
+    'curl --request-target "/$P" https://example.com',
+    # -g and --globoff turn curl's URL globs off for that command
+    "curl -g 'http://[1-3].x/'",
+    "curl --globoff 'http://[1-3].x/'",
+    "curl -sg 'http://{a,b}.example.com/'",
+    # a name the line binds to a literal counts through its value in a URL
+    'BASE=http://localhost:8000; curl -s "$BASE/health"',
+    'BASE=https://example.com; curl "$BASE/items"',
+    'BASE=https://example.com; wget "$BASE/f"',
+    'HOST=example.com; curl "https://$HOST/x"',
+    'H=db1; psql "postgresql://$H/app"',
+    'PW=secret; curl "https://u:$PW@example.com/x"',
+    "BASE=http://localhost:8000; curl -s $BASE/health",
+    # a command value that may expand is fine without a connect meta-command
+    'psql -h db1 -c "select $X"',
+    "psql -h db1 -c '\\c app'",
+    'psql -h db1 -c "\\copy t to $F"',
+    'echo "select $X" | psql -h db1',
+    "mysql -h db1 -e \"select '$X'\"",
+    'sqlcmd -S db1 -Q "select $X"',
+]
+
+
+@pytest.mark.parametrize("command", DB_NON_LITERAL)
+def test_pm_database_and_http_hosts_from_variables_are_refused(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+
+
+@pytest.mark.parametrize("command", DB_CONTROLS)
+def test_pm_database_and_http_controls_pass(
+    run: Run, store: Path, tmp_path: Path, command: str
+) -> None:
+    # From /tmp, the `*` in a SQL text is a glob that can reach a store under /tmp (the store rule).
+    proc = run(bash(command, cwd=str(tmp_path / "project")), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("role", [None, "pm"], ids=["gm", "pm"])
+def test_literal_database_url_reaches_the_bare_host_target(
+    run: Run, edge_store: Path, role: str | None
+) -> None:
+    proc = run(bash('DATABASE_URL=postgres://192.0.2.10/app; psql "$DATABASE_URL"'), role=role)
+    assert proc.returncode == 2
+    assert "'edge' is production" in proc.stderr
+
+
+@pytest.mark.parametrize("command", DB_TWINS)
+def test_pm_database_and_http_twins_are_refused(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "a host that is not written out" in proc.stderr
+
+
+@pytest.mark.parametrize("command", DB_NON_LITERAL + DB_TWINS)
+def test_gm_runs_database_and_http_shapes(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command))
+    assert proc.returncode == 0, proc.stderr  # (e) is for pm sessions
+
+
+@pytest.mark.parametrize("command", DB_LITERAL_CONTROLS)
+def test_pm_database_and_http_literal_hosts_pass(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "why"),
+    [
+        ("curl -K hosts.cfg", "curl with a host that is not written out in the command (-K reads"),
+        ("wget --input-file=u", "wget with a host that is not written out in the command (--input"),
+        ("PGHOST=$H psql", "psql with a host that is not written out in the command (PGHOST is"),
+    ],
+)
+def test_database_and_http_refusals_name_the_reason(
+    run: Run, store: Path, command: str, why: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert why in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'TOKEN=$(cat t); curl -H "Authorization: Bearer $TOKEN" https://example.com',
+        'psql "$DB"',
+        'curl "http://localhost:$PORT/health"',
+        'curl "https://u:$PW@example.com/x"',
+    ],
+)
+def test_database_and_http_refusals_name_the_way_out(run: Run, store: Path, command: str) -> None:
+    """The spec's accepted cost: a line the scanner cannot follow, or a database named through a
+    variable, is refused; the message names the way out."""
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "write the host literally" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'psql "postgres://192.0.2.10/app"',
+        "curl http://192.0.2.10/x",
+        "for h in 192.0.2.10; do psql -h $h; done",
+    ],
+)
+def test_literal_database_and_http_hosts_reach_the_bare_host_target(
+    run: Run, edge_store: Path, command: str
+) -> None:
+    for role in (None, "pm"):
+        proc = run(bash(command), role=role)
+        assert proc.returncode == 2
+    assert "'edge' is production" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd docs && ls h*",
+        "cd build && rm -rf *",
+        "cd src && ls src/*",
+        "cd x && ls */",
+        "cd src && rm -rf */node_modules",
+        "cd src && ls */*.py",
+        "cd src && pytest */test_x.py",
+    ],
+)
+def test_pm_may_glob_after_cd_when_only_a_parent_of_the_store_matches(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(project_dir())), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# A regex in a quoted-delimiter heredoc body that a non-shell reads is data, not a relative glob.
+# (No `r` prefix: `r"[A-Za-z]..."` glues an `r` to the word and the glob no longer fits any name.)
+BODY_REGEXES = {
+    "class-then-star": 'NAME = re.compile("[A-Za-z][A-Za-z_]*")',
+    "backslash-w-star": 'WORD = re.compile("\\\\w*")',
+    "class-star-slash-class-plus": 'KEY = re.compile("[a-z_]*/[0-9]+")',
+}
+
+
+def heredoc(command, body):
+    return f"{command} <<'EOF'\nimport re\n{body}\nEOF"
+
+
+@pytest.mark.parametrize("body", BODY_REGEXES.values(), ids=BODY_REGEXES)
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd src && python3 -",
+        # The `cd` is inside the quoted remote command, as in a real remote run.
+        "ssh user@host.example.com 'cd /srv/app && timeout 1500 python -B -' > /tmp/out.txt",
+        "cd src && /opt/venv/bin/python3.12 -",
+        "ssh user@host.example.com 'cd /srv/app && python -'",
+    ],
+    ids=["cd-then-python", "ssh-cd-in-remote-command", "python-by-path", "ssh-without-redirect"],
+)
+def test_pm_may_run_an_interpreter_whose_heredoc_body_holds_a_regex(
+    run: Run, tmp_path: Path, store: Path, command: str, body: str
+) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    proc = run(bash(heredoc(command, body), cwd=str(project)), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_pm_may_run_interpreters_whose_heredoc_bodies_hold_regexes_after_tabs_and_in_pairs(
+    run: Run, tmp_path: Path, store: Path
+) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    tabbed = "cd src && python3 - <<-'EOF'\n\tx = re.compile(\"[A-Za-z_]*\")\n\tEOF"
+    pair = (
+        "cd src && python3 - <<'A' && ssh user@host.example.com 'cd /srv/app' <<'B'\n"
+        'x = re.compile("[A-Za-z_]*")\nA\ny = re.compile("\\\\w*")\nB'
+    )
+    for command in (tabbed, pair):
+        proc = run(bash(command, cwd=str(project)), role="pm")
+        assert proc.returncode == 0, proc.stderr
+
+
+GLOB_BODIES = {
+    "star-in-name": 'glob.glob("c*-memory")',
+    "class-star-then-store-entry": 'glob.glob("[a-z]*/systems/guard.json")',
+    "the-store-name": 'open("coven-memory/systems/guard.json")',
+    "quotes-split-a-literal": "glob.glob(\"co''ven-m*\")",
+    "backslash-in-a-literal": 'glob.glob("c\\oven-m*")',
+    "regex-escape-then-store-entry": 'glob.glob("\\w*/systems/guard.json")',
+    # A class of one character is that character: it is a literal, not a loose component.
+    "one-character-class-then-star": 'glob.glob("[c]*")',
+    "the-name-in-one-character-classes": 'glob.glob("[c][o][v][e][n]-[m][e][m][o][r][y]")',
+}
+
+
+@pytest.mark.parametrize("body", GLOB_BODIES.values(), ids=GLOB_BODIES)
+def test_pm_cannot_glob_to_the_store_from_an_interpreter_body(
+    run: Run, tmp_path: Path, store: Path, body: str
+) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    command = heredoc("cd ~ && python3 -", body)
+    proc = run(bash(command, cwd=str(project)), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~ && rm -rf [a-z]*",
+        "cd ~ && ls c*",
+        "bash -c 'cd ~ && rm -rf [a-z]*'",
+    ],
+    ids=["class-star", "letter-star", "shell-command-string"],
+)
+def test_pm_cannot_glob_to_the_store_in_shell_position(
+    run: Run, tmp_path: Path, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        "bash",
+        "sudo bash",
+        "env bash",
+        "/bin/sh",
+        "'ba''sh'",
+        "source /dev/stdin",
+        "sudo -s",
+        "$SHELL",
+    ],
+    ids=[
+        "bash",
+        "sudo-bash",
+        "env-bash",
+        "sh-path",
+        "split-quotes",
+        "source-stdin",
+        "sudo-shell",
+        "unknown-word",
+    ],
+)
+def test_pm_cannot_glob_to_the_store_from_a_body_a_shell_reads(
+    run: Run, tmp_path: Path, store: Path, reader: str
+) -> None:
+    command = f"cd ~ && {reader} <<'EOF'\nrm -rf [a-z]*\nEOF"
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+UNLISTED_READERS = {
+    "ash": "cd ~ && ash <<'EOF'\ncat co''ven-m*/systems/guard.json\nEOF",
+    "rbash": "cd ~ && rbash <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "bash5": "cd ~ && bash5 <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "read-then-use": "cd ~ && read -r p <<'EOF'\n\\c*/systems/guard.json\nEOF\ncat $p",
+    "while-read-loop": "cd ~ && while read c; do $c; done <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "brace-group": "cd ~ && { ash; } <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "nice-python": "cd ~ && nice python3 - <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "env-python": "cd ~ && env python3 - <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "assignment-then-python": "cd ~ && X=1 python3 - <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "unknown-name": "cd ~ && frobnicate <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "no-command": "cd ~ && <<'EOF'\nrm -rf [a-z]*\nEOF",
+    "python-then-unlisted": "cd ~ && python3 - <<'A' && ash <<'B'\nimport re\nA\nrm -rf [a-z]*\nB",
+    "unlisted-then-python": "cd ~ && ash <<'A' && python3 - <<'B'\nrm -rf [a-z]*\nA\nimport re\nB",
+    "tabbed-shell-body": "cd ~ && ash <<-'EOF'\n\trm -rf [a-z]*\n\tEOF",
+}
+
+
+@pytest.mark.parametrize("command", UNLISTED_READERS.values(), ids=UNLISTED_READERS)
+def test_pm_cannot_glob_to_the_store_from_a_body_read_by_an_unlisted_command(
+    run: Run, tmp_path: Path, store: Path, command: str
+) -> None:
+    """Only a few interpreters (python, node, perl, ruby, ssh) get the lenient reading. Anything
+    else that reads a body, or that the guard cannot name, is read strictly."""
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+def test_pm_cannot_glob_to_the_store_from_a_tabbed_interpreter_body(
+    run: Run, tmp_path: Path, store: Path
+) -> None:
+    command = "cd ~ && python3 - <<-'EOF'\n\tglob.glob(\"c*-memory\")\n\tEOF"
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~ && python3 - <<EOF\nprint(1)\n[a-z]*\nEOF",
+        # A piped body may be run by the next command.
+        "cd ~ && cat <<'EOF' | python3 -\nrm -rf [a-z]*\nEOF",
+    ],
+    ids=["unquoted-delimiter", "piped"],
+)
+def test_pm_cannot_glob_to_the_store_from_a_body_the_guard_cannot_follow(
+    run: Run, tmp_path: Path, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+def test_pm_cannot_glob_to_the_store_from_a_python_c_string_after_cd(
+    run: Run, tmp_path: Path, store: Path
+) -> None:
+    """The narrower reading is for heredoc bodies only: a quoted `python3 -c` string is a word of
+    the command, so a regex in it stays a relative glob after a `cd`."""
+    command = "cd src && python3 -c 'import re; re.compile(\"[A-Za-z][A-Za-z_]*\")'"
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+# A regex in a grep pattern, or in a body copied to a file, is not a relative glob either.
+PASSING_REGEX_LINES = {
+    "grep-pattern-in-a-pipe-after-sed": (
+        'cd src && sed -n 1,5p a.js; grep -n "^function \\|^const [A-Za-z]* = " a.js | head -5'
+    ),
+    "grep-e-after-sed": "cd src && sed -n 1,5p a.js; grep -e '[A-Za-z]*' file",
+    "grep-pattern-then-a-python-heredoc": (
+        "cd src && grep -n '[A-Za-z]*' a.js && python3 - <<'EOF'\nimport re\nEOF"
+    ),
+    "cat-body-to-an-absolute-target-then-run": (
+        "cd /tmp && cat > /tmp/probe.py <<'EOF'\n"
+        'P = "[A-Za-z][A-Za-z_]*"\n'
+        "EOF\n"
+        "python3 -I /tmp/probe.py"
+    ),
+    "cat-body-to-a-relative-target-then-run": (
+        "cd /tmp && cat > probe.py <<'EOF'\nP = \"[A-Za-z][A-Za-z_]*\"\nEOF\npython3 -I probe.py"
+    ),
+    "tee-body-to-a-relative-target-then-run": (
+        "cd /tmp && tee probe.py <<'EOF'\nP = \"[A-Za-z][A-Za-z_]*\"\nEOF\npython3 -I probe.py"
+    ),
+}
+
+
+@pytest.mark.parametrize("command", PASSING_REGEX_LINES.values(), ids=PASSING_REGEX_LINES)
+def test_pm_may_run_a_line_whose_regex_is_a_grep_pattern_or_a_copied_body(
+    run: Run, tmp_path: Path, store: Path, command: str
+) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    proc = run(bash(command, cwd=str(project)), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+REFUSED_GLOB_LINES = {
+    "grep-file-operand": "cd ~ && grep -n x c*/systems/a.md",
+    "grep-unquoted-glob-as-pattern": "cd ~ && grep c* a.txt",
+    "grep-substitution-in-pattern": 'cd ~ && grep "$(rm -rf c*)" a.txt',
+    # On a line where something is not inert, `code_text` blanks nothing: the name is read.
+    "grep-pattern-names-the-store": "cd ~ && sed -n 1p a; grep 'coven-memory' a.txt",
+    "cat-body-with-a-literal": "cd ~ && cat > /tmp/x <<'EOF'\nrm -rf c*-memory\nEOF\npython3 -I /tmp/x",
+    "tee-body-with-a-literal": "cd ~ && tee /tmp/x <<'EOF'\nrm -rf c*-memory\nEOF\npython3 -I /tmp/x",
+    # `ash` is no SHELL_READERS name, so only the pipe rule reads the body whole.
+    "cat-body-piped-to-an-unlisted-reader": "cd ~ && cat <<'EOF' | ash\n[a-z]*\nEOF",
+    "cat-body-one-character-classes-then-star": (
+        "cd ~ && cat > /tmp/x <<'EOF'\nrm -rf [c][o][v][e][n]*\nEOF\npython3 -I /tmp/x"
+    ),
+    "cat-body-the-name-in-one-character-classes": (
+        "cd ~ && cat > /tmp/x <<'EOF'\nrm -rf [c][o][v][e][n]-[m][e][m][o][r][y]\nEOF\npython3 -I /tmp/x"
+    ),
+    "cat-body-then-a-shell-word": "cd ~ && cat > /tmp/x <<'EOF'\nrm -rf [a-z]*\nEOF\nsh /tmp/x",
+    "glob-in-the-sink-target": "cd ~ && cat > c*/x <<'EOF'\nx\nEOF",
+}
+
+
+@pytest.mark.parametrize("command", REFUSED_GLOB_LINES.values(), ids=REFUSED_GLOB_LINES)
+def test_pm_cannot_glob_to_the_store_past_a_grep_pattern_or_a_copied_body(
+    run: Run, tmp_path: Path, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd=str(tmp_path / "proj")), role="pm")
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+def test_an_mcp_string_with_a_regex_is_read_as_it_was(
+    run: Run, tmp_path: Path, store: Path
+) -> None:
+    """The MCP path has no `cd` to wait for and no heredoc reading: a relative glob that can name
+    the store's directory counts, in a body or not."""
+    text = heredoc("python3 -", BODY_REGEXES["class-then-star"])
+    payload = {"tool_name": "mcp__shell__exec", "tool_input": {"command": text}}
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+
+
+UNTOLD_MESSAGE = (
+    "coven prod-guard: a 'pm' session cannot run coven with a subcommand it cannot tell"
+    " (it may be approve, setup or memory adopt|init|sync): it changes the memory store or"
+    " coven's config; ask the GM"
+)
+
+
+WRITERS = [
+    "coven setup",
+    "coven memory adopt /srv/store --yes",
+    "coven approve a1 --expires-in 1h",
+    "env -i coven setup",
+    "env X=y coven setup",
+    "command coven setup",
+    "exec coven setup",
+    "nohup coven setup &",
+    "setsid -f coven setup",
+    "timeout 60 coven setup",
+    "( coven setup & )",
+    "sh -c 'coven setup'",
+    "uv run coven setup",
+    "python -m coven setup",
+    "uv run python -m coven memory sync",
+    ".venv/bin/coven setup",
+    "/home/user/.local/bin/coven approve a1 --expires-in 1h",
+    "ls; coven setup",
+    "coven $(printf setup)",
+    "coven `printf setup`",
+    "g=coven; $g setup",
+    "coven $s",
+]
+WRITERS_TOO = [
+    "uvx coven setup",
+    "pipx run coven setup",
+    "bash -lc 'coven setup'",
+    "xargs coven < f",
+    "coven --verbose setup",
+    "COVEN_X=1 coven setup",
+    "uvx --from coven coven setup",
+    "uvx coven@latest setup",
+    "python3 -mcoven setup",
+    "python3 src/coven setup",
+    "python3 src/coven/__main__.py setup",
+    "python3 -m coven.__main__ setup",
+    "cov''en setup",
+    "cov\\\nen setup",
+    "echo a\\\\\ncoven setup",
+    "sudo -E coven setup",
+    "sudo -u me coven memory sync",
+    "watch -n 5 'coven setup'",
+    "tmux new-session -d 'coven setup'",
+    "su -c 'coven setup' me",
+    "env -S 'coven setup'",
+    "f() { coven setup; }; f",
+    "if true; then coven setup; fi",
+    "ls && coven setup 2>&1 | tail -5",
+    "coven 2>/dev/null setup",
+    'coven "$(printf setup)"',
+    "coven ${s}",
+    "${g} setup",
+    "$g --dry-run memory sync",
+    "$(echo coven) setup",
+    "`echo coven` setup",
+    "xargs -I{} coven {} < f",
+    "parallel coven ::: setup",
+    "parallel ::: 'coven setup'",
+    "echo 'coven setup' | sh",
+    "sh <<< 'coven setup'",
+    "sh <<'EOF'\ncoven setup\nEOF",
+    "sh -c \"$(cat <<'EOF'\ncoven setup\nEOF\n)\"",
+    "nice -n 5 coven setup",
+    "uv tool run coven setup",
+    "uv run --project . coven setup",
+    "pipx run --spec coven coven memory sync",
+    "python3.12 -m coven setup",
+    "./coven setup",
+    "coven -- setup",
+    "while true; do coven setup; done",
+    "coven doctor && coven setup",
+    "bash -c 'uv run coven setup'",
+    "sh -c 'python3 -m coven memory sync'",
+]
+READERS = [
+    "coven doctor",
+    "coven pm status",
+    "coven guard check guard.json",
+    "git commit -m 'run coven setup'",
+    "grep -rn 'coven setup' docs",
+    "cat src/coven/setup.py",
+    "cd src/coven && ls",
+    "uv run pytest tests/test_setup_cli.py",
+]
+READERS_TOO = [
+    "coven guard explain ls",
+    "coven doctor --online",
+    "coven",
+    "coven --help",
+    "command -v coven",
+    "which coven",
+    "echo coven setup",
+    "echo 'coven doctor' | sh",
+    "git ls-files | xargs grep -l 'coven setup'",
+    "uv run pytest tests/test_cli.py -k setup",
+    "uv run ruff check src/coven",
+    "uvx coven doctor",
+    "python3 -m coven status",
+    "cd ~/projects/coven && git status",
+    "ls src/coven/setup.py src/coven/memory/store.py",
+    "cat >> notes.md <<'EOF'\nrun coven setup in the GM\nEOF",
+    "gh pr create --title t --body 'then coven setup'",
+    "git commit -m \"$(cat <<'EOF'\ncoven setup now works\nEOF\n)\"",
+]
+
+
+@pytest.mark.parametrize("command", WRITERS + WRITERS_TOO)
+def test_pm_cannot_run_store_writing_subcommands(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot run coven" in proc.stderr
+    gm = run(bash(command))
+    assert gm.returncode == 0, gm.stderr
+
+
+@pytest.mark.parametrize("command", READERS + READERS_TOO)
+def test_pm_may_run_or_mention_other_subcommands(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (
+            "env -i coven approve a1 --expires-in 1h",
+            "coven prod-guard: a 'pm' session cannot run coven approve: it changes the memory"
+            " store or coven's config; ask the GM",
+        ),
+        ("coven $s", UNTOLD_MESSAGE),
+        ("xargs coven < f", UNTOLD_MESSAGE),
+    ],
+)
+def test_store_writer_refusal_names_the_subcommand(
+    run: Run, store: Path, command: str, message: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert (proc.returncode, proc.stderr.strip()) == (2, message)
+
+
+def assert_pm_refused_gm_not(run: Run, command: str, refusal: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert refusal in proc.stderr
+    gm = run(bash(command))
+    assert gm.returncode == 0, gm.stderr
+
+
+VARIABLE_WRITERS = [  # the name and the subcommand both come from variables
+    "g=coven s=setup; setsid -f env -i $g $s",
+    'g=coven; s=setup; $g "$s"',
+    "(env -i bash -c '$0 $1' coven setup &)",
+    "read -r a b <<< 'coven setup'; $a $b",
+    'f() { "$@"; }; f coven setup',
+]
+
+
+@pytest.mark.parametrize("command", VARIABLE_WRITERS)
+def test_pm_cannot_run_coven_from_variables(run: Run, store: Path, command: str) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+GLUED_WRITERS = [  # an expansion glued to the name: IFS splits it from the subcommand
+    "coven${IFS}setup",
+    "coven$IFS'setup'",
+    '"coven"${IFS}setup',
+    ".venv/bin/coven${IFS}memory sync",
+]
+
+
+@pytest.mark.parametrize("command", GLUED_WRITERS)
+def test_pm_cannot_run_coven_glued_to_an_expansion(run: Run, store: Path, command: str) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+SPLIT_STRING_WRITERS = [  # env's -S or --split-string glued to the command string it runs
+    "env -S'coven setup'",
+    "env -iS'coven memory sync'",
+    "env --split-string='coven setup'",
+    "env --split='coven approve a1 --expires-in 1h'",
+]
+SPLIT_STRING_CLAUDE = ["env --split-string='claude -p x'", "env -S'claude -p x'"]
+
+
+@pytest.mark.parametrize("command", SPLIT_STRING_WRITERS)
+def test_pm_cannot_run_coven_through_a_glued_split_string(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+@pytest.mark.parametrize("command", SPLIT_STRING_CLAUDE)
+def test_pm_cannot_start_claude_through_a_glued_split_string(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot start claude sessions")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -Imcoven setup",
+        "python3 -Im coven setup",
+        "uv run python -Bmcoven memory sync",
+    ],
+)
+def test_pm_cannot_run_coven_through_a_python_flag_cluster(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+def test_pm_may_run_another_module_through_a_python_flag_cluster(run: Run, store: Path) -> None:
+    proc = run(bash("python3 -Impytest tests/test_setup_cli.py"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command", ["bash /dev/stdin <<< 'coven setup'", "echo 'coven memory sync' | sh /dev/fd/0"]
+)
+def test_pm_cannot_run_coven_through_a_shell_reading_dev_stdin(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+@pytest.mark.parametrize(
+    "command", ["bash /dev/stdin <<< 'claude -p x'", "echo 'claude -p x' | sh /dev/fd/0"]
+)
+def test_pm_cannot_start_claude_through_a_shell_reading_dev_stdin(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot start claude sessions")
+
+
+def test_pm_may_run_a_script_file_fed_on_stdin(run: Run, store: Path) -> None:
+    proc = run(bash("bash build.sh <<< 'claude -p x coven setup'"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+EXPANDING_SUBCOMMANDS = [  # brace expansion or an ANSI-C string builds the subcommand
+    "coven {setup,}",
+    "coven s{etup,}",
+    "coven $'\\x73etup'",
+    "coven --verbose $'setup'",
+]
+
+
+@pytest.mark.parametrize("command", EXPANDING_SUBCOMMANDS)
+def test_pm_cannot_run_coven_with_an_expanding_subcommand(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+@pytest.mark.parametrize("command", ["coven doctor {a,b}", "{ coven doctor; }"])
+def test_pm_may_run_coven_next_to_braces(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+LAUNCHED_WRITERS = [  # environment and project runners that run the program they are given
+    "poetry run coven setup",
+    "hatch run coven setup",
+    "pdm run coven setup",
+    "conda run -n base coven setup",
+    "mise exec -- coven setup",
+    "direnv exec . coven setup",
+    "nix-shell --run 'coven setup'",
+    "nix develop -c coven setup",
+]
+
+
+@pytest.mark.parametrize("command", LAUNCHED_WRITERS)
+def test_pm_cannot_run_coven_through_a_launcher(run: Run, store: Path, command: str) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+@pytest.mark.parametrize("command", ["poetry run coven doctor", "mise exec -- pytest tests"])
+def test_pm_may_run_other_programs_through_a_launcher(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv run claude -p hi",
+        "poetry run claude",
+        "direnv exec . claude -p x",
+        "poetry -C dir run claude -p hi",
+        "nix shell nixpkgs#nodejs -c claude -p hi",
+    ],
+)
+def test_pm_cannot_start_claude_through_a_launcher(run: Run, store: Path, command: str) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot start claude sessions")
+
+
+@pytest.mark.parametrize("command", ["uv run pytest -k claude", "python3 tools/x.py claude"])
+def test_pm_may_name_claude_after_a_launched_program(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_python_code_naming_claude_is_refused_for_a_pm(run: Run, store: Path) -> None:
+    """Fail closed, as the Limits paragraph says: `-c` code is read as words in command position."""
+    assert_pm_refused_gm_not(run, 'python3 -c "import claude"', "cannot start claude sessions")
+
+
+# --- coven's config file: the memory path and the guard latch live there ---
+
+
+def config_calls() -> list[Payload]:
+    folder = config_file().parent
+    return [
+        {"tool_name": "Write", "tool_input": {"file_path": str(config_file()), "content": "{}"}},
+        {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(config_file()), "old_string": "a", "new_string": "b"},
+        },
+        {"tool_name": "MultiEdit", "tool_input": {"file_path": str(config_file()), "edits": []}},
+        {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": f"{folder}/n.ipynb"}},
+        {"tool_name": "Write", "tool_input": {"file_path": f"{folder}/owned.json"}},
+        {"tool_name": "Write", "tool_input": {"file_path": "config.json"}, "cwd": str(folder)},
+        {"tool_name": "Write", "tool_input": {"file_path": f"{home()}/link/config.json"}},
+        {"tool_name": "mcp__fs__write", "tool_input": {"args": {"path": str(config_file())}}},
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"command": "echo '{}' > ~/.config/coven/config.json"},
+        },
+        bash("echo '{}' > ~/.config/coven/config.json"),
+        bash("echo '{}' >$HOME/.config/coven/config.json"),
+        bash(f"echo '{{}}' > {config_file()}"),
+        bash(f"cp /tmp/c.json {config_file()}"),
+        bash(f"cp -t{folder} /tmp/c.json"),
+        bash(f"echo '{{}}' | tee {config_file()}"),
+        bash(f"sed -i 's/a/b/' {config_file()}"),
+        bash(f"rm {config_file()}"),
+        bash(f"mv {config_file()} /tmp/c.json"),
+        bash(f"rm -rf {folder}"),
+        bash("rm -rf ~/.config/coven"),
+        bash("rm -rf ~/.config/*"),
+        bash("rm -rf ~/.config/cov?n"),
+        bash("rm -rf ~/.c*/coven"),
+        bash("rm -rf ~/.[c]onfig/coven/"),
+        bash("rm -rf ~/.config/coven/c*"),
+        bash(f"echo x > {home()}/link/config.json"),
+        bash("cd ~/.config/coven && echo '{}' > config.json"),
+        bash("cd ~/.config && rm -rf co*"),
+        bash("cd ~/.config && rm co*/config.json"),
+        bash("cd ~ && rm .config/coven/config.json"),
+        bash("echo '{}' > config.json", cwd=str(folder)),
+        bash("echo '{}' > coven/config.json", cwd=str(folder.parent)),
+        bash("python3 -c \"open('.config/coven/config.json', 'w')\"", cwd=str(home())),
+        bash("env -C ~/.config/coven rm config.json"),
+        bash("git -C ~/.config/coven rm -f config.json"),
+        {
+            "tool_name": "mcp__shell__exec",
+            "tool_input": {"cwd": "~/.config", "command": "rm co*/config.json"},
+        },
+    ]
+
+
+CONFIG_IDS = [
+    "write",
+    "edit",
+    "multi-edit",
+    "notebook-edit",
+    "write-owned-file",
+    "write-relative",
+    "write-symlink",
+    "mcp-nested-path",
+    "mcp-command",
+    "redirect-tilde",
+    "redirect-home-var",
+    "redirect-absolute",
+    "cp",
+    "cp-glued-option",
+    "tee",
+    "sed-in-place",
+    "rm-file",
+    "mv-file",
+    "rm-folder",
+    "rm-folder-tilde",
+    "glob-parent",
+    "glob-name",
+    "glob-dotted-parent",
+    "glob-bracket",
+    "glob-entry",
+    "bash-symlink",
+    "cd-into-folder",
+    "cd-parent-then-glob",
+    "cd-parent-then-glob-entry",
+    "cd-home-then-relative",
+    "cwd-in-folder",
+    "cwd-parent-relative",
+    "python-c",
+    "env-c",
+    "git-c",
+    "mcp-own-cwd",
+]
+
+
+@pytest.mark.parametrize("index", range(len(CONFIG_IDS)), ids=CONFIG_IDS)
+def test_a_restricted_session_cannot_write_or_reach_coven_config(run: Run, index: int) -> None:
+    # The store has another name, so a glob like `co*` can only mean coven's config folder.
+    configure(make_store(home() / "vault"))
+    (home() / "link").symlink_to(config_file().parent)
+    payload = config_calls()[index]
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert CONFIG_REFUSAL in proc.stderr
+    assert str(config_file()) in proc.stderr
+    assert run(payload).returncode == 0
+
+
+def test_the_config_file_is_the_one_the_hook_reads(run: Run, store: Path) -> None:
+    """The rule protects the file that `read_config` reads, wherever HOME is."""
+    assert pg.config_file() == config_file()
+    proc = run(bash(f"echo x > {pg.config_file()}"), role="pm")
+    assert proc.returncode == 2
+    assert CONFIG_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        tool("Read", file_path="CONFIG"),
+        tool("Read", file_path="FOLDER/owned.json"),
+        tool("Grep", pattern="guard", path="CONFIG"),
+        tool("Glob", pattern="*.json", path="FOLDER"),
+        tool("Write", file_path="/tmp/n.md", content="see CONFIG"),
+        tool("Write", file_path="/tmp/config.json", content="{}"),
+        tool("Task", prompt="read CONFIG"),
+        tool("mcp__db__query", query="select 1"),
+        bash("coven doctor"),
+        bash("coven guard explain 'ls'"),
+        bash("coven guard check guard.json"),
+        bash("coven pm status"),
+        bash("cd src/coven && ls"),
+        bash("cd ~/projects/coven && git status"),
+        bash("cat docs/config.json"),
+        bash("ls ~/.config/git ~/.config/fish"),
+        bash("git commit -m 'docs: edit ~/.config/coven/config.json by hand'"),
+        bash("echo 'see ~/.config/coven/config.json' >> notes.md"),
+        bash("cat >> notes.md <<'EOF'\nrm -rf ~/.config/coven\nEOF"),
+        bash("grep -rn '.config/coven' docs"),
+        bash("ls my.config/coven-notes ~/.config/coven-notes"),
+    ],
+    ids=[
+        "read-config",
+        "read-owned-file",
+        "grep-config",
+        "glob-folder",
+        "write-mentioning-config",
+        "write-another-config-json",
+        "task-mentioning-config",
+        "mcp-query",
+        "coven-doctor",
+        "coven-guard-explain",
+        "coven-guard-check",
+        "coven-pm-status",
+        "cd-into-source",
+        "cd-into-checkout",
+        "another-config-json",
+        "other-config-folders",
+        "commit-message",
+        "echo-text",
+        "heredoc-note",
+        "grep-pattern",
+        "longer-names",
+    ],
+)
+def test_a_restricted_session_reads_coven_config_and_runs_ordinary_commands(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    text = json.dumps(payload)
+    text = text.replace("CONFIG", str(config_file())).replace("FOLDER", str(config_file().parent))
+    proc = run(json.loads(text), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_coven_config_is_guarded_with_no_config_file_too(run: Run, tmp_path: Path) -> None:
+    """The refusal does not depend on the file existing: a session must not create it either."""
+    make_store(home() / "coven-memory")
+    assert not config_file().exists()
+    proc = run(bash("echo '{}' > ~/.config/coven/config.json"), role="pm")
+    assert proc.returncode == 2
+    assert CONFIG_REFUSAL in proc.stderr
+
+
+# --- who is restricted, and what no approval lifts ---
+
+
+def test_an_unset_role_is_not_restricted(run: Run, store: Path) -> None:
+    assert run(bash("claude -p hi")).returncode == 0
+    assert run(bash(f"echo x > {store}/approvals/a.json")).returncode == 0
+    assert run(bash("ssh $H uptime")).returncode == 0
+
+
+@pytest.mark.parametrize("role", ["", "x", "pm", "gm"], ids=["empty", "x", "pm", "gm"])
+@pytest.mark.parametrize(
+    "command",
+    ["claude -p hi", "ssh $H uptime", f"unset {ROLE}", "coven setup", "rm -rf ~/coven-memory"],
+)
+def test_every_set_role_value_meets_the_restricted_rules(
+    run: Run, store: Path, command: str, role: str
+) -> None:
+    proc = run(bash(command), role=role)
+    assert proc.returncode == 2
+    assert f"a '{role}' session cannot" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "claude -p hi",
+        "ssh $H uptime",
+        f"unset {ROLE}",
+        "coven approve a1 --expires-in 1h",
+        "rm -rf ~/coven-memory/approvals",
+        "rm ~/.config/coven/config.json",
+    ],
+)
+def test_an_approved_command_that_breaks_a_restricted_rule_is_still_refused(
+    run: Run, store: Path, extra: str
+) -> None:
+    command = f"{PROD_COMMAND} && {extra}"
+    approve(store, commands=[command])
+    assert run(bash(command)).returncode == 0  # an unrestricted session: the approval counts
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert PROD_MESSAGE not in proc.stderr  # a restricted rule spoke, not the target rule
+
+
+def test_an_approved_target_still_passes_for_a_restricted_session(run: Run, store: Path) -> None:
+    approve(store)
+    proc = run(bash(PROD_COMMAND), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+SUBAGENT = {"agent_id": "a1b2c3", "agent_type": "general-purpose"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bash("claude -p hi"),
+        bash("ssh $H uptime"),
+        bash("echo x > ~/coven-memory/approvals/a.json"),
+        bash("coven setup"),
+        tool("Write", file_path="/tmp/x"),
+    ][:4]
+    + [
+        {"tool_name": "Write", "tool_input": {"file_path": "~/coven-memory/systems/x.md"}},
+        {"tool_name": "Write", "tool_input": {"file_path": "~/.config/coven/config.json"}},
+    ],
+    ids=["claude", "host", "store-bash", "installer", "store-write", "config-write"],
+)
+def test_a_subagent_payload_meets_the_same_restricted_rules(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    payload = json.loads(json.dumps(payload).replace("~", str(home())))
+    subagent = {**payload, **SUBAGENT}
+    refused = run(subagent, role="pm")
+    assert refused.returncode == 2
+    assert run(payload, role="pm").stderr == refused.stderr
+    assert run(subagent).returncode == 0
+
+
+def explained(payload: Payload, role: str | None) -> Any:
+    return pg.explain(payload, home() / "coven-memory", role, NOW)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["claude -p hi", "ssh $H uptime", f"unset {ROLE}", "coven approve a1", "rm -rf ~/coven-memory"],
+)
+def test_explain_reports_the_restricted_rule_a_pm_would_hit(store: Path, command: str) -> None:
+    unrestricted = explained(bash(command), None)
+    assert unrestricted.restricted is not None
+    assert unrestricted.message is None
+    assert unrestricted.verdict == "refused for a PM"
+    restricted = explained(bash(command), "pm")
+    assert restricted.message == unrestricted.restricted
+    assert restricted.verdict == "refused for a PM"
+
+
+def test_explain_has_no_restricted_rule_for_an_ordinary_command(store: Path) -> None:
+    found = explained(bash("git status"), None)
+    assert (found.restricted, found.message, found.verdict) == (None, None, "allowed")
+
+
+def test_a_target_refusal_wins_over_a_restricted_rule_in_the_verdict(store: Path) -> None:
+    found = explained(bash(f"{PROD_COMMAND} && claude -p hi"), "pm")
+    assert found.verdict == "refused for every session"
+    assert found.message is not None
+    assert "cannot start claude sessions" in found.message  # a PM meets the restricted rule first
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bash("claude -p hi"),
+        bash("ssh $H uptime"),
+        bash("coven memory sync"),
+        bash(f"unset {ROLE}"),
+        bash("echo x > ~/coven-memory/approvals/a.json"),
+        bash("echo x > ~/.config/coven/config.json"),
+        {"tool_name": "Write", "tool_input": {"file_path": "~/coven-memory/systems/x.md"}},
+        {"tool_name": "Edit", "tool_input": {"file_path": "~/.config/coven/config.json"}},
+        {"tool_name": "mcp__fs__write", "tool_input": {"path": "~/coven-memory/a.md"}},
+    ],
+)
+@pytest.mark.parametrize("role", [None, "", "pm"], ids=["unset", "empty", "pm"])
+def test_decide_is_the_message_of_explain_for_the_restricted_rules(
+    store: Path, payload: Payload, role: str | None
+) -> None:
+    payload = json.loads(json.dumps(payload).replace("~", str(home())))
+    assert decide(payload, store, role) == explained(payload, role).message
+
+
+def test_the_hook_names_the_subcommands_that_write_the_store_or_the_config() -> None:
+    """The hook's list is what `coven approve`, `coven setup` and `coven memory adopt|init|sync`
+    are: a command added to coven's CLI that writes either must be added here."""
+    assert pg.STORE_WRITING_SUBCOMMANDS == {
+        "approve",
+        "setup",
+        "memory adopt",
+        "memory init",
+        "memory sync",
+    }
