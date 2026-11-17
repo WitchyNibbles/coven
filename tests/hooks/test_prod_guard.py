@@ -4491,3 +4491,98 @@ def test_explain_without_a_readable_config_gives_the_verdict_the_hook_gives(
     assert (found.message, found.hits) == (None, [])
     assert found.unreadable == "bad config"
     assert pg.explain_without_config(payload, problem, "pm").message == found.restricted
+
+
+# --- the log names the role class and the system or rule of each decision ---
+
+RULE_CALLS = {
+    "role-change": bash("unset COVEN_SESSION_ROLE"),
+    "installer": bash("npx claude-code --version"),
+    "claude-start": bash("claude -p hi"),
+    "remote-host": bash("ssh $DB_HOST"),
+    "coven-write": bash("coven approve step-1"),
+    "store-write": tool("Write", file_path="~/coven-memory/user/note.md"),
+    "config-write": tool("Write", file_path="~/.config/coven/config.json"),
+    "claude-settings": tool("Write", file_path="~/.claude/settings.json"),
+    "claude-plugins": tool("Write", file_path="~/.claude/plugins/x/hook.py"),
+}
+
+
+@pytest.mark.parametrize("name", RULE_CALLS)
+def test_a_restricted_refusal_names_its_rule_as_the_system(store: Path, name: str) -> None:
+    payload = json.loads(json.dumps(RULE_CALLS[name]).replace("~", str(home())))
+    found = explanation(payload, store, "pm")
+    assert found.message is not None
+    assert found.system == name
+
+
+def test_a_target_refusal_names_the_target_system(store: Path) -> None:
+    assert explanation(bash(PROD_COMMAND), store).system == "orders-db"
+    assert explanation(bash(PROD_COMMAND), store, "pm").system == "orders-db"
+
+
+def test_a_call_to_two_targets_names_both(store: Path) -> None:
+    both = explanation(bash(PROD_COMMAND + " && mail-cli send x"), store)
+    assert both.system == "orders-db,mail-send"
+
+
+def test_an_unreadable_store_is_named_unreadable_store() -> None:
+    found = explanation(bash("ls"), home() / "nowhere")
+    assert found.message is not None
+    assert found.system == "unreadable-store"
+
+
+def test_a_store_with_no_valid_guard_is_named_invalid_guard() -> None:
+    path = _state_no_valid_guard(home() / "coven-memory")
+    assert explanation(bash("ls"), path).system == "invalid-guard"
+    assert explanation(tool("Write", file_path="/tmp/x"), path, "pm").system == "invalid-guard"
+
+
+def test_a_store_without_guard_json_at_head_is_named_missing_guard() -> None:
+    path = _state_guard_absent_at_head(home() / "coven-memory")
+    assert explanation(tool("mcp__x__read"), path, "pm").system == "missing-guard"
+
+
+def test_an_unreadable_config_is_named_unreadable_config() -> None:
+    problem = pg.ConfigError("broken")
+    found = pg.explain_without_config(bash("ls"), problem, "pm")
+    assert found.message is not None
+    assert found.system == "unreadable-config"
+
+
+def test_an_allowed_call_has_no_system(store: Path) -> None:
+    found = explanation(bash("ls"), store, "pm")
+    assert (found.message, found.system) == (None, None)
+
+
+@pytest.mark.parametrize("name", RULE_CALLS)
+def test_the_log_holds_the_rule_name_of_a_refusal(run: Run, store: Path, name: str) -> None:
+    payload = json.loads(json.dumps(RULE_CALLS[name]).replace("~", str(home())))
+    assert run(payload, role="pm").returncode == 2
+    (record,) = read_log()
+    assert (record["decision"], record["system"]) == ("deny", name)
+
+
+def test_the_log_holds_the_target_system_of_a_refusal(run: Run, store: Path) -> None:
+    run(bash(PROD_COMMAND))
+    run(bash("ls"))
+    refused, allowed = read_log()
+    assert refused["system"] == "orders-db"
+    assert allowed["system"] is None
+
+
+@pytest.mark.parametrize(
+    ("role", "logged"),
+    [(None, "unset"), ("", "other"), ("pm", "pm"), ("x", "other"), ("gm-secret-7", "other")],
+    ids=["unset", "empty", "pm", "x", "long-value"],
+)
+def test_the_log_holds_the_role_class_and_never_the_raw_role(
+    run: Run, store: Path, role: str | None, logged: str
+) -> None:
+    run(bash(PROD_COMMAND), role=role)
+    run(bash("ls"), role=role)
+    refused, allowed = read_log()
+    assert refused["role"] == allowed["role"] == logged
+    path = Path(os.environ["XDG_CACHE_HOME"]) / "coven" / "logs" / "prod-guard.jsonl"
+    if role not in (None, "", "pm", "x"):
+        assert role not in path.read_text()

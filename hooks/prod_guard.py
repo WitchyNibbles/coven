@@ -446,6 +446,7 @@ class Explanation:
     message: str | None  # why this session's call is refused; None: allowed
     verdict: Verdict
     unreadable: str | None = None  # why the store or config could not be read
+    system: str | None = None  # what the refusal of this session is about: see Refused
 
 
 # --- config ---
@@ -743,7 +744,16 @@ def _reaches_out(call: Call) -> bool:
 
 # --- the rules for restricted sessions ---
 
-type Rule = Callable[[Call, Path, str, datetime], str | None]
+
+class Refused(NamedTuple):
+    """A refusal and what it is about: the target system, or the short stable name of the rule
+    (`role-change`, `store-write`, `unreadable-store`...). The hook log records the name."""
+
+    message: str
+    system: str
+
+
+type Rule = Callable[[Call, Path, str, datetime], Refused | None]
 
 
 def _shell_words() -> ModuleType:
@@ -1895,6 +1905,7 @@ class _Zone(NamedTuple):
 
     roots: tuple[Path, ...]  # the folders and files it is
     label: str  # how the refusal names it
+    name: str  # the rule name the log holds
     tokens: frozenset[str]  # names that count wherever they are a whole token in a text
     globs: frozenset[str]  # names a relative component may stand for after a `cd`
     entries: tuple[str, ...]  # what sits at its top: a bare `*` before one can reach in
@@ -1904,7 +1915,9 @@ class _Zone(NamedTuple):
 
 def _store_zone(store: Path) -> _Zone:
     names = frozenset({store.name, os.path.basename(os.path.realpath(store))})
-    return _Zone((store,), f"the memory store ({store})", names, names, STORE_ENTRIES)
+    return _Zone(
+        (store,), f"the memory store ({store})", "store-write", names, names, STORE_ENTRIES
+    )
 
 
 def _config_zone() -> _Zone:
@@ -1914,6 +1927,7 @@ def _config_zone() -> _Zone:
     return _Zone(
         (folder,),
         f"coven's config ({config_file()})",
+        "config-write",
         frozenset({token}),
         frozenset({folder.name}),
         CONFIG_ENTRIES,
@@ -1939,6 +1953,7 @@ def _settings_zone() -> _Zone:
     return _Zone(
         tuple(folder / name for folder in folders for name in SETTINGS_FILES),
         "Claude Code's settings files",
+        "claude-settings",
         frozenset(f"{CLAUDE_FOLDER}/{name}" for name in SETTINGS_FILES),
         frozenset(SETTINGS_FILES),
         (),
@@ -1953,6 +1968,7 @@ def _plugins_zone() -> _Zone:
     return _Zone(
         tuple(folder / PLUGINS_FOLDER for folder in folders),
         f"Claude Code's plugins folder ({folders[0] / PLUGINS_FOLDER})",
+        "claude-plugins",
         frozenset({f"{CLAUDE_FOLDER}/{PLUGINS_FOLDER}"}),
         frozenset({PLUGINS_FOLDER}),
         PLUGIN_ENTRIES,
@@ -2402,10 +2418,11 @@ def _tool_writes(call: Call, zone: _Zone) -> bool:
     return False
 
 
-def _zone_refusal(zone: _Zone, role: str) -> str:
-    return (
+def _zone_refusal(zone: _Zone, role: str) -> Refused:
+    return Refused(
         f"{PREFIX} a '{role}' session cannot write to {zone.label}, nor reach it through Bash or"
-        " MCP tools (use Read); only the GM session may: ask the GM"
+        " MCP tools (use Read); only the GM session may: ask the GM",
+        zone.name,
     )
 
 
@@ -2416,39 +2433,47 @@ def _bash(call: Call) -> Bash:
     return call.bash
 
 
-def _role_variable_rule(call: Call, _store: Path, role: str, _now: datetime) -> str | None:
+def _role_variable_rule(call: Call, _store: Path, role: str, _now: datetime) -> Refused | None:
     code = _bash(call).code
     if ROLE_VAR in code or ROLE_VAR in _unquoted(code):  # `unset COVEN_S''ESSION_ROLE`
-        return f"{PREFIX} a '{role}' session cannot change {ROLE_VAR}; ask the GM"
+        return Refused(
+            f"{PREFIX} a '{role}' session cannot change {ROLE_VAR}; ask the GM", "role-change"
+        )
     return None
 
 
-def _claude_code_rule(call: Call, _store: Path, role: str, _now: datetime) -> str | None:
+def _claude_code_rule(call: Call, _store: Path, role: str, _now: datetime) -> Refused | None:
     if CLAUDE_PACKAGE in _without_data(_bash(call).command):
-        return f"{PREFIX} a '{role}' session cannot run {CLAUDE_PACKAGE}; ask the GM"
+        return Refused(
+            f"{PREFIX} a '{role}' session cannot run {CLAUDE_PACKAGE}; ask the GM", "installer"
+        )
     return None
 
 
-def _start_claude_rule(call: Call, _store: Path, role: str, _now: datetime) -> str | None:
+def _start_claude_rule(call: Call, _store: Path, role: str, _now: datetime) -> Refused | None:
     """A claude start in the code text: data on an inert line (a note's heredoc, a commit
     message) starts nothing, and neither does the plain version query."""
     bash = _bash(call)
     if _is_version_query(bash.command):
         return None
     if _starts_claude(bash.code):
-        return f"{PREFIX} a '{role}' session cannot start claude sessions; ask the GM to start one"
+        return Refused(
+            f"{PREFIX} a '{role}' session cannot start claude sessions; ask the GM to start one",
+            "claude-start",
+        )
     return None
 
 
-def _remote_host_rule(call: Call, _store: Path, role: str, _now: datetime) -> str | None:
+def _remote_host_rule(call: Call, _store: Path, role: str, _now: datetime) -> Refused | None:
     """A remote CLI whose host is not written out in the command. No approval lifts it: a target
     pattern cannot see a host the command does not name."""
     problem = _host_problem(_bash(call).command)
     if problem is None:
         return None
-    return (
+    return Refused(
         f"{PREFIX} a '{role}' session cannot run {problem.cli} with a host that is not written"
-        f" out in the command ({problem.why}); write the host literally"
+        f" out in the command ({problem.why}); write the host literally",
+        "remote-host",
     )
 
 
@@ -2606,19 +2631,20 @@ def _store_writer(code: str) -> str | None:
     return next(filter(None, (_view_writer(view) for view in views)), None)
 
 
-def _store_writer_rule(call: Call, _store: Path, role: str, _now: datetime) -> str | None:
+def _store_writer_rule(call: Call, _store: Path, role: str, _now: datetime) -> Refused | None:
     """coven approve, setup and memory adopt|init|sync in a code position: they change the memory
     store or coven's config."""
     sub = _store_writer(_bash(call).code)
     if sub is None:
         return None
-    return (
+    return Refused(
         f"{PREFIX} a '{role}' session cannot run coven {sub}: it changes the memory store or"
-        " coven's config; ask the GM"
+        " coven's config; ask the GM",
+        "coven-write",
     )
 
 
-def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> str | None:
+def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> Refused | None:
     """A Bash command that runs in, or whose text reaches, a place a restricted session may not
     write."""
     for zone in _zones(store):
@@ -2638,7 +2664,7 @@ BASH_RULES: tuple[Rule, ...] = (
 )
 
 
-def _bash_refusal(call: Call, store: Path, role: str, now: datetime) -> str | None:
+def _bash_refusal(call: Call, store: Path, role: str, now: datetime) -> Refused | None:
     """Why a restricted session may not run this Bash command: the first rule that refuses it."""
     if call.bash is None:
         return None
@@ -2649,7 +2675,7 @@ def _bash_refusal(call: Call, store: Path, role: str, now: datetime) -> str | No
     return None
 
 
-def _tool_refusal(call: Call, store: Path, role: str, _now: datetime) -> str | None:
+def _tool_refusal(call: Call, store: Path, role: str, _now: datetime) -> Refused | None:
     """Why a restricted session may not make this non-Bash call: it writes or reaches the memory
     store, coven's config, or Claude Code's settings and plugins."""
     if call.bash is not None:
@@ -2668,7 +2694,7 @@ RESTRICTED_RULES: tuple[Rule, ...] = (_bash_refusal, _tool_refusal)
 # --- the decision ---
 
 
-def _restricted_refusal(call: Call, store: Path, role: str, now: datetime) -> str | None:
+def _restricted_refusal(call: Call, store: Path, role: str, now: datetime) -> Refused | None:
     for rule in RESTRICTED_RULES:
         refusal = rule(call, store, role, now)
         if refusal:
@@ -2680,17 +2706,19 @@ def _store_problem(store: Path, exc: StoreError) -> str:
     return f"cannot read the committed memory store at {store} ({exc})"
 
 
-def _unreadable_store(store: Path, exc: StoreError) -> str:
-    return (
+def _unreadable_store(store: Path, exc: StoreError) -> Refused:
+    return Refused(
         f"{PREFIX} {_store_problem(store, exc)}; Bash and MCP tools are blocked until git can"
-        " read it: run coven doctor"
+        " read it: run coven doctor",
+        "unreadable-store",
     )
 
 
-def _no_valid_guard(store: Path, exc: GuardError) -> str:
-    return (
+def _no_valid_guard(store: Path, exc: GuardError) -> Refused:
+    return Refused(
         f"{PREFIX} {exc}; no earlier committed version is valid, so only reads work until the"
-        f" user fixes or reverts it in their own terminal (git -C {store} revert HEAD)"
+        f" user fixes or reverts it in their own terminal (git -C {store} revert HEAD)",
+        "invalid-guard",
     )
 
 
@@ -2741,14 +2769,17 @@ def _hits(call: Call, targets: Sequence[Target], store: Path, now: datetime) -> 
     ]
 
 
-def _target_refusal(hits: Sequence[Hit], note: str) -> str | None:
+def _target_refusal(hits: Sequence[Hit], note: str) -> Refused | None:
     """Why the call may not reach the targets it hits: no live approval names it for each."""
-    needed = dict.fromkeys(f"'{h.system}' is {h.kind}" for h in hits if h.approval is None)
+    needed = dict.fromkeys(
+        (h.system, f"'{h.system}' is {h.kind}") for h in hits if h.approval is None
+    )
     if not needed:
         return None
-    return (
-        f"{PREFIX} {' and '.join(needed)}; this exact step needs the user's approval"
-        f" (send a PROD-STEP; the GM approves it with coven approve){note}"
+    return Refused(
+        f"{PREFIX} {' and '.join(text for _system, text in needed)}; this exact step needs the"
+        f" user's approval (send a PROD-STEP; the GM approves it with coven approve){note}",
+        ",".join(dict.fromkeys(system for system, _text in needed)),
     )
 
 
@@ -2758,8 +2789,8 @@ class _Reading:
 
     hits: list[Hit]
     note: str = ""
-    everyone: str | None = None  # the refusal every session meets
-    restricted_only: str | None = None  # the refusal only a restricted session meets
+    everyone: Refused | None = None  # the refusal every session meets
+    restricted_only: Refused | None = None  # the refusal only a restricted session meets
     unreadable: str | None = None  # why git could not read the store
 
 
@@ -2787,7 +2818,10 @@ def _read_store(call: Call, store: Path, now: datetime) -> _Reading:
     except GuardError as exc:
         return _no_valid_guard_reading(call, store, exc)
     if enforced.targets is None:
-        missing = f"{PREFIX} {GUARD_FILE} is missing from the committed store; ask the user"
+        missing = Refused(
+            f"{PREFIX} {GUARD_FILE} is missing from the committed store; ask the user",
+            "missing-guard",
+        )
         return _Reading([], restricted_only=missing if out else None)
     note = _fallback_note(enforced)
     try:
@@ -2800,7 +2834,7 @@ def _read_store(call: Call, store: Path, now: datetime) -> _Reading:
     return _Reading(hits, note, everyone=_target_refusal(hits, note))
 
 
-def _verdict(everyone: str | None, restricted: str | None) -> Verdict:
+def _verdict(everyone: Refused | None, restricted: Refused | None) -> Verdict:
     if everyone:
         return "refused for every session"
     return "refused for a PM" if restricted else "allowed"
@@ -2818,15 +2852,16 @@ def explain(
     reading = _read_store(call, store, now)
     rule = _restricted_refusal(call, store, ASSUMED_ROLE if role is None else role, now)
     restricted = rule or reading.restricted_only
-    message = restricted if role is not None and restricted else reading.everyone
+    chosen = restricted if role is not None and restricted else reading.everyone
     return Explanation(
         call,
         reading.hits,
-        restricted,
+        restricted.message if restricted else None,
         reading.note,
-        message,
+        chosen.message if chosen else None,
         _verdict(reading.everyone, restricted),
         reading.unreadable,
+        chosen.system if chosen else None,
     )
 
 
@@ -2837,8 +2872,17 @@ def explain_without_config(
     session loses Bash and MCP tools, any other goes on as if the guard were off."""
     call = _call(payload)
     refusal = _config_refusal(exc, call)
-    message = refusal if role is not None else None
-    return Explanation(call, [], refusal, "", message, _verdict(None, refusal), str(exc))
+    chosen = refusal if role is not None else None
+    return Explanation(
+        call,
+        [],
+        refusal.message if refusal else None,
+        "",
+        chosen.message if chosen else None,
+        _verdict(None, refusal),
+        str(exc),
+        chosen.system if chosen else None,
+    )
 
 
 def decide(
@@ -2865,11 +2909,18 @@ def _payload(stdin: TextIO) -> dict[str, object]:
     return payload
 
 
-def _record(found: Explanation) -> None:
+def role_class(role: str | None) -> str:
+    """`unset`, `pm` or `other`: what the log says about the session, never its raw role."""
+    return "unset" if role is None else "pm" if role == "pm" else "other"
+
+
+def _record(found: Explanation, role: str | None) -> None:
     """Log the decision. The log is best effort: a broken one must not change the answer."""
     command = found.call.bash.command if found.call.bash else None
     record = {
         "decision": "allow" if found.message is None else "deny",
+        "role": role_class(role),
+        "system": found.system,
         "tool": found.call.tool,
         "command": command if command is None else command[:LOGGED_COMMAND_LIMIT],
         "message": found.message,
@@ -2891,20 +2942,21 @@ def _guard(store: Path, role: str | None, stdin: TextIO) -> int:
         found = explain(_payload(stdin), store, role, datetime.now(UTC))
     except PayloadError as exc:
         return _refuse_bad_input(exc)
-    _record(found)
+    _record(found, role)
     if found.message:
         print(found.message, file=sys.stderr)
         return 2
     return 0
 
 
-def _config_refusal(exc: ConfigError, call: Call) -> str | None:
+def _config_refusal(exc: ConfigError, call: Call) -> Refused | None:
     """Why a restricted session may not make this call while the config cannot be read."""
     if not _reaches_out(call):
         return None
-    return (
+    return Refused(
         f"{PREFIX} {CONFIG_ERROR} ({exc}); Bash and MCP tools are blocked in this session: run"
-        " coven doctor"
+        " coven doctor",
+        "unreadable-config",
     )
 
 
@@ -2921,7 +2973,7 @@ def _unreadable_config(exc: ConfigError, role: str | None, stdin: TextIO) -> int
     refusal = _config_refusal(exc, call)
     if refusal is None:
         return 0
-    print(refusal, file=sys.stderr)
+    print(refusal.message, file=sys.stderr)
     return 2
 
 
