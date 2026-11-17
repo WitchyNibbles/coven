@@ -116,6 +116,22 @@ def test_rebuild_indexes_writes_scopes_and_keeps_origin(tmp_path: Path, lab: Lab
     assert entries.rebuild_indexes(tmp_path) == []
 
 
+def test_rebuild_indexes_covers_systems_but_not_approvals(tmp_path: Path, lab: Lab) -> None:
+    lab.write(tmp_path, "systems/orders-db.md", "orders-db", "the orders database")
+    (tmp_path / "systems" / "guard.json").write_text("{}\n")
+    (tmp_path / "approvals").mkdir()
+    (tmp_path / "approvals" / "step-1.json").write_text("{}\n")
+    (tmp_path / "approvals" / "notes.md").write_text(
+        "---\nname: N\ndescription: not an entry\n---\n"
+    )
+    assert entries.rebuild_indexes(tmp_path) == ["systems/INDEX.md"]
+    assert (tmp_path / "systems/INDEX.md").read_text() == entries.index_text(
+        [Entry("orders-db.md", "orders-db", "the orders database")]
+    )
+    assert not (tmp_path / "approvals/INDEX.md").exists()
+    assert entries.rebuild_indexes(tmp_path) == []
+
+
 def test_rebuild_indexes_drops_an_index_with_no_entries_and_no_origin(
     tmp_path: Path, lab: Lab
 ) -> None:
@@ -177,12 +193,57 @@ def test_hook_indexes_a_staged_tree_like_rebuild_indexes(
     lab.git(repo, "init", "-q")
     lab.write(repo, "user/a.md", "A", "first")
     lab.write(repo, "projects/app/b.md", "[B]", "second " * 40)
+    lab.write(repo, "systems/orders-db.md", "orders-db", "the orders database")
+    (repo / "systems/guard.json").write_text("{}\n")
+    (repo / "approvals").mkdir()
+    (repo / "approvals/step.json").write_text("{}\n")
     (repo / "projects/app/c.md").write_text("no frontmatter\n")
     (repo / "projects/app/INDEX.md").write_text(f"{entries.HEADER}\n{ORIGIN}\n")
     lab.git(repo, "add", "-A")
     monkeypatch.chdir(repo)
     hook.update_indexes(hook.staged_paths())
-    written = {p: (repo / p).read_text() for p in ("user/INDEX.md", "projects/app/INDEX.md")}
+    written = {
+        p: (repo / p).read_text()
+        for p in ("user/INDEX.md", "projects/app/INDEX.md", "systems/INDEX.md")
+    }
     assert entries.rebuild_indexes(repo) == []
     assert written["projects/app/INDEX.md"].split("\n")[1] == ORIGIN
     assert os.path.exists(repo / "user/INDEX.md")
+    assert "- [orders-db](orders-db.md) — the orders database" in written["systems/INDEX.md"]
+    assert not (repo / "approvals/INDEX.md").exists()
+
+
+def test_rebuild_indexes_never_follows_or_writes_through_a_symlink(
+    tmp_path: Path, lab: Lab
+) -> None:
+    outside = tmp_path / "outside"
+    other = tmp_path / "other"
+    for folder in (outside, other):
+        lab.write(folder, "ext.md", "Ext", "outside the store")
+        (folder / "INDEX.md").write_text("hand-written\n", encoding="utf-8")
+    kept = tmp_path / "kept-index.md"
+    kept.write_text("hand-written\n", encoding="utf-8")
+    root = tmp_path / "store"
+    lab.write(root, "projects/real/a.md", "A", "inside the store")
+    lab.write(root, "user/b.md", "B", "inside the store")
+    (root / "user" / "INDEX.md").symlink_to(kept)
+    (root / "projects" / "shared").symlink_to(outside)
+    (root / "systems").symlink_to(other)
+    before = {folder: (folder / "INDEX.md").read_bytes() for folder in (outside, other)}
+
+    changed = entries.rebuild_indexes(root)
+
+    assert changed == ["projects/real/INDEX.md"]
+    assert {folder: (folder / "INDEX.md").read_bytes() for folder in (outside, other)} == before
+    assert kept.read_text(encoding="utf-8") == "hand-written\n"
+    assert not (outside / "INDEX.md").is_symlink()
+
+
+def test_rebuild_indexes_skips_a_symlinked_projects_folder(tmp_path: Path, lab: Lab) -> None:
+    outside = tmp_path / "outside"
+    lab.write(outside, "app/a.md", "A", "outside the store")
+    root = tmp_path / "store"
+    root.mkdir()
+    (root / "projects").symlink_to(outside)
+    assert entries.rebuild_indexes(root) == []
+    assert not (outside / "app" / "INDEX.md").exists()

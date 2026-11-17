@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from support import REPO
+from support import REPO, commit_all, git
 
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = REPO / ".claude-plugin" / "marketplace.json"
@@ -95,7 +95,7 @@ def test_hooks_json_uses_plugin_root_paths() -> None:
     commands = [
         command for event in load(HOOKS_JSON)["hooks"] for _, command in hook_commands(event)
     ]
-    assert len(commands) == 5
+    assert len(commands) == 6
     pattern = re.compile(
         rf'sh "{re.escape(ROOT)}/hooks/fail-closed\.sh" "{re.escape(ROOT)}/hooks/(\w+\.py)"(?: --pre-tool-use)?'
     )
@@ -110,21 +110,29 @@ def test_hooks_json_uses_plugin_root_paths() -> None:
         "memory_context.py",
         "pm_permissions.py",
         "pm_permissions.py",
+        "prod_guard.py",
         "session_context.py",
     ]
 
 
 def test_pre_tool_use_runs_deny_secrets_on_every_file_tool() -> None:
-    (matcher, command), _ = hook_commands("PreToolUse")
+    (matcher, command), *_ = hook_commands("PreToolUse")
     assert matcher == PRE_TOOL_USE_TOOLS
     assert command.endswith('hooks/deny_secrets.py"')
 
 
 def test_pre_tool_use_guards_a_pm_session_on_bash() -> None:
     # The PM profile's ask and deny rules match by command prefix: this guard sees the rest.
-    _, (matcher, command) = hook_commands("PreToolUse")
+    _, (matcher, command), _ = hook_commands("PreToolUse")
     assert matcher == "Bash"
     assert command.endswith('hooks/pm_permissions.py" --pre-tool-use')
+
+
+def test_pre_tool_use_runs_the_prod_guard_on_every_tool() -> None:
+    # It sees MCP tools, Task and tools that do not exist yet: only a catch-all matcher covers them.
+    *_, (matcher, command) = hook_commands("PreToolUse")
+    assert matcher == "*"
+    assert command == f'sh "{ROOT}/hooks/fail-closed.sh" "{ROOT}/hooks/prod_guard.py"'
 
 
 def test_permission_request_runs_pm_permissions_for_every_tool() -> None:
@@ -188,6 +196,25 @@ def test_wired_pm_permissions_decides_only_for_a_pm_session(tmp_path: Path) -> N
     assert pm.returncode == 0
     decision = json.loads(pm.stdout)["hookSpecificOutput"]["decision"]
     assert decision["behavior"] == "deny"
+
+
+def test_wired_prod_guard_is_off_without_a_guard_and_refuses_a_target_with_one(
+    tmp_path: Path,
+) -> None:
+    payload = {"tool_name": "Bash", "tool_input": {"command": "psql -h orders-db"}, "cwd": "/tmp"}
+    assert run_wired("PreToolUse", payload, index=2).returncode == 0
+    store = tmp_path / "coven-memory"
+    (store / "systems").mkdir(parents=True)
+    guard = {"targets": [{"system": "orders-db", "kind": "production", "match": ["orders-db"]}]}
+    (store / "systems/guard.json").write_text(json.dumps(guard))
+    git(store, "init", "-q")
+    commit_all(store)
+    config = Path(os.environ["HOME"]) / ".config" / "coven"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(json.dumps({"memory_path": str(store)}))
+    refused = run_wired("PreToolUse", payload, index=2)
+    assert refused.returncode == 2
+    assert "coven prod-guard: 'orders-db' is production" in refused.stderr
 
 
 def test_wired_pm_guard_blocks_a_prefix_bypass_only_in_a_pm_session(tmp_path: Path) -> None:

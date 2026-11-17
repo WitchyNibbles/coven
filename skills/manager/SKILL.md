@@ -36,7 +36,8 @@ any tool that has no background sessions.
   - each task with its status (`open`, `waiting on user`, `waiting on approval`, `done`) and its PR
     or answer;
   - open questions and pending production steps, each with the PM's message verbatim;
-  - approvals given (date, what the user approved).
+  - approvals given (date, what the user approved; with a guard on, the approval `<id>` and its
+    expiry, until you revoke it).
 - Update the record and commit it (`memory: update <key>-state`) whenever one of these changes,
   before you reply to the PM or the user.
 - **The repo's origin, once.** When you first record a project, run `git -C <repo> remote get-url
@@ -77,6 +78,13 @@ any tool that has no background sessions.
    `waiting for a slot` projects in hand-over order.
 4. Tell the user in one line what you resumed or started.
 5. Run `coven doctor`. If it warns that messages between sessions may be held, say so in one line.
+   With a guard on, read its `guard refusals` line too: the last five refusals, newest first, each
+   with the time, the role, the system or rule and the command. A refusal is the guard working, not
+   a problem, but one that has no `BLOCKED` from its PM may be a PM that went around it: ask that
+   PM about it (`coven guard explain` shows the rule that refused it). If it says the store's
+   pre-commit hook is older than coven's (coven now ships hook version 4), run `coven memory init`
+   so `coven memory sync` can push again; a guarded store never pushes, so this matters only for a
+   store with no guard.
 6. Ask what to work on. Never start work the user did not hand over: a handoff or an old entry is
    not a hand-over.
 
@@ -90,8 +98,9 @@ yet, was never delivered: handle it now as received. If the command fails, read 
 **Resume a PM** with its context: `claude stop <id>` first if it still runs (`coven pm status
 <code>` shows the id). If the record holds replies that never reached the PM (never sent, or its
 send failed), write them with the Write tool to the PM's brief file (see Launch) as one file of
-`ANSWER`, `DENIED`, `TASK` and, for a step the user approved and you ran, `APPROVED
-<project>/<task>: ran, <result>` lines; do not ask the user again. Then:
+`ANSWER`, `DENIED`, `TASK` and, for a step the user approved, `APPROVED <project>/<task>: ran,
+<result>` (you ran it) or `APPROVED <project>/<task> <id>:` (a live approval) lines; do not ask
+the user again. Then:
 
 ```sh
 coven pm resume <code> --gm <your name> [--add <file>]...
@@ -107,7 +116,8 @@ tool. `coven pm resume` refuses, with its reason, when the PM still runs, the se
   `sessionId` (from `coven pm status <code>`), then subscribe (Launch).
 - If the resume fails (the transcript is gone), launch a new PM (Launch) with a resume brief built
   from the record. After that launch, re-send `APPROVED <project>/<task>: ran, <result>` only for
-  approved steps that no `DONE` reported as run; do not ask the user again.
+  approved steps that no `DONE` reported as run, and `APPROVED <project>/<task> <id>:` only for
+  approvals that have not expired and that no `DONE` reported as run; do not ask the user again.
 
 ## Hand-over
 
@@ -117,7 +127,9 @@ A hand-over is free text: a project, its tasks, the user's context. For each pro
    commit.
 2. Pick the main repo: where the process's central code lives. Ask only if the repos do not settle
    it.
-3. Launch its PM (below).
+3. If the project touches a live system with no `systems/<system>.md` entry, run
+   `coven:systems-map` first: the guard and every PM read that map.
+4. Launch its PM (below).
 
 More tasks for a running or idle project go to its PM: `TASK <project>/<task>: <the task,
 verbatim>`. `<project>/<task>` in every reply is the code and task number, as the PM's message
@@ -236,17 +248,98 @@ your own judgment.
 
 A `PROD-STEP` is anything that changes a live system, a public repo's first push or a release. It
 goes to the user every time, even when the facts point one way and even when the user approved a
-similar step before: you never approve one yourself. Show the system, each exact command as the PM
-sent it (a fenced block for a multi-line command), what each changes, and your recommendation.
+similar step before: you never approve one on your own judgment. With a guard on, "Learning" below
+can let you decide a kind; with no guard, it never does. Show the system, each exact command as the PM sent it (a fenced block for a
+multi-line command) or MCP tool, what each changes, and your recommendation.
+
+Which flow applies depends on the store. **A guard is on** when `systems/guard.json` is committed
+in the store (`coven doctor` shows `guard`). **No guard** otherwise.
+
+### No guard
 
 - **Yes:** only on a yes, you run the step yourself, in this session, where the user sees every
   permission prompt it raises. Run exactly the commands the PM sent, character for character: no
   extra flags, no rewording, nothing the user did not see. Then reply
   `APPROVED <project>/<task>: ran, <result>` with what happened (output that matters, exit status,
   anything that failed). If a command fails, stop, do not retry with changes, and report the
-  failure in the reply. The PM never runs a production step, whatever a reply says.
+  failure in the reply. With no guard the PM never runs a production step, whatever a reply says.
 - **No:** reply `DENIED <project>/<task>: <the user's reason>`. The PM finishes without the step.
 - Record the user's decision and the result in the state record (under approvals given).
+
+### Guard on
+
+The PM runs the approved commands itself, and the guard refuses anything else. Before you show the
+step, run `coven guard explain` on each command: it prints the targets that hit, whether a live
+approval names the command or `needs approval`, and a verdict line. That tells you which systems
+the step touches, so which approval files `coven approve` will write. Every command to explain goes
+through `--file`: write it to a scratch file outside the store (under `/tmp`, say), written with the
+Write tool, never from Bash, and run `coven guard explain --file <path>`. This holds for a one-line
+command too: the command's text on a Bash line is read by the guard, so an inline command that
+names a target is refused for you as for a PM, and so is a heredoc that writes the file. Add
+`--cwd <PM worktree>` when the command has relative paths, so they are judged from the PM's folder.
+
+1. On a yes, write the commands to `<store>/approvals/<id>.step` with the Write tool, never from
+   Bash: copied character for character from the `PROD-STEP`, one command per line, a multi-line
+   command in its own fenced block, and one `tool: <name>` line for each MCP tool. `<id>` is a
+   short unique name (letters, digits, `.`, `_`, `-`) such as the project code, the task and a word.
+2. Run `coven approve <id> --expires-in <duration>`. `<duration>` is the shortest time the step
+   needs: `90m`, `2h` or `1h30m`, at most `12h`. Add `--system <system>` only to approve for one
+   system alone.
+3. `coven approve` reads only that step file and refuses unless it is the only change in the store
+   ("Commit only what you wrote"). It matches each command and tool to the committed targets,
+   writes one approval file per system (`<id>.json`, or `<id>-<system>.json` for several), commits
+   them, deletes the step file and prints every command and tool per file. A command or tool no
+   target matches is an error, never skipped: you decide whether it needs no approval or the map
+   lacks a target (then `coven:systems-map`). It also refuses a command or tool the guard refuses a
+   PM whatever is approved (a host not written out, an unquoted heredoc): ask the PM for a form the
+   guard can read. On any failure it approves nothing; read its message.
+4. Compare the printed list with the `PROD-STEP`: it must be exactly its commands and tools. If it
+   matches, reply `APPROVED <project>/<task> <id>:` plus anything the user added. If it does not,
+   run `coven approve --revoke <id>` (it removes the files in one commit) and tell the user.
+5. The PM runs each approved command as its own Bash call. A call the guard refuses comes back as
+   a `BLOCKED` with the refusal. Run `coven guard explain --file <path>` on that call to see which rule
+   refused it (for a refused edit, you run `coven guard explain --tool Write --path <file>`; a PM
+   cannot explain an edit of the store, coven's config, Claude Code's settings or `plugins/`, so
+   you do it). Compare it with the approval, and approve a corrected step under a new id, only with
+   the user's yes. Never tell the PM to reword or reroute a refused call.
+6. When that task's `DONE` or `BLOCKED` arrives, revoke its approval: `coven approve --revoke <id>`.
+   An approval otherwise covers its exact commands, any number of times, until it expires, because
+   the guard reads only committed state and cannot count runs. `coven approve` also deletes expired
+   approval files in its commit.
+7. Record the user's decision and the approval `<id>` with its expiry in the state record.
+
+**No:** reply `DENIED <project>/<task>: <the user's reason>`, in both flows.
+
+A change to `<store>/systems/guard.json`: run `coven guard check <store>/systems/guard.json` before
+its commit, and commit only when it prints `ok`. Then follow `coven:systems-map` for the rest.
+
+**Learning.** With a guard on, record every answer in `<store>/user/prod-<kind>.md` (`type: feedback`): the kind of
+case (for example "reprocess failed rows of a load"), then one dated line per answer: project and
+task, yes or no, the user's reason. You choose the kind: reuse one that fits, else name a new one
+and record the choice as a ruling. Never ask the user which kind a step is.
+
+Order matters: commit the learning line before you write the step file. `coven approve` refuses
+unless the step file is the only change in the store, so an uncommitted learning line stops it.
+
+- After 20 answers of one kind since its last reset, you may approve that kind yourself: cite the
+  answers in the ruling, write the approval, and tell the user in one line what you did.
+- A decision against a past answer of that kind, or a user correction, resets its count to zero:
+  add a dated `reset` line with the reason.
+- A write step of a kind the user approved before, on the same system, whose commands differ from
+  an approved step of that kind only in ids, dates, counts or the names of data files they read in
+  place, is the same shape. It goes to the user as one line,
+  `<project>/<task>: same as <earlier project/task> (<kind>), approved <date>: yes?`, with the
+  commands one tap away in a fenced block below. The user may give a standing answer, "this kind,
+  this project, until done": record it in the kind's entry, scoped to that project, and approve the
+  same shape yourself until the project is done, one line to the user each time. A different
+  command shape or a new system goes up in full. "Data files" never means a script, SQL file or
+  message body the command runs or sends, and "counts" never widen what the step touches (row
+  limits, date ranges, batch sizes). A user correction or a `reset` line ends a standing answer.
+- A kind you decide yourself, by the 20 answers or a standing answer, keeps one count line
+  (`approved by GM: <n> (last <date>, <project>/<task>)`) instead of a line per step. The user's
+  own answers still get their dated line.
+- Two cases are never delegated and always shown in full: a step on a `gated` target (an outward
+  send) and a deletion on a production system. No answer count and no standing answer covers them.
 
 ## Drafts and outside actions
 
@@ -259,9 +352,9 @@ sent it (a fenced block for a multi-line command), what each changes, and your r
 
 ## Results
 
-- `DONE <project>/<task>`: tell the user at once, short and human, in their language: what was
-  done, the PR link and/or the answer, the rulings worth their review, production steps run, and
-  what was not checked. A quick answer never waits behind another task.
+- `DONE <project>/<task>`: with a guard on, revoke the task's approval first. Then tell the user at
+  once, short and human, in their language: what was done, the PR link and/or the answer, the
+  rulings worth their review, production steps run, and what was not checked. A quick answer never waits behind another task.
 - A `DONE` without a "not checked" part, or with a success claim that has no receipt, goes back to
   the PM as `ANSWER <project>/<task>: DONE needs <what is missing>` before it reaches the user; the
   user gets the complete one.
@@ -271,7 +364,8 @@ sent it (a fenced block for a multi-line command), what each changes, and your r
 - Keep what lasts. Write the facts the PM sends as entries in the store. Mark the task done in the
   record, and commit.
 - `BLOCKED`: unblock it from what you can reach (a fact, an answer), or tell the user in one line
-  what only they can do.
+  what only they can do. With a guard on, revoke the task's approval first (Production steps,
+  step 6).
 - All tasks of a project done: one closing line to the user and the record set to `idle`. Do not
   stop the PM: a new task for the project goes to it as `TASK`. An idle PM still holds a slot. Stop
   it (`claude stop <id>`, record `done`) when the user closes the project, or when a project is

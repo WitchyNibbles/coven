@@ -17,7 +17,7 @@ def project_key(cwd: Path) -> str:
     A worktree maps to the checkout that owns it. Outside git, in a folder git cannot read or when
     git is missing, the key is the name of `cwd` itself.
     """
-    return _normalise(_main_checkout_name(cwd) or Path(os.path.abspath(cwd)).name)
+    return normalise(_main_checkout_name(cwd) or Path(os.path.abspath(cwd)).name)
 
 
 def _main_checkout_name(cwd: Path) -> str | None:
@@ -45,5 +45,6 @@ def git_output(cwd: Path, args: list[str]) -> str | None:
     return output if done.returncode == 0 and output else None
 
 
-def _normalise(name: str) -> str:
+def normalise(name: str) -> str:
+    """coven's key form of a folder name; `coven memory adopt` renames store folders to it."""
     return name.lower().replace(" ", "-")

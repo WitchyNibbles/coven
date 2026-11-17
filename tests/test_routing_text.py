@@ -36,3 +36,10 @@ def test_routing_leaves_out_what_v1_cuts() -> None:
     lowered = text().lower()
     for cut in ("impeccable", "archify", "obsidian", "modernize", "docx"):
         assert cut not in lowered
+
+
+def test_a_live_system_with_no_entry_goes_to_systems_map() -> None:
+    bullets = text().split("\n- ")
+    rule = next(bullet for bullet in bullets if "`coven:systems-map`" in bullet)
+    assert "live system" in rule
+    assert "systems/" in rule

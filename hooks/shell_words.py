@@ -1,18 +1,70 @@
-"""Which parts of a Bash command line are only data, for the deny-secrets hook.
+"""Which parts of a Bash command line are only data, for the prod-guard and deny-secrets hooks.
 
 `without_data(command)` returns the command with its data parts (a commit message, a PR body, a
 search pattern, a quoted-delimiter heredoc fed to cat, tee or a message command) replaced by
 spaces, so a hook that matches names in text does not refuse a command that only mentions one.
 When the scanner cannot follow the command it returns it unchanged: the hook then checks all of it.
 
-It gives up on: `$(...)`, `${...}`, backticks, comments, process substitution, `((`, a function
-or alias definition, `eval`, `hash` and the like, an unquoted heredoc, a wrapper or an assignment
-before the command, and a word that may expand where a value is needed.
+`code_text(command)` is the wider form for prod-guard's target and store checks. When every simple
+command on the line is inert (runs nothing it is given), it blanks: the messages of
+`git commit|tag|notes` and `gh pr|issue|release create|edit|comment|view` (file flags such as
+`--body-file` stay), the patterns of `grep`, `rg` and `ag`, comments, and every heredoc body and
+every echo/printf word of known value without a `$`. Bodies and echo or printf text stay when the
+line has a pipe. Bodies, echo or printf text and messages all stay when the line writes a file
+other than `/dev/null` (a redirection, tee's file, `sort -o`, git `--output`) and either has git on
+it or writes a target that something may run later without being told its name. Compared in any
+case, after quote removal, that is: a git hook (a path with a `.git` or `.husky` component, a
+component containing `hook`, or a basename that is a git hook's name, such as `pre-commit` or
+`update`, since core.hooksPath may name any folder but the hook keeps its name), a shell, direnv,
+readline, git or Claude start-up file (`.bashrc`, `.bash_aliases`, `.zshenv`, `.profile`, `.envrc`,
+`.inputrc`, `.gitconfig`, `.config/git/config`, `.claude.json`, `.mcp.json` and the like), a file under
+`.ssh`, `.claude`, `.bashrc.d`, `.zshrc.d`, `.config/fish/`, `.config/autostart/` or `/etc/`, a
+target that is not a plain literal (`$f`, a glob, `~`), or a relative target after a `cd`,
+`pushd` or `popd` earlier on the line (`cd /etc; echo x > profile`). `code_text(command, lone)`
+also counts as inert, and blanks with the data, every simple command whose word values are exactly
+`lone` (prod-guard's `printenv <role variable>`) when it has no redirection and no pipe and the
+text has no `(` (zsh reads `a=(...)` and `for v (...)` words as data). Nothing is blanked when
+anything left as code holds a `$` or a backtick (`cd $HOME/r`, `echo $[$_]`): bash's `$_` is the
+last word of the previous command, a blanked message or the self-check's words, and arithmetic on
+`a[$(...)]` runs it. Any other line comes back unchanged.
+
+`heredoc_bodies(command)` hands prod-guard's relative-glob check the command with its heredoc bodies
+blanked, the bodies as written and the first word of each command that reads one, or None when
+the scanner cannot follow the line or it has a pipe (see its docstring). `without_patterns(command)`
+is the narrowest form, for the same check: only the pattern words of `grep`, `egrep`, `fgrep`, `rg`
+and `git grep` are blanked, on any line (a pipe or another command on it changes nothing), and the
+command comes back unchanged when the scanner cannot follow it.
+
+Known limits: file content written now and run later by name is outside a text-only guard (`echo
+... > x.sh` passes, and so does the later `bash x.sh`). So are files a tool runs implicitly that
+are not listed above: `conftest.py`, a `Makefile`, `package.json` scripts, `tox.ini` and the like
+pass when Bash writes them, and so does anything the Write tool writes (the Write and Edit tools
+need their own path checks). The guard is a tripwire for mistakes, not a sandbox.
+
+Inert, by first word (any other first word, an assignment, `if`, a wrapper or `$x`, is not):
+
+    cat tee echo grep ls mkdir   always
+    cd pwd wc head tail          always
+    printf  no `-v NAME` (it may set PATH), also glued (`-vNAME`)
+    rg      no `--pre`, `--pre-glob`, `--hostname-bin`, and no word that may expand
+    ag      no abbreviation of `--pager` from `--pa`, and no word that may expand
+    sort    no abbreviation of `--compress-program` from `--co`, and no word that may expand
+    git     only `-C <dir>` before commit, log, diff, status, show, add or notes, or before
+            tag with a `-m`/`--message` word
+    gh      pr, issue or release, then create, edit, comment or view
+
+`code_text` reads comments (a `#` at the start of a word after a blank, a newline, `;`, `&` or `|`)
+because Claude runs Bash non-interactively (`zsh -c`, `bash -c`), where comments are always on.
+`without_data` still gives up on them: its output is unchanged from before `code_text`.
+
+One pass over the text, no backtracking regex (prod-guard runs under a deadline). Standard library
+only: the hooks run as `python3 -I`.
 
 This is text matching, not a shell. It only ever blanks a word whose value it knows exactly (no
-`$name`, glob or `~`), and only in a place where the word reaches `git`, `gh`, `grep`, `rg`, `cat`
-or `tee` as plain data. Claude Code runs Bash commands in bash or zsh, so every rule has to hold
-for both: where they differ the scanner gives up. Standard library only, one pass over the text.
+`$name`, glob or `~`), and only in a place where the word reaches `git`, `gh`, `grep`, `rg`,
+`cat` (or, for `code_text`, another inert command) as plain data. Claude Code runs Bash commands in
+bash or zsh, so every rule has to hold for both: where they differ (`>!`, `12>f`, aliases and
+functions kept in tables) the scanner gives up, and `without_data` also gives up on comments.
 """
 
 from collections.abc import Sequence
@@ -41,7 +93,47 @@ REDIRECT_OPERATORS = HEREDOC_OPERATORS | {
     "&>",
     "&>>",
 }
+# Redirections that open their target for writing; `>&` also writes when its target is not a
+# file descriptor.
+WRITE_OPERATORS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
 PIPES = frozenset({"|", "|&"})
+DISCARD = "/dev/null"  # a write there writes no file
+# Written files that something runs later without being told their name (all compared in lower
+# case, after quote removal). A path with one of these components, or a component holding
+# HOOK_MARK, may be a hook git runs, and so may a file whose basename is a git hook's name:
+# core.hooksPath may name any folder (`/tmp/h/pre-commit`), but the hook file keeps its name.
+# The ssh and Claude folders hold files those tools run; `.bashrc.d` and `.zshrc.d` hold snippets
+# a shell sources at start-up.
+RUN_LATER_COMPONENTS = frozenset({".git", ".husky", ".ssh", ".claude", ".bashrc.d", ".zshrc.d"})
+HOOK_MARK = "hook"
+GIT_HOOK_NAMES = frozenset(
+    {
+        *("applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit"),
+        *("pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase"),
+        *("post-checkout", "post-merge", "pre-push", "pre-receive", "update", "proc-receive"),
+        *("post-receive", "post-update", "reference-transaction", "push-to-checkout"),
+        *("pre-auto-gc", "post-rewrite", "sendemail-validate", "fsmonitor-watchman"),
+        *("p4-changelist", "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit"),
+        "post-index-change",
+    }
+)
+# Basenames a shell, direnv, readline, git or Claude reads at start-up (git config can set
+# core.fsmonitor, core.hooksPath or an alias that runs a command; Claude's and MCP's settings
+# name hooks and servers to start).
+STARTUP_NAMES = frozenset(
+    {
+        *(".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases", ".profile"),
+        *(".zshenv", ".zshrc", ".zprofile", ".zlogin", ".zlogout", ".envrc", ".inputrc"),
+        *(".gitconfig", ".claude.json", ".mcp.json"),
+    }
+)
+XDG_GIT_CONFIG = (".config", "git", "config")  # a path ending in these components
+# A path under one of these runs of components: fish's start-up files, desktop autostart entries.
+RUN_LATER_FOLDERS = ((".config", "fish"), (".config", "autostart"))
+SYSTEM_CONFIG = "etc"  # an absolute path whose first component is this (`//etc`, `/./etc`)
+CHANGE_DIRS = frozenset({"cd", "pushd", "popd"})  # after one, a relative path may be anywhere
+# A `#` after one of these (or at the start) begins a comment; after `(`, `)` or a word it does not.
+COMMENT_AFTER = frozenset(BLANKS + "\n;&|")
 LITERAL_DOLLAR_FOLLOWERS = frozenset(' \t\n"')  # a `$` followed by anything else may expand
 # A word holding one of these unquoted may expand to something else (zsh extendedglob: `^`, `#`,
 # `~`): its value is unknown.
@@ -133,6 +225,8 @@ class Word:
 @dataclass(frozen=True)
 class _Redirect:
     heredoc: _Heredoc | None
+    writes: bool = False  # opens a file for writing
+    target: str | None = None  # the value of its target word; None when it may expand
 
 
 @dataclass(frozen=True)
@@ -152,6 +246,17 @@ class _WordBuilder:
 
 def _is_name_char(char: str) -> bool:
     return char.isalnum() or char == "_"
+
+
+def _is_descriptor(word: Word) -> bool:
+    """Whether the target of `>&` is a file descriptor (`2`) or `-`, not a file."""
+    value = word.value
+    return value is not None and (value == "-" or (value != "" and set(value) <= ASCII_DIGITS))
+
+
+def _redirect_writes(operator: str, target: Word) -> bool:
+    """Whether a redirection opens a file for writing."""
+    return operator in WRITE_OPERATORS or (operator == ">&" and not _is_descriptor(target))
 
 
 def _skip_blanks(text: str, pos: int) -> int:
@@ -183,11 +288,13 @@ def _find_body(text: str, start: int, heredoc: _Heredoc) -> int:
 class _Lexer:
     """Splits a command line into words, redirections and separators, reading heredoc bodies."""
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, comments: bool = False) -> None:
         self.text = text
         self.pos = 0
         self.tokens: list[_Token] = []
         self.pending: list[_Heredoc] = []  # heredocs whose body starts after the next newline
+        self.comments = comments
+        self.comment_spans: list[tuple[int, int]] = []
 
     def tokenize(self) -> list[_Token]:
         while self.pos < len(self.text):
@@ -203,7 +310,7 @@ class _Lexer:
         elif self.text.startswith("\\\n", self.pos):
             self._skip_continuation()
         elif char == "#":
-            raise _GiveUp  # an interactive zsh reads a comment only with interactive_comments
+            self._comment()
         else:
             operator = next((op for op in OPERATORS if self.text.startswith(op, self.pos)), None)
             if operator is None:
@@ -211,6 +318,17 @@ class _Lexer:
             else:
                 self.pos += len(operator)
                 self._operator(operator)
+
+    def _comment(self) -> None:
+        """A comment up to the next newline. Without `comments` the scanner gives up: an
+        interactive zsh reads one only with interactive_comments. A non-interactive shell always
+        does."""
+        if not self.comments or (self.pos > 0 and self.text[self.pos - 1] not in COMMENT_AFTER):
+            raise _GiveUp
+        end = self.text.find("\n", self.pos)
+        end = len(self.text) if end == -1 else end
+        self.comment_spans.append((self.pos, end))
+        self.pos = end
 
     def _command_word(self) -> None:
         word = self._read_word()
@@ -243,7 +361,7 @@ class _Lexer:
                 raise _GiveUp
             heredoc = _Heredoc(word.value, operator == "<<-")
             self.pending.append(heredoc)
-        self.tokens.append(_Redirect(heredoc))
+        self.tokens.append(_Redirect(heredoc, _redirect_writes(operator, word), word.value))
 
     def _read_bodies(self) -> None:
         """The bodies of the heredocs started on the line that just ended, in order."""
@@ -397,12 +515,60 @@ class _Lexer:
         return name, after
 
 
+def _is_under(parts: Sequence[str], folder: tuple[str, ...]) -> bool:
+    """Whether the path components `parts` lie inside the components `folder`, met in a row."""
+    size = len(folder)
+    return any(tuple(parts[i : i + size]) == folder for i in range(len(parts) - size))
+
+
+def _may_run_later(target: str | None) -> bool:
+    """Whether a written file may be one that something runs later without being told its name:
+    a git hook, a shell, git or Claude start-up file, a file under `.ssh`, `.claude`, a shell's
+    snippet folder, `.config/fish`, `.config/autostart` or `/etc`, or a target whose value is
+    unknown (`$f`, a glob, `~`)."""
+    if target is None:
+        return True
+    lowered = target.lower()
+    parts = [part for part in lowered.split("/") if part not in ("", ".")]
+    in_system_config = lowered.startswith("/") and parts[:1] == [SYSTEM_CONFIG]
+    if in_system_config or any(_is_under(parts, folder) for folder in RUN_LATER_FOLDERS):
+        return True
+    basename = parts[-1:]
+    if STARTUP_NAMES.intersection(basename) or GIT_HOOK_NAMES.intersection(basename):
+        return True
+    if tuple(parts[-3:]) == XDG_GIT_CONFIG:
+        return True
+    return any(part in RUN_LATER_COMPONENTS or HOOK_MARK in part for part in parts)
+
+
 @dataclass
 class Command:
-    """One simple command: its words (without redirections) and the heredocs it reads."""
+    """One simple command: its words (without redirections), the heredocs it reads, whether it
+    writes a file (an output redirection, or an argument such as tee's file), and whether that
+    file may run later (a hook, a start-up file). Also whether it has any redirection at all and
+    whether a pipe joins it to another command."""
 
     words: list[Word] = field(default_factory=list)
     heredocs: list[_Heredoc] = field(default_factory=list)
+    redirect_targets: list[str | None] = field(default_factory=list)  # the files it writes to
+    writes: bool = False
+    writes_run_later: bool = False
+    redirected: bool = False
+    in_pipeline: bool = False
+
+    def add_write(self, target: str | None, *, cwd_moved: bool) -> None:
+        """Record a written file. After a cd earlier on the line, a relative target's place is
+        unknown (`cd /etc; echo x > profile`), so it counts as one that may run later."""
+        if target == DISCARD:
+            return
+        self.writes = True
+        if cwd_moved and target is not None and not target.startswith("/"):
+            target = None
+        self.writes_run_later = self.writes_run_later or _may_run_later(target)
+
+
+def _changes_dir(words: Sequence[Word]) -> bool:
+    return bool(words) and words[0].value in CHANGE_DIRS
 
 
 def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
@@ -415,16 +581,99 @@ def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
             _check_word(token)
             commands[-1].words.append(token)
         elif isinstance(token, _Redirect):
+            commands[-1].redirected = True
             if token.heredoc is not None:
                 commands[-1].heredocs.append(token.heredoc)
+            if token.writes:
+                commands[-1].redirect_targets.append(token.target)
         else:
             _check_separator(token, previous)
-            piped = piped or token.text in PIPES
-            commands.append(Command())
+            pipe = token.text in PIPES
+            piped = piped or pipe
+            commands[-1].in_pipeline = commands[-1].in_pipeline or pipe
+            commands.append(Command(in_pipeline=pipe))
         previous = token
+    cwd_moved = False
     for command in commands:
         _check_first_word(command.words)
+        for target in [*command.redirect_targets, *_written_by_argument(command.words)]:
+            command.add_write(target, cwd_moved=cwd_moved)
+        cwd_moved = cwd_moved or _changes_dir(command.words)
     return commands, piped
+
+
+def _tee_files(args: Sequence[Word]) -> list[str | None]:
+    files: list[str | None] = []
+    options = True
+    for word in args:
+        value = word.value
+        if options and value == "--":
+            options = False
+        elif not options or value is None or value == "-" or not value.startswith("-"):
+            files.append(value)
+    return files
+
+
+def _long_name(value: str) -> str:
+    """The name of a long option (`--output=f` -> `output`); empty for any other word."""
+    return value[2:].partition("=")[0] if value.startswith("--") else ""
+
+
+def _value_at(args: Sequence[Word], index: int) -> str | None:
+    """The value of the word at `index`; None when it may expand or is missing."""
+    return args[index].value if index < len(args) else None
+
+
+def _long_output(args: Sequence[Word], index: int, shortest: int) -> list[str | None]:
+    """The file of `--output=FILE` or `--output FILE` (or an abbreviation of at least `shortest`
+    letters) at `index`; empty for any other word."""
+    value = args[index].value or ""
+    name = _long_name(value)
+    if len(name) < shortest or not "output".startswith(name):
+        return []
+    _, equals, attached = value.partition("=")
+    return [attached if equals else _value_at(args, index + 1)]
+
+
+def _sort_outputs(args: Sequence[Word]) -> list[str | None]:
+    """The files of `-o FILE`, glued or in a cluster (`-oFILE`, `-uo FILE`), or `--output` and its
+    abbreviations. Any other short cluster with an `o` counts too (`-to` sets the separator):
+    reading too many is safe. A word that may expand may be one."""
+    files: list[str | None] = []
+    for index, word in enumerate(args):
+        value = word.value
+        if value is None:
+            files.append(None)
+        elif value.startswith("--"):
+            files += _long_output(args, index, shortest=1)
+        elif value.startswith("-") and "o" in value[1:]:
+            files.append(value[1:].partition("o")[2] or _value_at(args, index + 1))
+    return files
+
+
+def _git_outputs(args: Sequence[Word]) -> list[str | None]:
+    """The files of `git log|diff|show --output=FILE` (git accepts `--out` and longer
+    abbreviations). A word that may expand may be one."""
+    files: list[str | None] = []
+    for index, word in enumerate(args):
+        if word.value is None:
+            files.append(None)
+        else:
+            files += _long_output(args, index, shortest=len("out"))
+    return files
+
+
+def _written_by_argument(words: Sequence[Word]) -> list[str | None]:
+    """The files a command's arguments name for it to write; None for one that may expand."""
+    name = words[0].value if words else None
+    if name == "tee":
+        return _tee_files(words[1:])
+    if name == "sort":
+        return _sort_outputs(words[1:])
+    if name == "git":
+        subcommand = _git_subcommand(words) or 0  # `-C <dir>` before it names no output
+        return _git_outputs(words[subcommand + 1 :])
+    return []
 
 
 PAREN = _Separator("(")
@@ -733,6 +982,60 @@ def _blanked(command: str, spans: Sequence[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
+def simple_commands(command: str) -> list[Command] | None:
+    """The simple commands of `command`, in line order, comments read as comments (some come back
+    without words: a separator ends one); None when the scanner cannot follow the command."""
+    try:
+        commands, _piped = _commands(_Lexer(command, comments=True).tokenize())
+    except _GiveUp:
+        return None
+    return commands
+
+
+@dataclass(frozen=True)
+class HeredocBodies:
+    """A line's heredoc bodies: the line with each body blanked (same length), the bodies as
+    written, and the name of each command that reads one (its first word's value; None when
+    that is unknown or the command has no word)."""
+
+    rest: str
+    bodies: list[str]
+    readers: list[str | None]
+
+
+def heredoc_bodies(command: str) -> HeredocBodies | None:
+    """The heredoc bodies of `command`, in line order, and who reads them.
+
+    None when the line cannot be read as plain words: the scanner cannot follow it (this includes
+    an unquoted heredoc), or a pipe is on it (the next command may run a body)."""
+    try:
+        commands, piped = _commands(_Lexer(command, comments=True).tokenize())
+    except _GiveUp:
+        return None
+    if piped:
+        return None
+    readers = [c for c in commands if c.heredocs]
+    spans = [heredoc.body for c in readers for heredoc in c.heredocs]
+    return HeredocBodies(
+        rest=_blanked(command, spans),
+        bodies=[command[start:end] for start, end in spans],
+        readers=[c.words[0].value if c.words else None for c in readers],
+    )
+
+
+def without_patterns(command: str) -> str:
+    """`command` with only the pattern words of its grep-like commands (`grep`, `egrep`, `fgrep`,
+    `rg`, `git grep`) replaced by spaces (same length), or `command` unchanged when the scanner
+    cannot follow it. A heredoc body, a file operand and a word the shell expands (`grep w*`) are
+    never blanked: unlike `without_data`, this is for a check that must still read a body."""
+    try:
+        commands, _piped = _commands(_Lexer(command).tokenize())
+    except _GiveUp:
+        return command
+    spans = [(w.start, w.end) for c in commands if c.words for w in _pattern_words(c.words)]
+    return _blanked(command, spans)
+
+
 def without_data(command: str) -> str:
     """`command` with its data parts replaced by spaces (same length), or `command` unchanged
     when the scanner cannot follow it."""
@@ -741,3 +1044,139 @@ def without_data(command: str) -> str:
     except _GiveUp:
         return command
     return _blanked(command, [span for c in commands for span in _command_data(c, piped=piped)])
+
+
+# code_text: commands that run nothing they are given, and the data they take.
+ALWAYS_INERT = frozenset(
+    {"cat", "tee", "echo", "printf", "grep", "ls", "mkdir", "cd", "pwd", "wc", "head", "tail"}
+)
+# Long options that run a command, with the shortest abbreviation each tool accepts (ag and sort
+# use getopt, which takes any unambiguous prefix; rg takes none). From `rg --help`, `ag --help`,
+# `sort --help`.
+COMMAND_OPTIONS: dict[str, tuple[tuple[str, int], ...]] = {
+    "rg": (("pre", 3), ("pre-glob", 8), ("hostname-bin", 12)),
+    "ag": (("pager", 2),),
+    "sort": (("compress-program", 2),),
+}
+CODE_SEARCH_LETTERS = {**SEARCH_LETTERS, "ag": frozenset("acfFHhilLnQsStuUvwz0")}
+CODE_GIT_MESSAGE_COMMANDS = frozenset({"commit", "tag", "notes"})
+CODE_GIT_SUBCOMMANDS = frozenset({"commit", "log", "diff", "status", "show", "add", "notes"})
+CODE_GH_ACTIONS = frozenset({"create", "edit", "comment", "view"})
+TAG_MESSAGE_FLAGS = frozenset({"-m", "--message"})
+TEXT_COMMANDS = frozenset({"echo", "printf"})
+# Left as code, a word holding one of these may expand to what was blanked: bash's `$_` is the
+# last word of the previous command (a message, the self-check's words), and arithmetic on
+# `a[$(...)]` runs it.
+EXPANSION_MARKS = frozenset("$`")
+# `printf -v NAME` sets a variable, which may be PATH: the commands after it may then run anything.
+PRINTF_VARIABLE = "-v"
+
+
+def _runs_a_command(value: str | None, options: Sequence[tuple[str, int]]) -> bool:
+    """Whether an argument may expand to anything, or is an option that runs a command."""
+    if value is None:
+        return True
+    name = _long_name(value)
+    return any(len(name) >= shortest and full.startswith(name) for full, shortest in options)
+
+
+def _git_is_inert(words: Sequence[Word]) -> bool:
+    subcommand = _git_subcommand(words)
+    if subcommand is None:
+        return False
+    if words[subcommand].value in CODE_GIT_SUBCOMMANDS:
+        return True
+    return words[subcommand].value == "tag" and any(
+        word.value in TAG_MESSAGE_FLAGS or (word.value or "").startswith("--message=")
+        for word in words[subcommand + 1 :]
+    )
+
+
+def _is_inert(words: Sequence[Word]) -> bool:
+    """Whether a simple command runs nothing it is given (the table in the module docstring)."""
+    name = words[0].value
+    if name == "printf":
+        return not any((word.value or "").startswith(PRINTF_VARIABLE) for word in words[1:])
+    if name in ALWAYS_INERT:
+        return True
+    if name is not None and name in COMMAND_OPTIONS:
+        return not any(_runs_a_command(word.value, COMMAND_OPTIONS[name]) for word in words[1:])
+    if name == "git":
+        return _git_is_inert(words)
+    return _is_gh_action(words, CODE_GH_ACTIONS)
+
+
+def _text_words(words: Sequence[Word]) -> list[Word]:
+    """The echo or printf words whose value is known and holds no `$`."""
+    return [word for word in words[1:] if word.value is not None and "$" not in word.raw]
+
+
+def _code_data(command: Command, *, keep_messages: bool, keep_text: bool) -> list[tuple[int, int]]:
+    """The data spans of one inert simple command: search patterns, messages unless
+    `keep_messages`, and heredoc bodies and echo/printf text unless `keep_text`."""
+    words = command.words
+    name = words[0].value
+    found: list[Word] = []
+    if name is not None and name in CODE_SEARCH_LETTERS:
+        found += _search_patterns(words[1:], CODE_SEARCH_LETTERS[name])
+    message = _message_command(words, CODE_GIT_MESSAGE_COMMANDS, CODE_GH_ACTIONS)
+    if message is not None and not keep_messages:
+        syntax, args = message
+        found += _option_values(args, syntax)
+    if keep_text:
+        return [(word.start, word.end) for word in found]
+    if name in TEXT_COMMANDS:
+        found += _text_words(words)
+    return [(word.start, word.end) for word in found] + [h.body for h in command.heredocs]
+
+
+def _is_lone(command: Command, lone: Sequence[str]) -> bool:
+    """Whether a simple command's word values are exactly `lone`, with no redirection (a heredoc
+    included) and no pipe on either side."""
+    return (
+        bool(command.words)
+        and not (command.redirected or command.in_pipeline)
+        and tuple(word.value for word in command.words) == tuple(lone)
+    )
+
+
+def code_text(command: str, lone: Sequence[str] = ()) -> str:
+    """`command` with its data replaced by spaces (same length) when every simple command on it is
+    inert, or `command` unchanged (also when the scanner cannot follow it).
+
+    On a line with a pipe, heredoc bodies and echo/printf text stay. On a line that writes a file
+    that may be a hook, or has git and writes any file (a hook git then runs), messages stay too,
+    since `git log` or `gh pr view` can write a stored message into that file.
+
+    A simple command whose word values are exactly `lone` (a read-only self-check), with no
+    redirection and no pipe, counts as inert and is blanked with the data, so only when every
+    other simple command is inert too: a later command could read its words back (`$_`, a
+    trap's `$BASH_COMMAND`, `$ZSH_EXECUTION_STRING`). Not when the text has a `(` anywhere: zsh
+    reads the words of `a=(...)`, `for v (...)` and `foreach v (...)` as data, so the "command"
+    there may be a list of names.
+
+    When what is left as code holds a `$` or a backtick, nothing is blanked: it may expand to
+    the blanked text (`$_` after a message, then `echo $[$_]` runs `a[$(...)]` in bash)."""
+    reader = _Lexer(command, comments=True)
+    try:
+        tokens = reader.tokenize()
+        commands, piped = _commands(tokens)
+    except _GiveUp:
+        return command
+    if PAREN in tokens:
+        lone = ()
+    lone_spans = [(c.words[0].start, c.words[-1].end) for c in commands if _is_lone(c, lone)]
+    simple = [c for c in commands if c.words and not _is_lone(c, lone)]
+    if not all(_is_inert(c.words) for c in simple):
+        return command
+    has_git = any(c.words[0].value == "git" for c in simple)
+    rewrites = any(c.writes_run_later for c in commands) or (
+        has_git and any(c.writes for c in commands)
+    )
+    spans = [*reader.comment_spans, *lone_spans]
+    for c in simple:
+        spans += _code_data(c, keep_messages=rewrites, keep_text=piped or rewrites)
+    blanked = _blanked(command, spans)
+    if EXPANSION_MARKS.intersection(blanked):
+        return command  # what is left may expand to the blanked text (`$_`, `$[...]`)
+    return blanked

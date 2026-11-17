@@ -25,6 +25,7 @@ SHIPPED_SKILLS = frozenset(
         "grill-me",
         "subagent-driven-development",
         "requesting-code-review",
+        "systems-map",
     }
 )
 CHECK = REPO / "standard/check.py"

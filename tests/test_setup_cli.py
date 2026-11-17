@@ -479,3 +479,171 @@ def test_a_no_checkout_clone_is_refused_before_any_write(
     assert not settings_file().exists()
     assert not config.config_file().exists()
     assert not (paths.config_dir() / "owned.json").exists()
+
+
+def guarded_store(path: Path, *, committed: bool = True) -> Path:
+    """A coven-shaped store whose first commit holds `systems/guard.json` (made with plain git, so
+    no store hook runs), or whose guard file is only in the work tree."""
+    path.mkdir()
+    git("init", "-q", "-b", "main", cwd=path)
+    git("config", "user.name", "Test", cwd=path)
+    git("config", "user.email", "test@example.com", cwd=path)
+    (path / ".gitattributes").write_text("INDEX.md merge=union\n")
+    (path / "systems").mkdir()
+    (path / "systems" / ".gitkeep").touch()
+    git("add", "-A", cwd=path)
+    git("commit", "-q", "-m", "init", cwd=path)
+    (path / "systems" / "guard.json").write_text('{"systems": {}}\n')
+    if committed:
+        git("add", "-A", cwd=path)
+        git("commit", "-q", "-m", "guard", cwd=path)
+    return path
+
+
+def read_config() -> dict[str, object]:
+    loaded = json.loads(config.config_file().read_text())
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def test_a_committed_guard_file_is_shown_and_applied_as_an_owned_guard_change(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    root = guarded_store(tmp_path / "guarded")
+
+    assert run_setup("--dry-run", "--memory-path", str(root)) == 0
+    assert 'guard: (missing) -> "required"' in capsys.readouterr().out
+    assert not config.config_file().exists()
+
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+    assert config.load_config().guard == "required"
+    assert run_setup("--dry-run", "--memory-path", str(root)) == 0
+    assert "nothing to change" in capsys.readouterr().out
+
+
+def test_undo_restores_the_guard_value_from_before_setup(tmp_path: Path):
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"guard": null}')
+    root = guarded_store(tmp_path / "guarded")
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+    assert read_config()["guard"] == "required"
+
+    assert run_setup("--undo", "--yes") == 0
+
+    assert read_config() == {"guard": None}
+
+
+def test_undo_drops_a_guard_key_setup_added(tmp_path: Path):
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"pm_cap": 2}')
+    root = guarded_store(tmp_path / "guarded")
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+
+    assert run_setup("--undo", "--yes") == 0
+
+    assert read_config() == {"pm_cap": 2}
+
+
+def test_a_guard_file_that_is_not_committed_sets_no_latch(tmp_path: Path):
+    root = guarded_store(tmp_path / "unstaged", committed=False)
+
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+
+    assert "guard" not in read_config()
+
+
+def test_a_store_without_a_guard_file_sets_no_latch(store: Path):
+    assert run_setup("--yes", "--memory-path", str(store)) == 0
+
+    assert "guard" not in read_config()
+
+
+def test_an_empty_existing_folder_takes_the_fresh_init_path_without_a_latch(tmp_path: Path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    assert run_setup("--yes", "--memory-path", str(empty)) == 0
+
+    assert (empty / ".git").is_dir()
+    assert "guard" not in read_config()
+
+
+def test_a_git_repo_without_commits_takes_the_fresh_init_path_without_a_latch(tmp_path: Path):
+    unborn = tmp_path / "unborn"
+    unborn.mkdir()
+    git("init", "-q", cwd=unborn)
+
+    assert run_setup("--yes", "--memory-path", str(unborn)) == 0
+
+    assert (unborn / "user").is_dir()
+    assert "guard" not in read_config()
+
+
+def test_a_folder_git_cannot_read_is_a_clean_error_before_any_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    broken = tmp_path / "broken"
+    (broken / ".git").mkdir(parents=True)
+
+    code = run_setup("--yes", "--cross-session-accept", "--memory-path", str(broken))
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("coven: ")
+    assert "Traceback" not in captured.err
+    assert not settings_file().exists()
+    assert not config.config_file().exists()
+    assert not (paths.config_dir() / "owned.json").exists()
+
+
+GUARDED_REMOTE_WARNING = "sync never pushes a guarded store"
+
+
+def test_a_guarded_store_with_a_remote_given_warns_and_setup_still_applies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    fake_gh(tmp_path, monkeypatch, '{"visibility": "PRIVATE"}')
+    root = guarded_store(tmp_path / "guarded")
+
+    code = run_setup("--yes", "--memory-path", str(root), "--memory-remote", "owner/repo")
+
+    err = capsys.readouterr().err
+    assert code == 0
+    assert GUARDED_REMOTE_WARNING in err
+    assert "remove the remote" in err
+    assert config.load_config().memory_remote == "owner/repo"
+    assert config.load_config().guard == "required"
+
+
+def test_a_guarded_store_with_a_remote_already_in_the_config_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    root = guarded_store(tmp_path / "guarded")
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"memory_remote": "owner/repo"}')
+
+    code = run_setup("--dry-run", "--memory-path", str(root))
+
+    assert code == 0
+    assert GUARDED_REMOTE_WARNING in capsys.readouterr().err
+
+
+def test_a_guarded_store_without_a_remote_gets_no_remote_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    root = guarded_store(tmp_path / "guarded")
+
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+
+    assert GUARDED_REMOTE_WARNING not in capsys.readouterr().err
+
+
+def test_a_store_without_a_guard_and_a_remote_gets_no_guard_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: Path, capsys: pytest.CaptureFixture[str]
+):
+    fake_gh(tmp_path, monkeypatch, '{"visibility": "PRIVATE"}')
+
+    code = run_setup("--yes", "--memory-path", str(store), "--memory-remote", "owner/repo")
+
+    assert code == 0
+    assert GUARDED_REMOTE_WARNING not in capsys.readouterr().err

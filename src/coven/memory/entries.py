@@ -106,12 +106,16 @@ def index_text(entries: list[Entry], origin: str | None = None) -> str:
 
 
 def _scope_dirs(root: Path) -> list[Path]:
-    """`user/` and every `projects/<key>/` that exist in the store."""
-    found = [root / "user"]
+    """`user/`, `systems/` and every `projects/<key>/` that exist in the store.
+
+    A symlinked folder is left out: the index is written inside the folder, and a link may lead
+    outside the store, where the file is in neither the backup nor git.
+    """
+    found = [root / "user", root / "systems"]
     projects = root / "projects"
-    if projects.is_dir():
+    if projects.is_dir() and not projects.is_symlink():
         found += sorted(p for p in projects.iterdir() if p.is_dir())
-    return [folder for folder in found if folder.is_dir()]
+    return [folder for folder in found if folder.is_dir() and not folder.is_symlink()]
 
 
 def _read_entry_file(path: Path) -> Entry:
@@ -122,10 +126,12 @@ def _read_entry_file(path: Path) -> Entry:
 
 
 def rebuild_indexes(root: Path) -> list[str]:
-    """Rewrite the INDEX.md of `user/` and every `projects/<key>/` from the entries on disk.
+    """Rewrite the INDEX.md of `user/`, `systems/` and every `projects/<key>/` from the entries
+    on disk.
 
     An existing `origin:` header line is kept. An index with no entries and no origin line is
-    removed. Returns the changed files, relative to `root` with `/` separators.
+    removed. A symlinked folder, and an INDEX.md that is a symlink, are never written. Returns the
+    changed files, relative to `root` with `/` separators.
     """
     changed: list[str] = []
     for folder in _scope_dirs(root):
@@ -135,6 +141,8 @@ def rebuild_indexes(root: Path) -> list[str]:
             if p.is_file() and p.suffix == ".md" and p.name not in NOT_ENTRIES
         )
         index = folder / INDEX
+        if index.is_symlink():
+            continue  # writing would go through the link, to wherever it leads
         current = index.read_text(encoding="utf-8", errors="replace") if index.is_file() else None
         origin = origin_line(current) if current is not None else None
         found = [_read_entry_file(path) for path in files]

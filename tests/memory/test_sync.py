@@ -1,4 +1,5 @@
 import os
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -273,3 +274,160 @@ def test_sync_reports_a_rejected_push_and_never_forces(
     assert not {"-f", "--force", "--force-with-lease", "--mirror"} & set(pushes[0])
     assert lab.git(root, "rev-parse", "HEAD") == mine
     assert lab.git(bare_remote, "rev-parse", "main") == lab.git(other, "rev-parse", "HEAD")
+
+
+def commit_guard(lab: Lab, root: Path) -> None:
+    (root / "systems").mkdir(exist_ok=True)
+    (root / "systems" / "guard.json").write_text('{"systems": {}}\n')
+    lab.commit(root, "add the guard")
+
+
+def test_is_guarded_follows_head_not_the_work_tree(lab: Lab) -> None:
+    root = lab.store("a")
+    assert not store.is_guarded(root)
+    (root / "systems").mkdir()
+    (root / "systems" / "guard.json").write_text("{}\n")
+    assert not store.is_guarded(root)
+    lab.commit(root, "add the guard")
+    assert store.is_guarded(root)
+    (root / "systems" / "guard.json").unlink()
+    assert store.is_guarded(root)
+
+
+def test_is_guarded_is_false_for_a_missing_folder_and_a_folder_inside_another_repo(
+    lab: Lab, tmp_path: Path
+) -> None:
+    outer = lab.store("outer")
+    commit_guard(lab, outer)
+    (outer / "inner").mkdir()
+    assert not store.is_guarded(tmp_path / "missing")
+    assert not store.is_guarded(outer / "inner")
+
+
+def test_is_guarded_is_false_before_the_first_commit(tmp_path: Path, lab: Lab) -> None:
+    lab.git(tmp_path, "init", "-q")
+    assert not store.is_guarded(tmp_path)
+
+
+def test_is_guarded_is_false_when_head_has_no_guard_file(lab: Lab) -> None:
+    root = lab.store("a")
+    lab.write(root, "systems/orders-db.md", "orders-db", "the orders database")
+    lab.commit(root, "a system without a guard")
+    assert not store.is_guarded(root)
+
+
+def test_is_guarded_raises_when_git_cannot_read_the_repo(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()  # a folder git does not accept as a repo
+    with pytest.raises(CovenError, match="git"):
+        store.is_guarded(tmp_path)
+
+
+def test_is_guarded_raises_on_a_damaged_head(lab: Lab) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    (root / ".git" / "HEAD").write_text("garbage\n")
+    with pytest.raises(CovenError, match="git"):
+        store.is_guarded(root)
+
+
+def test_sync_on_a_store_git_cannot_read_pushes_nothing(lab: Lab, bare_remote: Path) -> None:
+    root = lab.store("a", bare_remote)
+    commit_guard(lab, root)
+    (root / ".git" / "HEAD").write_text("garbage\n")
+    with pytest.raises(CovenError):
+        store.sync_store(root)
+    assert heads(lab, bare_remote) == ""
+
+
+def point_git_at(monkeypatch: pytest.MonkeyPatch, other: Path) -> None:
+    """What a caller exporting GIT_DIR and GIT_WORK_TREE does to every git command it starts."""
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+
+
+def test_is_guarded_ignores_an_exported_git_dir(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    point_git_at(monkeypatch, lab.store("other"))
+    assert store.is_guarded(root)
+
+
+def test_is_guarded_ignores_a_replace_ref_on_head(lab: Lab) -> None:
+    """A replace ref swaps the commit git reads: HEAD without guard.json must not unguard a store."""
+    root = lab.store("a")
+    commit_guard(lab, root)
+    empty = subprocess.run(
+        ["git", "-C", str(root), "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"],
+        input="no guard\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    subprocess.run(["git", "-C", str(root), "replace", head, empty], check=True)
+    assert store.is_guarded(root)
+
+
+def test_sync_on_a_guarded_store_pushes_nothing_under_an_exported_git_dir(
+    lab: Lab, bare_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = lab.store("a", bare_remote)
+    commit_guard(lab, root)
+    point_git_at(monkeypatch, lab.store("other"))
+    report = store.sync_store(root)
+    monkeypatch.delenv("GIT_DIR")  # the test's own git calls must see the real repos again
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert report[-1] == "not pushed: guarded store"
+    assert heads(lab, bare_remote) == ""
+
+
+def test_sync_on_a_guarded_store_commits_but_never_pushes(lab: Lab, bare_remote: Path) -> None:
+    root = lab.store("a", bare_remote)
+    store.sync_store(root)
+    pushed = heads(lab, bare_remote)
+    commit_guard(lab, root)
+    drop_hook(root)  # an entry committed without the hook leaves its index missing
+    lab.write(root, "systems/orders-db.md", "orders-db", "the orders database")
+    lab.commit(root, "orders-db")
+
+    report = store.sync_store(root)
+
+    assert "not pushed: guarded store" in report
+    assert not any(line.startswith("pushed") for line in report)
+    assert "rebuilt systems/INDEX.md and committed" in report[0]
+    assert lab.git(root, "status", "--porcelain") == ""
+    assert "orders-db" in lab.git(root, "show", "HEAD:systems/INDEX.md")
+    assert heads(lab, bare_remote) == pushed
+    assert store.sync_store(root) == ["not pushed: guarded store"]
+
+
+def test_sync_on_a_guarded_store_without_a_remote_says_the_same(lab: Lab) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    assert store.sync_store(root) == ["not pushed: guarded store"]
+
+
+def test_sync_on_a_guarded_store_does_not_pull_either(lab: Lab, bare_remote: Path) -> None:
+    first = lab.store("a", bare_remote)
+    store.sync_store(first)
+    second = lab.clone("b")
+    lab.write(second, "user/b.md", "B", "from the other clone")
+    lab.commit(second)
+    store.sync_store(second)
+    commit_guard(lab, first)
+
+    store.sync_store(first)
+
+    assert not (first / "user/b.md").exists()
+
+
+def test_the_cli_prints_the_guarded_line(lab: Lab, capsys: pytest.CaptureFixture[str]) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    config = Path(os.environ["HOME"]) / ".config" / "coven"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(f'{{"memory_path": "{root}"}}')
+    assert cli.main(["memory", "sync"]) == 0
+    assert "not pushed: guarded store" in capsys.readouterr().out

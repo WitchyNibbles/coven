@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from coven import settings
-from coven.config import load_config
+from coven.config import GUARD_REQUIRED, load_config
 from coven.errors import CovenError, warn
 from coven.memory import store
 from coven.settings import Choices
@@ -38,6 +38,7 @@ def _choices(args: argparse.Namespace) -> Choices:
         pm_cap=args.pm_cap if args.pm_cap is not None else current.pm_cap,
         memory_path=memory_path,
         memory_remote=args.memory_remote,
+        guard=GUARD_REQUIRED if store.is_guarded(memory_path) else None,
     )
 
 
@@ -98,6 +99,11 @@ def run(args: argparse.Namespace) -> int:
         print("coven setup: nothing to change in settings or config")
     if args.memory_remote and (warning := store.remote_warning(args.memory_remote)):
         warn(warning)
+    if choices.guard and (args.memory_remote or load_config().memory_remote):
+        warn(
+            f"{choices.memory_path} holds a guard.json and will have a remote; sync never pushes "
+            "a guarded store: remove the remote, or keep it private"
+        )
     if _needs_store(choices.memory_path):
         print(f"  memory store: will be created at {choices.memory_path}")
     if not _confirm(args, "apply these changes"):

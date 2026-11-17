@@ -26,6 +26,9 @@ below: just do them.
 ## Everything else
 
 - Saving a fact worth keeping or a standing rule from the user -> `coven:shared-memory`.
+- A project touches a live system that has no entry in the store's `systems/` folder (or the
+  entry is wrong) -> `coven:systems-map`; only the general manager writes it, and a project
+  manager reports the gap in its next message.
 - The user hands over projects or tasks, asks "What's next?", says "manage my projects" or
   "continue" -> `coven:manager`. The user chooses the work: it asks what to work on, except to
   resume work that was interrupted.

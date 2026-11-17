@@ -66,8 +66,10 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   - git aliases (`git config alias.p push`, or `-c alias.p=push`, then `git p`), and any shell
     function or script that pushes;
   - a push built at run time by a variable or command substitution that the guard cannot see;
-  - on Python older than 3.12 the guard fails open: the shell fallback in `fail-closed.sh` cannot
-    see the session role, so only deny-secrets still runs there. Install Python 3.12 or later.
+  - on Python older than 3.12 the git-push guard fails open: the shell fallback in `fail-closed.sh`
+    cannot see the session role, so only deny-secrets still runs for that guard. The production
+    guard has a degraded mode there: the fallback refuses Bash and MCP tool calls while the guard
+    is on, ignoring role and config validity. Install Python 3.12 or later.
 
   The guards are best effort against an agent that follows its role.
   GitHub branch protection on the default branch (and any release branch) is the real wall: turn
@@ -82,6 +84,46 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
 - The memory store's pre-commit hook refuses a short list of token patterns. It does not find every
   secret, and it does not stop a PM that commits with the hook removed. A PM is told to send facts
   to the GM instead of writing them.
+
+## Production guard
+
+The production guard (`hooks/prod_guard.py`) is best effort against a PM that follows its role.
+Its rules are public. Its boundary is the committed store and the approvals in it.
+
+- The hook is registered with a PreToolUse `*` matcher that covers every tool, MCP tools and a
+  subagent's calls included. That was checked from the docs, not live: no session refused a call
+  through it in the build. Check one refused call and one approved call after you turn the guard
+  on (`coven doctor` shows the refusals).
+- Known limits. The guard reads a command's text; it does not run it, so it cannot see:
+  - a path built by a loop, a variable assignment, a pipe into `xargs`, a `$(...)` or backticks,
+    or interpreter code (`python3 -c`, `perl -e`) with a literal path to a folder that holds a
+    guarded zone (`~`, `~/.config`, `~/.claude`, the store's parents);
+  - a script written in one call and run in a later one;
+  - plugins loaded with `--plugin-dir`;
+  - `git clean` or `git mv` in `~`, when `~` is a git repo;
+  - glob forms such as `.cla*` inside a project;
+  - variables other than HOME, CLAUDE_CONFIG_DIR, CLAUDE_PLUGIN_ROOT and XDG_CONFIG_HOME.
+- If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
+  block the call.
+- False positives, which fail closed (the call is refused, and the PM asks the GM):
+  `cd ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read
+  tool), and a symlink in `~/projects` that points at `~`.
+- `coven guard explain` exits 1 on an unreadable store even when the call would be allowed. The
+  verdict line still prints.
+- An inline `coven guard explain <command>` that names a target is refused inside a session, for
+  the GM and a PM alike, because the guard reads the Bash line itself. Write the command to a
+  file with the Write tool and use `--file`.
+- On Python older than 3.12 the production guard runs in a degraded mode (see the git-push limits
+  above): it refuses every Bash and MCP tool call while the guard is on, reads no targets or
+  approvals, and so only ever refuses more than the real guard.
+- The user's own terminal, outside Claude Code, is never guarded.
+
+## coven memory adopt
+
+- A hand-written `INDEX.md` is rebuilt; the store's history and the backup keep the old one.
+- A kill mid-commit leaves a dirty tree, and a re-run refuses until you reset it
+  (`git -C <store> status` shows what).
+- Adopt was not tested on case-insensitive filesystems.
 
 ## Checks and platforms
 

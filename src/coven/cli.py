@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from coven import doctor, memory, pm, project, setup
+from coven import approve, doctor, guard, memory, pm, project, setup
 from coven.errors import CovenError
 
-COMMANDS = (doctor, memory, pm, project, setup)
+COMMANDS = (approve, doctor, guard, memory, pm, project, setup)
 
 
 def build_parser() -> argparse.ArgumentParser:

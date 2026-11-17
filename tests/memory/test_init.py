@@ -84,6 +84,40 @@ def test_init_never_replaces_a_foreign_hook(tmp_path: Path) -> None:
     assert hook.read_text() == "#!/bin/sh\nexit 0\n"
 
 
+def test_init_replaces_a_hook_that_is_a_link_without_writing_through_it(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "mem"
+    store.init_store(root, None)
+    target = tmp_path / "dotfiles" / "pre-commit"
+    target.parent.mkdir()
+    old = "#!/bin/sh\n# coven-hook-version: 1\nexit 0\n"
+    target.write_text(old, encoding="utf-8")
+    hook = root / ".git" / "hooks" / "pre-commit"
+    hook.unlink()
+    hook.symlink_to(target)
+
+    store.init_store(root, None)
+
+    assert target.read_text(encoding="utf-8") == old
+    assert not hook.is_symlink()
+    assert hook.read_bytes() == store.HOOK_SOURCE.read_bytes()
+
+
+def test_init_replaces_a_dangling_hook_link_without_creating_its_target(tmp_path: Path) -> None:
+    root = tmp_path / "mem"
+    store.init_store(root, None)
+    hook = root / ".git" / "hooks" / "pre-commit"
+    hook.unlink()
+    target = tmp_path / "gone" / "pre-commit"
+    hook.symlink_to(target)
+
+    store.init_store(root, None)
+
+    assert not target.exists()
+    assert hook.read_bytes() == store.HOOK_SOURCE.read_bytes()
+
+
 def test_init_finishes_a_store_that_has_no_commit_yet(tmp_path: Path, lab: Lab) -> None:
     root = tmp_path / "mem"
     store.init_store(root, None)

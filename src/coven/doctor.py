@@ -15,9 +15,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Final, Literal
 
-from coven import claude_version, paths, safe_json, settings
+from coven import claude_version, guard, paths, safe_json, settings
 from coven.claude_version import dotted
 from coven.config import load_config
 from coven.errors import CovenError
@@ -33,6 +34,12 @@ LOG_TAIL_BYTES: Final = (
     1024 * 1024
 )  # a log rotates at 1 MB; a larger file is not ours to read whole
 DETAIL_LIMIT: Final = 160
+GUARD_LOG: Final = "prod-guard"
+REFUSALS_SHOWN: Final = 5
+REFUSAL_TAIL_BYTES: Final = 64 * 1024
+REFUSAL_FIELD_LIMIT: Final = 80
+ROLE_CLASSES: Final = ("pm", "unset", "other")  # what the hook logs; never a raw role
+SETUP_FIX: Final = "run coven setup --yes"
 EARLIEST: Final = datetime.min.replace(tzinfo=UTC)
 
 
@@ -228,11 +235,12 @@ def _owned(_now: datetime) -> Outcome:
     return _ok(f"{len(restores)} change(s) still as written")
 
 
-def _log_lines(file: Path) -> list[str]:
-    """The last lines of a hook log, decoded leniently; a partial first line is dropped."""
+def _log_lines(file: Path, tail: int = LOG_TAIL_BYTES) -> list[str]:
+    """The last `tail` bytes of a hook log as lines, decoded leniently; a partial first line is
+    dropped."""
     with file.open("rb") as handle:
         size = handle.seek(0, 2)
-        start = max(0, size - LOG_TAIL_BYTES)
+        start = max(0, size - tail)
         handle.seek(start)
         text = handle.read().decode("utf-8", errors="replace")
     lines = text.splitlines()
@@ -288,6 +296,165 @@ def _hook_log(now: datetime) -> Outcome:
     return Outcome("ok", f"last {len(last)} hook errors are older than 24 h", lines)
 
 
+# ---- the production guard -------------------------------------------------------------------
+
+
+def _warning(text: str) -> str:
+    return f"  warning: {text}"
+
+
+def _guard_targets(hook: ModuleType, store_path: Path) -> tuple[bool, list[str]]:
+    """Whether guard.json is committed at HEAD, and the report lines about it. The hook's own
+    `load_targets` reads it, so doctor judges a file by the rules the guard enforces."""
+    try:
+        enforced = hook.load_targets(store_path)
+    except hook.GuardError as error:  # invalid at HEAD, and no earlier version is valid
+        return True, [_warning(f"guard.json at HEAD is not valid: {_one_line(str(error))}")]
+    if enforced.targets is None:
+        return False, [_warning("guard.json is not committed; commit it, or the guard refuses")]
+    if enforced.invalid_head:
+        reason = _one_line(enforced.invalid_head)
+        return True, [
+            _warning(f"guard.json at HEAD is not valid ({reason}); an older valid one is enforced")
+        ]
+    return True, [f"  guard.json at HEAD: ok: {len(enforced.targets)} targets"]
+
+
+def _live_approvals(hook: ModuleType, store_path: Path, now: datetime) -> list[str]:
+    live = sorted(
+        (a for a in hook.approvals(store_path) if hook.is_live(a, now)),
+        key=lambda approval: approval.expires,
+    )
+    if not live:
+        return ["  no live approvals"]
+    return [
+        "  "
+        + _one_line(
+            f"approval {a.id} ({a.system}) until "
+            f"{a.expires.astimezone(UTC).isoformat(timespec='seconds')}",
+            2 * DETAIL_LIMIT,
+        )
+        for a in live
+    ]
+
+
+def _remote_warning(store_path: Path) -> list[str]:
+    names = store.git(store_path, "remote", check=False).stdout.split()
+    where = []
+    if load_config().memory_remote:
+        where.append("memory_remote in the config")
+    if names:
+        where.append(f"git remote {_one_line(' '.join(names), 40)}")
+    if not where:
+        return []
+    return [
+        _warning(
+            f"a guarded store has a remote ({', '.join(where)}); {store.GUARDED_REMOTE_ADVICE}"
+        )
+    ]
+
+
+def _guard_on(hook: ModuleType, config: Any, now: datetime) -> Outcome:
+    try:
+        committed, lines = _guard_targets(hook, config.store)
+        lines += _live_approvals(hook, config.store, now)
+        if not config.latch and committed:
+            lines.append(
+                _warning(f"guard.json is committed but the config has no latch; {SETUP_FIX}")
+            )
+        lines += _remote_warning(config.store)
+    except hook.StoreError as error:
+        return Outcome("warn", _one_line(f"on; cannot read the store: {error}"))
+    if config.latch:
+        why = "latch set"
+    elif committed:
+        why = "guard.json committed"
+    else:
+        why = "guard.json present"
+    problems = sum(1 for line in lines if line.startswith("  warning:"))
+    detail = f"on ({why})" + (f"; {problems} warning(s)" if problems else "")
+    return Outcome("warn" if problems else "ok", detail, tuple(lines))
+
+
+def _guard_report(hook: ModuleType, now: datetime) -> Outcome:
+    try:
+        config = hook.read_config()
+    except hook.ConfigError as error:
+        return Outcome("warn", _one_line(f"cannot read the config: {error}"))
+    off = hook.off_reason(config)
+    if off is None:
+        return _guard_on(hook, config, now)
+    shown = f"off ({_one_line(off)})"
+    if store.is_guarded(config.store):  # committed at HEAD, yet nothing switches the hook on
+        return Outcome("warn", shown, (_warning(f"guard.json is committed; {SETUP_FIX}"),))
+    return Outcome("ok", shown)
+
+
+def _guard(now: datetime) -> Outcome:
+    try:
+        hook = guard.load_guard()
+        return guard.run_with_deadline(lambda: _guard_report(hook, now))
+    except CovenError as error:  # a timeout, an unloadable hook, git or the config failing
+        return Outcome("warn", _one_line(f"cannot check the guard: {error}"))
+
+
+def _refusal_role(record: dict[str, object]) -> str:
+    if "role" not in record:
+        return "role not logged"  # a record from before the hook logged it
+    role = record["role"]
+    return role if isinstance(role, str) and role in ROLE_CLASSES else "other"
+
+
+def _refusal_system(record: dict[str, object]) -> str | None:
+    """The logged target system or rule name; None when it has the wrong type."""
+    if record.get("system") is None:
+        return "system not logged"
+    system = record["system"]
+    return _one_line(system, REFUSAL_FIELD_LIMIT) if isinstance(system, str) else None
+
+
+def _refusal(line: str) -> str | None:
+    """One refusal as a display line; None for anything else in the log, a bad line included."""
+    try:
+        record = safe_json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or record.get("decision") != "deny":
+        return None
+    when, tool, command = _stamp(record.get("ts")), record.get("tool"), record.get("command")
+    system = _refusal_system(record)
+    if when is None or system is None or not isinstance(tool, str):
+        return None
+    if command is not None and not isinstance(command, str):
+        return None
+    fields = (
+        when.isoformat(timespec="seconds"),
+        _refusal_role(record),
+        system,
+        _one_line(command or tool, REFUSAL_FIELD_LIMIT),
+    )
+    return "  " + " | ".join(fields)
+
+
+def _guard_refusals(_now: datetime) -> Outcome:
+    found: list[str] = []
+    folder = paths.logs_dir()
+    for name in (f"{GUARD_LOG}.jsonl", f"{GUARD_LOG}.jsonl.1"):  # the current log, then the rotated
+        file = folder / name
+        if len(found) >= REFUSALS_SHOWN or not file.is_file():  # a FIFO would block the read
+            continue
+        try:
+            lines = _log_lines(file, REFUSAL_TAIL_BYTES)
+        except OSError:
+            continue
+        for line in reversed(lines):
+            if len(found) < REFUSALS_SHOWN and (shown := _refusal(line)):
+                found.append(shown)
+    if not found:
+        return _ok("no guard refusals logged")
+    return Outcome("ok", f"{len(found)} recent refusal(s), newest first", tuple(found))
+
+
 # (name, what a crash in the check reports, the check): a warn-level check cannot fail doctor.
 CHECKS: Final[tuple[tuple[str, Status, Callable[[datetime], Outcome]], ...]] = (
     ("claude code", "fail", _claude),
@@ -302,6 +469,8 @@ CHECKS: Final[tuple[tuple[str, Status, Callable[[datetime], Outcome]], ...]] = (
     ("crossSessionInbound", "warn", _cross_session),
     ("owned settings", "warn", _owned),
     ("hook errors", "warn", _hook_log),
+    ("guard", "warn", _guard),
+    ("guard refusals", "warn", _guard_refusals),
 )
 
 

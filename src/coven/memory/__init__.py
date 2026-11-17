@@ -1,4 +1,4 @@
-"""The shared memory store: `coven memory init` and `coven memory sync`."""
+"""The shared memory store: `coven memory init`, `sync` and `adopt`."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 from coven.config import load_config
 from coven.errors import warn
-from coven.memory import store
+from coven.memory import adopt, store
 
 
 def _store_path(path: str | None) -> Path:
@@ -32,7 +32,7 @@ def run_sync(_args: argparse.Namespace) -> int:
 
 
 def register(subparsers: Any) -> None:
-    parser = subparsers.add_parser("memory", help="create or sync the shared memory store")
+    parser = subparsers.add_parser("memory", help="create, sync or adopt the shared memory store")
     commands = parser.add_subparsers(dest="memory_command", required=True, metavar="COMMAND")
     init = commands.add_parser("init", help="create the store (a git repo) and install its hook")
     init.add_argument("--path", help="the store's folder (default: memory_path of the config)")
@@ -40,3 +40,11 @@ def register(subparsers: Any) -> None:
     init.set_defaults(handler=run_init)
     sync = commands.add_parser("sync", help="fetch, rebase, rebuild indexes and push")
     sync.set_defaults(handler=run_sync)
+    adopt_parser = commands.add_parser(
+        "adopt", help="make an existing git memory store coven's store, in place"
+    )
+    adopt_parser.add_argument("path", help="the existing store's folder")
+    adopt_parser.add_argument(
+        "--yes", action="store_true", help="adopt it (without this, print the plan only)"
+    )
+    adopt_parser.set_defaults(handler=adopt.run)

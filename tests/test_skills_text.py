@@ -12,6 +12,7 @@ from coven import cli, settings
 
 SKILLS = REPO / "skills"
 SDD = SKILLS / "subagent-driven-development"
+PM = REPO / "agents/project-manager.md"
 # Both plugins ship these two, so a bare name could start the wrong one.
 CONTESTED = ("subagent-driven-development", "requesting-code-review")
 
@@ -221,7 +222,7 @@ def test_unknown_parts_sees_a_made_up_command_and_flag() -> None:
 
 def test_skill_commands_exist() -> None:
     cited: set[tuple[str, ...]] = set()
-    for path in skill_files():
+    for path in coven_texts():
         for words in cited_invocations(path.read_text(encoding="utf-8")):
             assert unknown_parts(words) == [], f"{path.relative_to(REPO)}: {words}"
             cited.add(tuple(words[:2]))
@@ -234,6 +235,9 @@ def test_skill_commands_exist() -> None:
         ("project",),
         ("pm", "status"),
         ("pm", "launch"),
+        ("approve", "--revoke"),
+        ("guard", "check"),
+        ("guard", "explain"),
     ):
         assert any(seen[: len(command)] == command for seen in cited), command
 
@@ -333,21 +337,177 @@ def test_sdd_scripts_are_run_through_the_skill_directory_variable() -> None:
         assert "the path the controller gives you" in (SDD / name).read_text(encoding="utf-8")
 
 
-def test_manager_never_approves_a_production_step_by_itself() -> None:
-    text = body("manager")
-    assert "prod-" not in text  # no per-kind answer records (PROD-STEP is upper case)
-    lowered = text.lower()
-    for wording in (
-        "20 answers",
-        "standing answer",
-        "decide that kind yourself",
-        "approved by gm",
-        "delegated",
-        "same as <earlier",
-    ):
-        assert wording not in lowered, wording
+def test_manager_keeps_the_no_guard_flow_and_asks_the_user_every_time() -> None:
+    lowered = body("manager").lower()
     assert "only on a yes" in lowered
     assert "record the user's decision and the result in the state record" in lowered
+    assert "no guard" in lowered  # the flow with no guard is named, not dropped
+
+
+def test_manager_has_the_guard_on_approval_flow() -> None:
+    text = body("manager")
+    for needle in (
+        "approvals/<id>.step",
+        "tool: <name>",
+        "coven approve <id> --expires-in",
+        "12h",
+        "APPROVED <project>/<task> <id>:",
+        "coven approve --revoke <id>",
+        "coven guard check",
+        "coven guard explain",
+        "--cwd <PM worktree>",
+        "--tool Write --path <file>",
+        "--file",
+    ):
+        assert needle in text, needle
+    # The steps come in order: the step file, then approve, then the reply.
+    flow = text.split("### Guard on")[1]
+    assert flow.index("approvals/<id>.step") < flow.index("coven approve <id> --expires-in")
+    assert flow.index("coven approve <id> --expires-in") < flow.index(
+        "APPROVED <project>/<task> <id>:"
+    )
+    # The no-guard reply is still taught next to it.
+    assert "APPROVED <project>/<task>: ran, <result>" in text
+
+
+def test_manager_learns_by_kind_and_never_delegates_gated_or_deletions() -> None:
+    text = body("manager")
+    for needle in (
+        "user/prod-<kind>.md",
+        "type: feedback",
+        "20 answers",
+        "reset",
+        "standing answer",
+        "one line",
+        "`gated`",
+        "deletion",
+        "never delegated",
+    ):
+        assert needle in text, needle
+
+
+def test_manager_commits_the_learning_line_before_writing_the_step_file() -> None:
+    """`coven approve` refuses unless the step file is the only change in the store."""
+    learning = " ".join(body("manager").split("**Learning.**")[1].split())
+    assert "commit the learning line" in learning
+    assert "before" in learning
+    assert "step file" in learning
+    assert "only change in the store" in learning
+
+
+def test_manager_reads_the_doctor_refusals_and_the_hook_note() -> None:
+    text = body("manager")
+    for needle in (
+        "guard refusals",
+        "has no `BLOCKED`",
+        "coven memory init",
+        "coven approve --revoke <id>",
+        "pre-commit hook is older than coven's",
+    ):
+        assert needle in text, needle
+
+
+def section_of(text: str, start: str, end: str) -> str:
+    return text.split(start)[1].split(end)[0]
+
+
+def test_explain_goes_through_a_file_written_with_the_write_tool() -> None:
+    # An inline command naming a target is itself refused, for the GM and for a PM.
+    for text in (body("manager"), PM.read_text(encoding="utf-8")):
+        flat = " ".join(text.split()).lower()
+        assert "every command to explain goes through `--file`" in flat
+        assert "written with the write tool, never from bash" in flat
+
+
+def test_a_pm_does_not_explain_a_refused_edit_of_a_protected_path() -> None:
+    pm = " ".join(PM.read_text(encoding="utf-8").split())
+    assert "do not explain it" in pm
+    assert "the store, coven's config, Claude Code's settings or `plugins/`" in pm
+    manager = " ".join(body("manager").split())
+    assert "you run `coven guard explain --tool Write --path <file>`" in manager
+
+
+def test_learning_and_standing_answers_are_scoped_to_a_guard() -> None:
+    text = body("manager")
+    assert "**Learning.** With a guard on," in text
+    intro = section_of(text, "## Production steps", "### No guard")
+    assert "With a guard on," in intro
+    assert "unless" not in intro.split("With a guard on,")[0]
+
+
+def test_the_no_guard_section_keeps_d2() -> None:
+    flow = section_of(body("manager"), "### No guard", "### Guard on")
+    assert "you run the step yourself" in flow
+    assert "APPROVED <project>/<task>: ran, <result>" in flow
+    for reached in ("Learning", "20 answers", "standing answer"):
+        assert reached not in flow
+
+
+def test_pm_role_has_the_guard_on_flow_and_keeps_the_no_guard_rule() -> None:
+    text = PM.read_text(encoding="utf-8")
+    for needle in (
+        "APPROVED <project>/<task> <id>:",
+        "APPROVED <project>/<task>: ran, <result>",
+        "never run a production step",
+        "its own Bash call",
+        "BLOCKED",
+        "Read, Grep and Glob",
+        "coven guard explain",
+        "systems/",
+        "plugins/",
+        "settings",
+    ):
+        assert needle in text, needle
+    # Both replies are told apart, and the guard-on one comes with the exact commands.
+    assert text.index("APPROVED <project>/<task> <id>:") < text.index(
+        "APPROVED <project>/<task>: ran, <result>"
+    )
+
+
+def test_systems_map_skill_walks_the_map_and_the_guard_targets() -> None:
+    text = body("systems-map")
+    for needle in (
+        "systems/<system>.md",
+        "systems/guard.json",
+        "production",
+        "gated",
+        "coven guard check",
+        "coven setup --yes",
+        "Only the general manager",
+        "orders-db",
+        "billing-api",
+        "example.internal",
+    ):
+        assert needle in text, needle
+    # Explore, draft, ask the user, validate, commit, then latch the guard.
+    order = ["Explore", "Draft", "Ask", "coven guard check", "Commit", "coven setup --yes"]
+    positions = [text.index(step) for step in order]
+    assert positions == sorted(positions)
+    assert "systems/" in frontmatter("systems-map")["description"]
+
+
+# Tool names the guard's texts must not mention.
+NOT_NAMED = ("slack", "zendesk", "servicenow", "grafana", "private toolkit")
+
+
+def guard_texts() -> list[Path]:
+    """The texts that teach the guard, approvals and the systems map (other skills are upstream)."""
+    return [
+        SKILLS / "manager/SKILL.md",
+        SKILLS / "systems-map/SKILL.md",
+        PM,
+        REPO / "instructions/routing.md",
+        REPO / "README.md",
+        REPO / "CHANGELOG.md",
+        REPO / "docs/known-gaps.md",
+    ]
+
+
+def test_no_text_names_a_ticket_or_chat_tool_or_the_private_toolkit() -> None:
+    for path in guard_texts():
+        lowered = path.read_text(encoding="utf-8").lower()
+        for name in NOT_NAMED:
+            assert name not in lowered, f"{path.relative_to(REPO)} names {name}"
 
 
 def test_skills_describe_no_work_queue_feature() -> None:
