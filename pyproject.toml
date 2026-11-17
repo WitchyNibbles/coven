@@ -33,7 +33,7 @@ extend = ".coven/ruff.toml"
 
 [tool.mypy]
 strict = true
-files = ["src", "standard", "hooks"]
+files = ["src", "standard", "hooks", "bench"]
 enable_error_code = [
     "ignore-without-code",
     "possibly-undefined",
