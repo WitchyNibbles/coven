@@ -81,7 +81,8 @@ coven fails, even if it works, when:
   character budget, only when the folder exists.
 - A store with `systems/guard.json` committed is **local-only**: `coven memory sync` commits and
   rebuilds indexes but never pushes, printing `not pushed: guarded store` each time; setup and
-  doctor warn when such a store has a remote.
+  doctor warn when such a store has a remote. It does not fetch or rebase either: remote commits
+  could change `guard.json` or approvals at HEAD.
   (Ruling: precedent from the private toolkit, whose guarded store never had a remote.)
 - The store's pre-commit hook keeps refusing PM commits (`COVEN_SESSION_ROLE` set, any value) and
   token patterns; approval JSON goes through the same token scan.
