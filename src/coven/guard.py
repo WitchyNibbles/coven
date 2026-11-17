@@ -11,9 +11,12 @@ import argparse
 import functools
 import importlib.util
 import os
+import signal
+import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from types import ModuleType
+from types import FrameType, ModuleType
 from typing import Any
 
 from coven import paths
@@ -21,6 +24,9 @@ from coven.errors import CovenError
 
 HOOK = paths.root() / "hooks" / "prod_guard.py"
 SPLIT_COMMAND_NOTE = "words the shell split are joined with single spaces"
+# The edit tools `explain --tool` can judge by a path, and the tool_input key each reads it from.
+PATH_KEYS = {"Write": "file_path", "Edit": "file_path", "NotebookEdit": "notebook_path"}
+TIMED_OUT = "guard check timed out"
 
 
 @functools.cache
@@ -31,17 +37,47 @@ def load_guard() -> ModuleType:
     if spec is None or spec.loader is None:
         raise CovenError(f"cannot load the production guard at {HOOK}")
     module = importlib.util.module_from_spec(spec)
+    # The hook switches bytecode off and puts its folder on sys.path for its `hook_support` import
+    # as it loads; this process gets both back. It loads its other siblings by path, on first use
+    # (hook_support.sibling), and `hook_support` itself stays imported, so nothing later needs either.
+    path, no_bytecode = list(sys.path), sys.dont_write_bytecode
     try:
         spec.loader.exec_module(module)
     except (OSError, SyntaxError, ImportError) as error:
         raise CovenError(f"cannot load the production guard at {HOOK}: {error}") from error
+    finally:
+        sys.path[:], sys.dont_write_bytecode = path, no_bytecode
     return module
+
+
+class _PastDeadline(Exception):
+    """The alarm went off."""
+
+
+def _alarm(_signum: int, _frame: FrameType | None) -> None:
+    raise _PastDeadline
+
+
+def run_with_deadline[T](function: Callable[[], T], seconds: float | None = None) -> T:
+    """`function()`, or a CovenError saying the check timed out once `seconds` have passed (the
+    hook's DEADLINE by default). A SIGALRM interrupts a regex search or a git wait alike; the timer
+    and the handler are put back as they were. Main thread only, like the hook."""
+    limit = load_guard().DEADLINE if seconds is None else seconds
+    previous = signal.signal(signal.SIGALRM, _alarm)
+    signal.setitimer(signal.ITIMER_REAL, limit)
+    try:
+        return function()
+    except _PastDeadline:
+        raise CovenError(TIMED_OUT) from None
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def run_check(args: argparse.Namespace) -> int:
     hook = load_guard()
     try:
-        print(hook.check_file(Path(args.path)))
+        print(run_with_deadline(lambda: hook.check_file(Path(args.path))))
     except hook.GuardError as error:
         raise CovenError(str(error)) from None
     return 0
@@ -59,9 +95,31 @@ def _command_text(args: argparse.Namespace) -> str | None:
     return " ".join(words) if words else None
 
 
+def _cwd(args: argparse.Namespace) -> str:
+    if args.cwd is None:
+        return os.getcwd()
+    folder = os.path.abspath(args.cwd)
+    if not os.path.isdir(folder):
+        raise CovenError(f"--cwd {args.cwd} is not a folder")
+    return folder
+
+
+def _tool_input(args: argparse.Namespace) -> dict[str, object]:
+    """What `--tool` sends: the path of an edit tool, nothing for another tool."""
+    key = PATH_KEYS.get(args.tool)
+    if key is None:
+        if args.path is not None:
+            raise CovenError(f"--path goes with --tool {', '.join(PATH_KEYS)}, not {args.tool}")
+        return {}
+    if not args.path:
+        raise CovenError(f"--tool {args.tool} needs --path <file>: the file it would write")
+    return {key: args.path}
+
+
 def _payload(args: argparse.Namespace) -> dict[str, object]:
     """The hook payload for one call. The role is not in it: explain judges both roles."""
     command = _command_text(args)
+    cwd = _cwd(args)
     if args.tool is not None:
         if command is not None:
             raise CovenError("--tool judges a tool by name; it takes no command or --file")
@@ -69,10 +127,12 @@ def _payload(args: argparse.Namespace) -> dict[str, object]:
             raise CovenError("--tool needs a tool name")
         if args.tool == "Bash":
             raise CovenError("Bash is judged by its command: pass the command, or --file")
-        return {"tool_name": args.tool, "tool_input": {}, "cwd": os.getcwd()}
+        return {"tool_name": args.tool, "tool_input": _tool_input(args), "cwd": cwd}
+    if args.path is not None:
+        raise CovenError(f"--path goes with --tool {', '.join(PATH_KEYS)}")
     if command is None or not command.strip():
         raise CovenError("give a command, --file <path>, or --tool <name>")
-    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": os.getcwd()}
+    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}
 
 
 def _explanation(hook: ModuleType, payload: dict[str, object]) -> Any | str:
@@ -112,7 +172,7 @@ def run_explain(args: argparse.Namespace) -> int:
     hook = load_guard()
     payload = _payload(args)
     try:
-        found = _explanation(hook, payload)
+        found = run_with_deadline(lambda: _explanation(hook, payload))
     except hook.PayloadError as error:
         raise CovenError(f"not a tool call the guard can read: {error}") from None
     if isinstance(found, str):
@@ -154,4 +214,15 @@ def register(subparsers: Any) -> None:
     )
     explain.add_argument("--file", help="read the command, which may span lines, from this file")
     explain.add_argument("--tool", help="judge an MCP or other tool by name instead of a command")
+    explain.add_argument(
+        "--path",
+        help="the file an edit tool (--tool Write, Edit or NotebookEdit) would write; required for them",
+    )
+    explain.add_argument(
+        "--cwd",
+        help=(
+            "the session's working directory (default: this one); relative paths are judged from"
+            " --cwd, so pass the PM's worktree"
+        ),
+    )
     explain.set_defaults(handler=run_explain)

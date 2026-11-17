@@ -2,8 +2,10 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +14,7 @@ import pytest
 from support import REPO, commit_all, git
 
 from coven import cli, guard
+from coven.errors import CovenError
 
 HOOK = REPO / "hooks" / "prod_guard.py"
 ROLE = "COVEN_SESSION_ROLE"
@@ -367,7 +370,9 @@ def test_explain_with_no_valid_guard_refuses_an_edit_for_a_pm_only(
 ) -> None:
     broken = make_store(home() / "coven-memory", guard_json={"targets": "nope"})
     configure(broken)
-    assert verdict_of(run("explain", "--tool", "Write")[1]) == "refused for a PM"
+    assert (
+        verdict_of(run("explain", "--tool", "Write", "--path", "/tmp/x")[1]) == "refused for a PM"
+    )
     assert verdict_of(run("explain", "--tool", "Read")[1]) == "allowed"
     assert verdict_of(run("explain", "ls")[1]) == "refused for every session"
 
@@ -480,9 +485,23 @@ CASES: dict[str, tuple[tuple[str, ...], dict[str, object]]] = {
     ),
     "mcp-read": (("--tool", "mcp__x__read"), {"tool_name": "mcp__x__read", "tool_input": {}}),
     "read": (("--tool", "Read"), {"tool_name": "Read", "tool_input": {}}),
-    "write": (("--tool", "Write"), {"tool_name": "Write", "tool_input": {}}),
     "task": (("--tool", "Task"), {"tool_name": "Task", "tool_input": {}}),
 }
+# Edit calls with a path; `{home}` is the test's home. name -> (tool, the path)
+PATH_CASES: dict[str, tuple[str, str]] = {
+    "write-elsewhere": ("Write", "/tmp/x.md"),
+    "write-store": ("Write", "{home}/coven-memory/systems/orders-db.md"),
+    "edit-store": ("Edit", "{home}/coven-memory/approvals/a1.json"),
+    "write-config": ("Write", "{home}/.config/coven/config.json"),
+    "edit-settings": ("Edit", "{home}/.claude/settings.json"),
+    "notebook-settings": ("NotebookEdit", "{home}/.claude/settings.local.json"),
+}
+for _name, (_tool, _path) in PATH_CASES.items():
+    _key = "notebook_path" if _tool == "NotebookEdit" else "file_path"
+    CASES[_name] = (
+        ("--tool", _tool, "--path", _path),
+        {"tool_name": _tool, "tool_input": {_key: _path}},
+    )
 
 
 def hook_refuses(payload: dict[str, object], role: str | None) -> bool:
@@ -508,6 +527,8 @@ def test_explain_agrees_with_the_hook(run: Run, state: str, case: str) -> None:
     build, exit_code = STATES[state]
     build(home() / "coven-memory")
     arguments, payload = CASES[case]
+    arguments = tuple(a.replace("{home}", str(home())) for a in arguments)
+    payload = json.loads(json.dumps(payload).replace("{home}", str(home())))
     code, out, _ = run("explain", *arguments)
     assert code == exit_code
     refused_for_user = hook_refuses(payload, None)
@@ -523,3 +544,154 @@ def test_explain_agrees_with_the_hook(run: Run, state: str, case: str) -> None:
         assert (out.startswith("guard off: "), expected) == (True, "allowed")
     else:
         assert verdict_of(out) == expected
+
+
+def test_explain_judges_an_edit_by_its_path(run: Run, store: Path) -> None:
+    for tool, path, verdict in (
+        ("Write", str(store / "systems" / "orders-db.md"), "refused for a PM"),
+        ("Edit", str(home() / ".config" / "coven" / "config.json"), "refused for a PM"),
+        ("Edit", str(home() / ".claude" / "settings.json"), "refused for a PM"),
+        ("NotebookEdit", str(home() / ".claude" / "settings.local.json"), "refused for a PM"),
+        ("Write", "/tmp/notes.md", "allowed"),
+    ):
+        code, out, _ = run("explain", "--tool", tool, "--path", path)
+        assert (code, verdict_of(out)) == (0, verdict), (tool, path)
+
+
+@pytest.mark.parametrize(
+    ("args", "words"),
+    [
+        (("--tool", "Write"), "--path"),
+        (("--tool", "Edit"), "--path"),
+        (("--tool", "NotebookEdit"), "--path"),
+        (("--tool", "Read", "--path", "/tmp/x"), "--path"),
+        (("--tool", "mcp__x__y", "--path", "/tmp/x"), "--path"),
+        (("--path", "/tmp/x", "ls"), "--path"),
+        (("--tool", "Write", "--path", ""), "--path"),
+    ],
+    ids=["write", "edit", "notebook", "read", "mcp", "no-tool", "empty-path"],
+)
+def test_explain_needs_a_path_for_an_edit_tool_and_only_for_one(
+    run: Run, store: Path, args: tuple[str, ...], words: str
+) -> None:
+    code, out, err = run("explain", *args)
+    assert (code, out) == (1, "")
+    assert words in err
+
+
+# --- --cwd ---
+
+
+def test_explain_judges_a_command_from_the_cwd_it_is_given(
+    run: Run, store: Path, tmp_path: Path
+) -> None:
+    elsewhere = tmp_path / "worktree"
+    elsewhere.mkdir()
+    command = "cd ~/.config && rm -rf coven"
+    assert verdict_of(run("explain", "--cwd", str(elsewhere), command)[1]) == "refused for a PM"
+    holder = home() / ".config"
+    holder.mkdir(parents=True, exist_ok=True)
+    assert verdict_of(run("explain", "--cwd", str(holder), "rm -rf coven")[1]) == "refused for a PM"
+    assert verdict_of(run("explain", "--cwd", str(elsewhere), "rm -rf coven")[1]) == "allowed"
+
+
+def test_explain_judges_a_relative_path_from_the_cwd_it_is_given(
+    run: Run, store: Path, tmp_path: Path
+) -> None:
+    relative = ("--tool", "Write", "--path", "coven-memory/systems/orders-db.md")
+    assert verdict_of(run("explain", "--cwd", str(home()), *relative)[1]) == "refused for a PM"
+    assert verdict_of(run("explain", "--cwd", str(tmp_path), *relative)[1]) == "allowed"
+
+
+def test_explain_defaults_the_cwd_to_its_own(
+    run: Run, store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    relative = ("--tool", "Write", "--path", "coven-memory/systems/orders-db.md")
+    monkeypatch.chdir(home())
+    assert verdict_of(run("explain", *relative)[1]) == "refused for a PM"
+    monkeypatch.chdir("/")
+    assert verdict_of(run("explain", *relative)[1]) == "allowed"
+
+
+def test_explain_refuses_a_cwd_that_is_not_a_folder(run: Run, store: Path, tmp_path: Path) -> None:
+    code, out, err = run("explain", "--cwd", str(tmp_path / "nowhere"), "ls")
+    assert (code, out) == (1, "")
+    assert "--cwd" in err
+
+
+def test_explain_help_says_relative_paths_are_judged_from_cwd(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["guard", "explain", "--help"]) == 0
+    text = " ".join(capsys.readouterr().out.split())
+    assert "relative paths are judged from --cwd" in text
+    assert "--path" in text
+
+
+# --- the deadline ---
+
+
+def test_run_with_deadline_returns_what_the_function_returns() -> None:
+    assert guard.run_with_deadline(lambda: 42, 5.0) == 42
+
+
+def test_run_with_deadline_stops_a_slow_function() -> None:
+    with pytest.raises(CovenError, match="guard check timed out"):
+        guard.run_with_deadline(lambda: time.sleep(30), 0.05)
+
+
+def test_run_with_deadline_leaves_no_timer_or_handler_behind() -> None:
+    before = signal.getsignal(signal.SIGALRM)
+    guard.run_with_deadline(lambda: None, 5.0)
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    assert signal.getsignal(signal.SIGALRM) == before
+    with pytest.raises(CovenError):
+        guard.run_with_deadline(lambda: time.sleep(30), 0.05)
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    assert signal.getsignal(signal.SIGALRM) == before
+
+
+def test_run_with_deadline_defaults_to_the_hooks_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(guard.load_guard(), "DEADLINE", 0.05)
+    with pytest.raises(CovenError, match="timed out"):
+        guard.run_with_deadline(lambda: time.sleep(30))
+
+
+def test_a_slow_explain_times_out_with_exit_1(
+    run: Run, store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hook = guard.load_guard()
+    monkeypatch.setattr(hook, "DEADLINE", 0.05)
+    monkeypatch.setattr(hook, "explain", lambda *_a: time.sleep(30))
+    code, out, err = run("explain", "ls")
+    assert (code, out) == (1, "")
+    assert "guard check timed out" in err
+
+
+def test_a_slow_check_times_out_with_exit_1(
+    run: Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hook = guard.load_guard()
+    monkeypatch.setattr(hook, "DEADLINE", 0.05)
+    monkeypatch.setattr(hook, "check_file", lambda *_a: time.sleep(30))
+    code, out, err = run("check", str(tmp_path / "guard.json"))
+    assert (code, out) == (1, "")
+    assert "guard check timed out" in err
+
+
+# --- loading the hook leaves the process as it was ---
+
+
+def test_loading_the_hook_restores_the_bytecode_flag_and_sys_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    before = list(sys.path)
+    guard.load_guard.cache_clear()
+    try:
+        assert guard.load_guard().explain
+        assert sys.dont_write_bytecode is False
+        assert sys.path == before
+    finally:
+        guard.load_guard.cache_clear()
