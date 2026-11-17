@@ -622,3 +622,43 @@ def test_old_python_refuses_when_grep_fails(run_hook: Run, tmp_path: Path) -> No
     executable(shim / "grep", "#!/bin/sh\nexit 2\n")
     proc = run_hook(WRAPPER, bash_payload(), {"PATH": str(shim)}, args=(str(PROD_GUARD),))
     assert proc.returncode == 2
+
+
+# --- prod_guard_gate.py is the prod guard for the old-python fallback and for the crash log ---
+
+GATE = HOOKS / "prod_guard_gate.py"
+
+
+@pytest.mark.parametrize("python", ["old_python", "no_python"])
+def test_the_gate_gets_the_prod_guard_fallback_while_the_guard_is_on(
+    request: pytest.FixtureRequest, run_hook: Run, python: str
+) -> None:
+    guarded_store(latch=True, guard_file=False)
+    env: dict[str, str] = request.getfixturevalue(python)
+    proc = run_hook(WRAPPER, bash_payload(), env, args=(str(GATE),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
+
+
+def test_the_gate_lets_every_call_through_under_an_old_python_while_the_guard_is_off(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(GATE),))
+    assert (proc.returncode, proc.stderr) == (0, NEED_PYTHON + "\n")
+
+
+def test_a_crash_behind_the_gate_is_reported_and_logged_as_prod_guard(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str]
+) -> None:
+    hooks = tmp_path / "plugin" / "hooks"
+    shutil.copytree(HOOKS, hooks, ignore=shutil.ignore_patterns("__pycache__"))
+    (hooks / "prod_guard.py").write_text("def broken(:\n", encoding="utf-8")
+    guarded_store(latch=True, guard_file=False)
+    proc = run_hook(
+        hooks / "fail-closed.sh", bash_payload(), modern_python, args=(str(hooks / GATE.name),)
+    )
+    assert proc.returncode == 2
+    assert proc.stderr.endswith("coven: prod-guard failed (exit 1); blocking\n")
+    log = Path(os.environ["XDG_CACHE_HOME"]) / "coven" / "logs" / "prod-guard.jsonl"
+    assert json.loads(log.read_text().splitlines()[-1])["error"] == "exit 1"
+    assert not (log.parent / "prod-guard-gate.jsonl").exists()
