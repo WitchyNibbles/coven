@@ -43,6 +43,10 @@ ROLE_VAR = "COVEN_SESSION_ROLE"
 HOOK_NAME = "pre-commit"
 MOVED_HOOK_PREFIX = f"{HOOK_NAME}.pre-adopt-"
 TEMP_SUFFIX = ".adopt-tmp"
+HOOKS_PATH_LABEL = "core.hooksPath was: "
+OLD_HOOK_LABEL = "old hook: "
+BACKUP_LABEL = "backup: "
+NOT_SET = "(unset)"
 PRIVATE_DIR = 0o700
 PRIVATE_FILE = 0o600
 READ_CHUNK = 1 << 20
@@ -604,21 +608,87 @@ def _say(line: str) -> None:
 @dataclass(frozen=True)
 class Outcome:
     backup: Backup
-    commit: str | None
+    commit: str | None  # this run's commit; None when the store needed none
     old_hooks_path: str | None
+    earlier: Record | None  # the commit of an earlier run, shown when this run made none
+
+    @property
+    def revert_target(self) -> str | None:
+        return self.commit or (self.earlier.commit if self.earlier else None)
 
 
 def _install_hook(plan: Plan) -> None:
-    """Move a foreign hook aside, install coven's and pin the store to its own hooks folder."""
-    root = plan.root
+    """Move a foreign hook aside and put coven's hook file in place. The store is still pinned to
+    its old hooks folder; `_pin_hooks_path` follows the commit, so a stop before it keeps that
+    value for the next run."""
     if plan.foreign_hook:
         moved = plan.foreign_hook.with_name(plan.moved_hook_name)
         os.rename(plan.foreign_hook, moved)
         _say(f"  old hook moved to {moved}")
+    store.install_hook(plan.root)
+
+
+def _pin_hooks_path(plan: Plan) -> None:
     if plan.old_hooks_path not in (None, store.RELATIVE_HOOKS):
         _say(f"  core.hooksPath was {plan.old_hooks_path}; it is replaced")
-    store.install_hook(root)
-    store.pin_hooks_path(root)
+    store.pin_hooks_path(plan.root)
+
+
+def _moved_hooks(root: Path) -> list[str]:
+    return sorted(p.name for p in _hooks_folder(root).glob(f"{MOVED_HOOK_PREFIX}*"))
+
+
+@dataclass(frozen=True)
+class Record:
+    """What an adopt commit says about the way back (its message carries it)."""
+
+    commit: str
+    old_hooks_path: str | None
+    moved_hooks: str
+    backup: str
+
+
+def _commit_message(old_hooks_path: str | None, moved: list[str], backup: Backup) -> str:
+    return "\n".join(
+        [
+            COMMIT_MESSAGE,
+            "",
+            f"{HOOKS_PATH_LABEL}{old_hooks_path or NOT_SET}",
+            f"{OLD_HOOK_LABEL}{', '.join(moved) or 'none'}",
+            f"{BACKUP_LABEL}{backup.archive}",
+        ]
+    )
+
+
+def _earlier_record(root: Path) -> Record | None:
+    """The newest adopt commit's record, None when the store has none."""
+    done = store.git(
+        root, "log", "-1", f"--grep=^{COMMIT_MESSAGE}$", "--format=%h%x00%B", check=False
+    )
+    commit, _, message = done.stdout.partition("\0")
+    if done.returncode != 0 or not message:
+        return None
+    fields = {
+        label: line.removeprefix(label)
+        for line in message.splitlines()
+        for label in (HOOKS_PATH_LABEL, OLD_HOOK_LABEL, BACKUP_LABEL)
+        if line.startswith(label)
+    }
+    old = fields.get(HOOKS_PATH_LABEL, NOT_SET)
+    return Record(
+        commit.strip(),
+        None if old == NOT_SET else old,
+        fields.get(OLD_HOOK_LABEL, "none"),
+        fields.get(BACKUP_LABEL, "unknown"),
+    )
+
+
+def _old_hooks_path(plan: Plan, earlier: Record | None) -> str | None:
+    """The `core.hooksPath` the store had before adopt: the one set now, or when an earlier run
+    already replaced it, the one that run's commit recorded."""
+    if plan.old_hooks_path != store.RELATIVE_HOOKS:
+        return plan.old_hooks_path
+    return earlier.old_hooks_path if earlier else None
 
 
 def _roll_back(root: Path, created: list[str], renames: list[Rename]) -> None:
@@ -631,7 +701,7 @@ def _roll_back(root: Path, created: list[str], renames: list[Rename]) -> None:
             (root / rename.target).rmdir()
 
 
-def _commit_changes(plan: Plan) -> str | None:
+def _commit_changes(plan: Plan, message: str) -> str | None:
     """Renames, `.gitattributes` and the indexes in one commit; the short hash, None when the
     store needed no change. On a failure the work tree goes back to HEAD."""
     root = plan.root
@@ -644,7 +714,18 @@ def _commit_changes(plan: Plan) -> str | None:
         store.git(root, "--literal-pathspecs", "add", "-A", "--", store.ATTRIBUTES, *changed)
         if store.git(root, "diff", "--cached", "--quiet", check=False).returncode == 0:
             return None
-        done = store.git(root, "commit", "-q", "-m", COMMIT_MESSAGE, check=False)
+        # The hooks folder is named for this commit, so coven's hook runs whatever the store's
+        # core.hooksPath still says.
+        done = store.git(
+            root,
+            "-c",
+            f"core.hooksPath={store.RELATIVE_HOOKS}",
+            "commit",
+            "-q",
+            "-m",
+            message,
+            check=False,
+        )
         if done.returncode != 0:
             detail = (done.stderr or done.stdout).strip() or "no output"
             raise CovenError(
@@ -661,21 +742,24 @@ def _set_config(plan: Plan) -> None:
     settings.apply(plan.config_changes)
 
 
-def _way_back(plan: Plan, outcome: Outcome) -> list[str]:
+def _way_back(plan: Plan, outcome: Outcome, *, config_changed: bool) -> list[str]:
     root = shlex.quote(str(plan.root))
     hooks = _hooks_folder(plan.root)
     lines: list[str] = []
-    if outcome.commit:
-        lines.append(f"git -C {root} revert {outcome.commit}")
-    for moved in sorted(hooks.glob(f"{MOVED_HOOK_PREFIX}*")):
-        lines.append(f"mv -f {shlex.quote(str(moved))} {shlex.quote(str(hooks / HOOK_NAME))}")
+    if outcome.revert_target:
+        lines.append(f"git -C {root} revert {outcome.revert_target}")
+    for moved in _moved_hooks(plan.root):
+        lines.append(
+            f"mv -f {shlex.quote(str(hooks / moved))} {shlex.quote(str(hooks / HOOK_NAME))}"
+        )
     if outcome.old_hooks_path:
         lines.append(
             f"git -C {root} config --local core.hooksPath {shlex.quote(outcome.old_hooks_path)}"
         )
     else:
         lines.append(f"git -C {root} config --local --unset core.hooksPath")
-    lines.append("coven setup --undo --yes")
+    if config_changed:
+        lines.append("coven setup --undo --yes")
     lines.append(
         f"last resort, with {plan.root} moved aside: "
         f"tar -xzf {shlex.quote(str(outcome.backup.archive))} -C {shlex.quote(str(plan.root.parent))}"
@@ -691,7 +775,7 @@ def _check_counts(plan: Plan, outcome: Outcome) -> None:
         "the entry counts changed, which adopt never does; stopping.\n  "
         + "\n  ".join(differences)
         + "\nTo restore:\n  "
-        + "\n  ".join(_way_back(plan, outcome))
+        + "\n  ".join(_way_back(plan, outcome, config_changed=False))
     )
 
 
@@ -702,13 +786,19 @@ def _report(plan: Plan, outcome: Outcome) -> list[str]:
         f"  sha256: {outcome.backup.digest}",
         "  renames: " + ("; ".join(rename.describe() for rename in plan.renames) or "none"),
     ]
-    moved = sorted(p.name for p in _hooks_folder(plan.root).glob(f"{MOVED_HOOK_PREFIX}*"))
+    moved = _moved_hooks(plan.root)
     lines.append("  old hook: " + (", ".join(moved) if moved else "none moved"))
     if outcome.old_hooks_path not in (None, store.RELATIVE_HOOKS):
         lines.append(f"  core.hooksPath was: {outcome.old_hooks_path}")
     lines.append(f"  commit: {outcome.commit or 'none needed'}")
+    if outcome.earlier:
+        lines.append(
+            f"  earlier run, commit {outcome.earlier.commit}: core.hooksPath was "
+            f"{outcome.earlier.old_hooks_path or NOT_SET}, old hook {outcome.earlier.moved_hooks}, "
+            f"backup {outcome.earlier.backup}"
+        )
     lines.append("  the way back:")
-    lines += [f"    {line}" for line in _way_back(plan, outcome)]
+    lines += [f"    {line}" for line in _way_back(plan, outcome, config_changed=True)]
     return lines
 
 
@@ -717,10 +807,15 @@ def adopt_store(plan: Plan) -> list[str]:
     _say(f"backing up {plan.root}")
     backup = make_backup(plan.root, plan.backup_name)
     _say(f"  backup {backup.archive} read back, sha256 {backup.digest}")
+    earlier = _earlier_record(plan.root)
+    old_hooks_path = _old_hooks_path(plan, earlier)
     _install_hook(plan)
-    outcome = Outcome(backup, _commit_changes(plan), plan.old_hooks_path)
+    message = _commit_message(old_hooks_path, _moved_hooks(plan.root), backup)
+    commit = _commit_changes(plan, message)
+    _pin_hooks_path(plan)
+    outcome = Outcome(backup, commit, old_hooks_path, None if commit else earlier)
+    _check_counts(plan, outcome)  # before the config write: a mismatch leaves the config alone
     _set_config(plan)
-    _check_counts(plan, outcome)
     return _report(plan, outcome)
 
 

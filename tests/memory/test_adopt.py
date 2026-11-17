@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from memory_support import PROC_LINE, Lab
 
-from coven import cli, config
+from coven import cli, config, settings
 from coven.errors import CovenError
 from coven.memory import adopt, store
 
@@ -570,6 +570,8 @@ def test_a_count_difference_stops_and_prints_the_restore_commands(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     root = seed(lab)
+    config.save_config(config.Config(memory_path=Path("/home/user/old-store")))
+    config_before = config.config_file().read_bytes()
     calls = {"n": 0}
     real = adopt.count_entries
 
@@ -585,7 +587,9 @@ def test_a_count_difference_stops_and_prints_the_restore_commands(
     err = capsys.readouterr().err
     assert "user: 2 before, 1 after" in err
     assert f"git -C {root} revert" in err
-    assert "coven setup --undo" in err
+    assert "coven setup --undo" not in err  # the config was never changed
+    assert config.config_file().read_bytes() == config_before
+    assert not settings.owned_file().exists()
     [archive] = backups(state_home)
     assert str(archive) in err
 
@@ -693,6 +697,73 @@ def test_a_stop_after_the_commit_is_finished_by_a_rerun_without_a_second_commit(
     assert run_adopt(root, "--yes") == 0
     assert commit_count(lab, root) == done
     assert config.load_config().memory_path == root
+
+
+def test_the_commit_message_carries_the_way_back(lab: Lab, state_home: Path) -> None:
+    root = seed(lab)
+    put_foreign_hook(root)
+    lab.git(root, "config", "--local", "core.hooksPath", OLD_HOOKS_PATH)
+    assert run_adopt(root, "--yes") == 0
+    [archive] = backups(state_home)
+    [moved] = (root / ".git" / "hooks").glob("pre-commit.pre-adopt-*")
+    message = lab.git(root, "log", "-1", "--format=%B").splitlines()
+    assert message[0] == "adopt: coven store"
+    assert f"core.hooksPath was: {OLD_HOOKS_PATH}" in message
+    assert f"old hook: {moved.name}" in message
+    assert f"backup: {archive}" in message
+
+
+def test_a_commit_without_a_hooks_path_says_it_was_unset(lab: Lab) -> None:
+    root = seed(lab)
+    assert run_adopt(root, "--yes") == 0
+    message = lab.git(root, "log", "-1", "--format=%B").splitlines()
+    assert "core.hooksPath was: (unset)" in message
+    assert "old hook: none" in message
+
+
+def test_a_rerun_reads_the_way_back_from_the_adopt_commit(
+    lab: Lab,
+    state_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = seed(lab)
+    put_foreign_hook(root)
+    lab.git(root, "config", "--local", "core.hooksPath", OLD_HOOKS_PATH)
+
+    def refuse(_changes: object) -> None:
+        raise CovenError("injected stop")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(adopt.settings, "apply", refuse)
+        assert run_adopt(root, "--yes") == 1
+    capsys.readouterr()
+    (first_backup,) = backups(state_home)
+    [moved] = (root / ".git" / "hooks").glob("pre-commit.pre-adopt-*")
+    sha = lab.git(root, "rev-parse", "--short", "HEAD").strip()
+    # The first run already replaced the hooks path: the rerun cannot ask git for the old one.
+    assert lab.git(root, "config", "--local", "core.hooksPath").strip() == ".git/hooks"
+
+    assert run_adopt(root, "--yes") == 0
+    out = capsys.readouterr().out
+    assert f"git -C {root} config --local core.hooksPath {OLD_HOOKS_PATH}" in out
+    assert f"git -C {root} revert {sha}" in out
+    assert f"backup {first_backup}" in out
+    assert moved.name in out
+    assert commit_count(lab, root) == 2
+
+
+def test_a_stop_before_the_commit_keeps_the_old_hooks_path_for_the_rerun(
+    lab: Lab, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    lab.git(root, "config", "--local", "core.hooksPath", OLD_HOOKS_PATH)
+    with failing_nth_move(2, monkeypatch):
+        assert run_adopt(root, "--yes") == 1
+    capsys.readouterr()
+    assert lab.git(root, "config", "--local", "core.hooksPath").strip() == OLD_HOOKS_PATH
+    assert run_adopt(root, "--yes") == 0
+    assert f"core.hooksPath was: {OLD_HOOKS_PATH}" in lab.git(root, "log", "-1", "--format=%B")
 
 
 def test_a_run_with_nothing_left_is_refused(lab: Lab, capsys: pytest.CaptureFixture[str]) -> None:
