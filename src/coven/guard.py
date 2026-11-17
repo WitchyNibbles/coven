@@ -37,9 +37,11 @@ def load_guard() -> ModuleType:
     if spec is None or spec.loader is None:
         raise CovenError(f"cannot load the production guard at {HOOK}")
     module = importlib.util.module_from_spec(spec)
-    # The hook switches bytecode off and puts its folder on sys.path for its `hook_support` import
-    # as it loads; this process gets both back. It loads its other siblings by path, on first use
-    # (hook_support.sibling), and `hook_support` itself stays imported, so nothing later needs either.
+    # The hook puts its folder on sys.path for its imports (`hook_support`, `guard_config`) as it
+    # loads; this process gets the path (and the bytecode flag, which the hook no longer changes)
+    # back. Like a hook run, this load caches bytecode in the plugin's hooks/__pycache__. The hook
+    # loads its other siblings by path, on first use (hook_support.sibling), and its imported
+    # modules stay imported, so nothing later needs the path.
     path, no_bytecode = list(sys.path), sys.dont_write_bytecode
     try:
         spec.loader.exec_module(module)

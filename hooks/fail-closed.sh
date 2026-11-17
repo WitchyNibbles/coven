@@ -18,7 +18,8 @@
 # On 86 (or with no python3 at all) deny_secrets.py falls back to a plain text check of the raw
 # payload (below), prod_guard.py to a plain check of whether the guard is on (further below), and
 # every other hook exits 0 (allowed, skipped). Either way the script prints, once per session, how
-# to fix it. The payload is read only then: an old Python never touched stdin.
+# to fix it. The payload is read only then: an old Python never touched stdin. A python3 older than
+# 3.4 does not know `-I` and exits 2, which is a block, not this fallback.
 #
 # prod_guard_gate.py, the entry hooks.json runs for the production guard, is the prod guard for
 # this script: the same fallback and the same log name.

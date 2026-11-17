@@ -121,8 +121,12 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   3000 lines. This leans on the PM zone rules that already refuse a PM's writes under
   `~/.claude/plugins/`, and it gives nobody a new power: whoever can write the cache can write the
   hooks. Python checks a cached file against its source's mtime and size, so an edited hook is
-  recompiled. A plugin folder that cannot be written (a read-only install) still works, at the old
-  cost per call.
+  recompiled. An unchecked-hash `.pyc` skips that check, but writing one needs the same write
+  access as editing the source. A `--plugin-dir` checkout is outside the PM zone (see the
+  `--plugin-dir` limit above). A plugin folder that cannot be written (a read-only install) still
+  works, at the old cost per call.
+- A `python3` older than 3.4 rejects `-I` and exits 2: the call is blocked, and the old-Python
+  fallback does not run (it needs the launcher's exit 86). Python 3.4 to 3.11 reach the fallback.
 - The user's own terminal, outside Claude Code, is never guarded.
 
 ## coven memory adopt
