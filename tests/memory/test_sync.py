@@ -273,3 +273,81 @@ def test_sync_reports_a_rejected_push_and_never_forces(
     assert not {"-f", "--force", "--force-with-lease", "--mirror"} & set(pushes[0])
     assert lab.git(root, "rev-parse", "HEAD") == mine
     assert lab.git(bare_remote, "rev-parse", "main") == lab.git(other, "rev-parse", "HEAD")
+
+
+def commit_guard(lab: Lab, root: Path) -> None:
+    (root / "systems").mkdir(exist_ok=True)
+    (root / "systems" / "guard.json").write_text('{"systems": {}}\n')
+    lab.commit(root, "add the guard")
+
+
+def test_is_guarded_follows_head_not_the_work_tree(lab: Lab) -> None:
+    root = lab.store("a")
+    assert not store.is_guarded(root)
+    (root / "systems").mkdir()
+    (root / "systems" / "guard.json").write_text("{}\n")
+    assert not store.is_guarded(root)
+    lab.commit(root, "add the guard")
+    assert store.is_guarded(root)
+    (root / "systems" / "guard.json").unlink()
+    assert store.is_guarded(root)
+
+
+def test_is_guarded_is_false_for_a_missing_folder_and_a_folder_inside_another_repo(
+    lab: Lab, tmp_path: Path
+) -> None:
+    outer = lab.store("outer")
+    commit_guard(lab, outer)
+    (outer / "inner").mkdir()
+    assert not store.is_guarded(tmp_path / "missing")
+    assert not store.is_guarded(outer / "inner")
+
+
+def test_sync_on_a_guarded_store_commits_but_never_pushes(lab: Lab, bare_remote: Path) -> None:
+    root = lab.store("a", bare_remote)
+    store.sync_store(root)
+    pushed = heads(lab, bare_remote)
+    commit_guard(lab, root)
+    drop_hook(root)  # an entry committed without the hook leaves its index missing
+    lab.write(root, "systems/orders-db.md", "orders-db", "the orders database")
+    lab.commit(root, "orders-db")
+
+    report = store.sync_store(root)
+
+    assert "not pushed: guarded store" in report
+    assert not any(line.startswith("pushed") for line in report)
+    assert "rebuilt systems/INDEX.md and committed" in report[0]
+    assert lab.git(root, "status", "--porcelain") == ""
+    assert "orders-db" in lab.git(root, "show", "HEAD:systems/INDEX.md")
+    assert heads(lab, bare_remote) == pushed
+    assert store.sync_store(root) == ["not pushed: guarded store"]
+
+
+def test_sync_on_a_guarded_store_without_a_remote_says_the_same(lab: Lab) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    assert store.sync_store(root) == ["not pushed: guarded store"]
+
+
+def test_sync_on_a_guarded_store_does_not_pull_either(lab: Lab, bare_remote: Path) -> None:
+    first = lab.store("a", bare_remote)
+    store.sync_store(first)
+    second = lab.clone("b")
+    lab.write(second, "user/b.md", "B", "from the other clone")
+    lab.commit(second)
+    store.sync_store(second)
+    commit_guard(lab, first)
+
+    store.sync_store(first)
+
+    assert not (first / "user/b.md").exists()
+
+
+def test_the_cli_prints_the_guarded_line(lab: Lab, capsys: pytest.CaptureFixture[str]) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    config = Path(os.environ["HOME"]) / ".config" / "coven"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(f'{{"memory_path": "{root}"}}')
+    assert cli.main(["memory", "sync"]) == 0
+    assert "not pushed: guarded store" in capsys.readouterr().out

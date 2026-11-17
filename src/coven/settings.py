@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 from coven import paths
-from coven.config import Config, config_file
+from coven.config import GUARD_REQUIRED, Config, config_file
 from coven.errors import CovenError
 
 DENY_KEY: Final = ("permissions", "deny")
@@ -90,6 +90,7 @@ class Choices:
     pm_cap: int = 2
     memory_path: Path = field(default_factory=lambda: Config().memory_path)
     memory_remote: str | None = None
+    guard: str | None = None
 
 
 def settings_file() -> Path:
@@ -263,6 +264,8 @@ def _path(key: tuple[str, ...]) -> str:
 def _validate(choices: Choices) -> None:
     if choices.pm_cap < 1:
         raise CovenError("pm_cap must be a whole number of 1 or more")
+    if choices.guard is not None and choices.guard != GUARD_REQUIRED:
+        raise CovenError(f'guard must be "{GUARD_REQUIRED}" or unset')
     remote = choices.memory_remote
     if remote is not None and (not remote.strip() or remote.startswith("-")):
         raise CovenError("memory_remote must be a repository name or URL")
@@ -301,6 +304,8 @@ def _plan_config(choices: Choices) -> list[Change]:
     ]
     if choices.memory_remote is not None:
         wanted.append(("memory_remote", choices.memory_remote))
+    if choices.guard is not None:
+        wanted.append(("guard", choices.guard))
     changes = (_want(data, file, (name,), value) for name, value in wanted)
     return [change for change in changes if change]
 

@@ -3,13 +3,13 @@
 
 Reads the hook payload on stdin (only its `cwd`) and prints
 `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": <block>}}`.
-The block holds the store path, the project key, the user index, the index of the project for
-that key and the latest handoff, in at most CAP characters. A section that does not fit is cut
+The block holds the store path, the project key, the user index, the systems index (only when
+`systems/INDEX.md` exists), the index of the project for that key and the latest handoff, in at most CAP characters. A section that does not fit is cut
 and ends in a `… N more entries in <index>` line.
 
 The store is `memory_path` of `~/.config/coven/config.json` (read as plain JSON: hooks cannot
 import `coven`), `~/coven-memory` when the file or the key is missing. Layout: `user/INDEX.md`,
-`projects/<key>/INDEX.md`, `handoffs/<key>/YYYY-MM-DD-HHMM.md`. When the project index has an
+`systems/INDEX.md`, `projects/<key>/INDEX.md`, `handoffs/<key>/YYYY-MM-DD-HHMM.md`. When the project index has an
 `origin: <url>` line that differs from this repo's `origin` remote, the block says so (two repos
 with the same folder name share a key).
 
@@ -157,16 +157,24 @@ def shares(sizes: list[int], room: int) -> list[int]:
     return out
 
 
+def store_sections(store: Path) -> list[tuple[str, list[str], Path]]:
+    """The sections of the store-wide indexes, in order: user/, then systems/ when it has one."""
+    sections: list[tuple[str, list[str], Path]] = []
+    for scope in ("user", "systems"):
+        index = store / scope / "INDEX.md"
+        lines = read_index(index)
+        title = f"{scope.capitalize()} ({scope}/)"
+        if lines is None:
+            sections.append((title, [f"(unreadable: {index})"], index))
+        elif entries(lines):
+            sections.append((title, entries(lines), index))
+    return sections
+
+
 def build_block(store: Path, cwd: Path) -> str:
     head = [line.format(store=store) for line in HEAD]
     key = hook_support.sibling("project_key").project_key(cwd)
-    sections: list[tuple[str, list[str], Path]] = []
-    user_index = store / "user" / "INDEX.md"
-    lines = read_index(user_index)
-    if lines is None:
-        sections.append(("User (user/)", [f"(unreadable: {user_index})"], user_index))
-    elif entries(lines):
-        sections.append(("User (user/)", entries(lines), user_index))
+    sections = store_sections(store)
     tail: list[str] = []
     if key:
         head.append(f"Project key: {key}")

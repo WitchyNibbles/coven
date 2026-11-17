@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from coven import settings
-from coven.config import load_config
+from coven.config import GUARD_REQUIRED, load_config
 from coven.errors import CovenError, warn
 from coven.memory import store
 from coven.settings import Choices
@@ -38,6 +38,7 @@ def _choices(args: argparse.Namespace) -> Choices:
         pm_cap=args.pm_cap if args.pm_cap is not None else current.pm_cap,
         memory_path=memory_path,
         memory_remote=args.memory_remote,
+        guard=GUARD_REQUIRED if store.is_guarded(memory_path) else None,
     )
 
 

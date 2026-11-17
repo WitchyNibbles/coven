@@ -106,8 +106,8 @@ def index_text(entries: list[Entry], origin: str | None = None) -> str:
 
 
 def _scope_dirs(root: Path) -> list[Path]:
-    """`user/` and every `projects/<key>/` that exist in the store."""
-    found = [root / "user"]
+    """`user/`, `systems/` and every `projects/<key>/` that exist in the store."""
+    found = [root / "user", root / "systems"]
     projects = root / "projects"
     if projects.is_dir():
         found += sorted(p for p in projects.iterdir() if p.is_dir())
@@ -122,7 +122,7 @@ def _read_entry_file(path: Path) -> Entry:
 
 
 def rebuild_indexes(root: Path) -> list[str]:
-    """Rewrite the INDEX.md of `user/` and every `projects/<key>/` from the entries on disk.
+    """Rewrite the INDEX.md of `user/`, `systems/` and every `projects/<key>/` from the entries on disk.
 
     An existing `origin:` header line is kept. An index with no entries and no origin line is
     removed. Returns the changed files, relative to `root` with `/` separators.

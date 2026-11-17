@@ -105,14 +105,22 @@ def test_pre_commit_refuses_pm_role(hook, repo, capsys, monkeypatch) -> None:
     monkeypatch.setenv("COVEN_SESSION_ROLE", "pm")
     assert hook.main() == 1
     err = capsys.readouterr().err
-    assert "project-manager sessions cannot commit" in err
+    assert "COVEN_SESSION_ROLE" in err
     assert not (repo.path / "user" / "INDEX.md").exists()
 
 
-@pytest.mark.parametrize("role", ["", "gm", "PM", "pm2"])
-def test_pre_commit_allows_roles_other_than_pm(hook, repo, monkeypatch, role) -> None:
+@pytest.mark.parametrize("role", ["", "x", "gm", "PM", "pm2"])
+def test_pre_commit_refuses_any_set_role(hook, repo, capsys, monkeypatch, role) -> None:
     repo.stage("user/note.md", "---\nname: n\ndescription: d\n---\n")
     monkeypatch.setenv("COVEN_SESSION_ROLE", role)
+    assert hook.main() == 1
+    assert "COVEN_SESSION_ROLE" in capsys.readouterr().err
+    assert not (repo.path / "user" / "INDEX.md").exists()
+
+
+def test_pre_commit_allows_an_unset_role(hook, repo, monkeypatch) -> None:
+    repo.stage("user/note.md", "---\nname: n\ndescription: d\n---\n")
+    monkeypatch.delenv("COVEN_SESSION_ROLE", raising=False)
     assert hook.main() == 0
 
 
@@ -122,7 +130,7 @@ def fake_proc(root: Path, chain: dict[int, tuple[int, str | None]]) -> None:
         folder = root / str(pid)
         folder.mkdir(parents=True)
         (folder / "status").write_text(f"Name:\tx\nPPid:\t{parent}\n")
-        env = b"HOME=/x\0" + (f"COVEN_SESSION_ROLE={role}\0".encode() if role else b"")
+        env = b"HOME=/x\0" + (f"COVEN_SESSION_ROLE={role}\0".encode() if role is not None else b"")
         (folder / "environ").write_bytes(env)
 
 
@@ -135,7 +143,18 @@ def test_pre_commit_refuses_when_an_ancestor_has_the_role(
     monkeypatch.setattr(hook, "PROC_ROOT", proc)
     repo.stage("user/note.md", "---\nname: n\ndescription: d\n---\n")
     assert hook.main() == 1
-    assert "project-manager sessions cannot commit" in capsys.readouterr().err
+    assert "COVEN_SESSION_ROLE" in capsys.readouterr().err
+
+
+def test_pre_commit_refuses_when_an_ancestor_has_the_role_set_to_nothing(
+    hook, repo, capsys, tmp_path, monkeypatch
+) -> None:
+    proc = tmp_path / "proc"
+    fake_proc(proc, {os.getpid(): (500, None), 500: (400, None), 400: (1, "")})
+    monkeypatch.setattr(hook, "PROC_ROOT", proc)
+    repo.stage("user/note.md", "---\nname: n\ndescription: d\n---\n")
+    assert hook.main() == 1
+    assert "COVEN_SESSION_ROLE" in capsys.readouterr().err
 
 
 def test_pre_commit_allows_ancestors_without_the_role(hook, repo, tmp_path, monkeypatch) -> None:
@@ -155,23 +174,60 @@ def test_pre_commit_refuses_a_gm_process_under_a_pm_ancestor(
     monkeypatch.setenv("COVEN_SESSION_ROLE", "gm")
     repo.stage("user/note.md", "---\nname: n\ndescription: d\n---\n")
     assert hook.main() == 1
-    assert "project-manager sessions cannot commit" in capsys.readouterr().err
+    assert "COVEN_SESSION_ROLE" in capsys.readouterr().err
 
 
-def test_pre_commit_allows_gm_processes_all_the_way_up(hook, repo, tmp_path, monkeypatch) -> None:
+def test_pre_commit_refuses_any_role_value_in_an_ancestor(
+    hook, repo, capsys, tmp_path, monkeypatch
+) -> None:
     proc = tmp_path / "proc"
-    fake_proc(proc, {os.getpid(): (500, "gm"), 500: (1, "gm")})
+    fake_proc(proc, {os.getpid(): (500, None), 500: (1, "x")})
     monkeypatch.setattr(hook, "PROC_ROOT", proc)
     repo.stage("user/note.md", "---\nname: n\ndescription: d\n---\n")
-    assert hook.main() == 0
+    assert hook.main() == 1
+    assert "COVEN_SESSION_ROLE" in capsys.readouterr().err
 
 
 def test_pm_session_walk_stops_on_loops_and_unreadable_processes(tmp_path: Path, hook) -> None:
     proc = tmp_path / "proc"
     fake_proc(proc, {10: (11, None), 11: (10, None)})
-    assert not hook.is_pm_session({}, proc, 10)
-    assert not hook.is_pm_session({}, proc, 999)
-    assert hook.is_pm_session({"COVEN_SESSION_ROLE": "pm"}, proc, 10)
+    assert not hook.has_session_role({}, proc, 10)
+    assert not hook.has_session_role({}, proc, 999)
+    assert hook.has_session_role({"COVEN_SESSION_ROLE": "pm"}, proc, 10)
+    assert hook.has_session_role({"COVEN_SESSION_ROLE": ""}, proc, 10)
+
+
+def test_pre_commit_scans_staged_approval_json_for_tokens(hook, repo, capsys) -> None:
+    token = "ghp_" + "aB3d" * 9
+    repo.stage("approvals/step-1.json", f'{{"id": "step-1", "note": "{token}"}}\n')
+    assert hook.main() == 1
+    err = capsys.readouterr().err
+    assert "approvals/step-1.json:1" in err
+    assert "GitHub token" in err
+    assert token not in err
+
+
+def test_pre_commit_allows_clean_approval_json_and_gives_approvals_no_index(hook, repo) -> None:
+    repo.stage("approvals/step-1.json", '{"id": "step-1", "systems": ["orders-db"]}\n')
+    assert hook.main() == 0
+    assert not (repo.path / "approvals" / "INDEX.md").exists()
+
+
+def test_pre_commit_indexes_systems_entries_but_not_guard_json(hook, repo) -> None:
+    repo.stage("systems/orders-db.md", "---\nname: orders-db\ndescription: orders database\n---\n")
+    repo.stage("systems/guard.json", "{}\n")
+    assert hook.main() == 0
+    assert (repo.path / "systems" / "INDEX.md").read_text() == entries.index_text(
+        [entries.Entry("orders-db.md", "orders-db", "orders database")]
+    )
+    assert "systems/INDEX.md" in repo.git("diff", "--cached", "--name-only").split()
+    assert "guard.json" not in (repo.path / "systems" / "INDEX.md").read_text()
+
+
+def test_installed_hook_is_newer_than_the_two_that_ignored_non_pm_roles() -> None:
+    from coven.memory import store
+
+    assert (store.hook_version(HOOK.read_text()) or 0) >= 3
 
 
 def test_staged_clean_entry_commits_although_the_worktree_now_holds_a_token(hook, repo) -> None:

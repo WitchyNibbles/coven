@@ -29,8 +29,18 @@ def entries(prefix: str, count: int) -> str:
     )
 
 
-def make_store(tmp_path: Path, *, user: str = "", project: str = "", key: str = "app") -> Path:
+def make_store(
+    tmp_path: Path,
+    *,
+    user: str = "",
+    project: str = "",
+    key: str = "app",
+    systems: str | None = None,
+) -> Path:
     store = tmp_path / "store"
+    if systems is not None:
+        (store / "systems").mkdir(parents=True)
+        (store / "systems" / "INDEX.md").write_text(systems)
     (store / "user").mkdir(parents=True)
     (store / "user" / "INDEX.md").write_text(user)
     (store / "projects" / key).mkdir(parents=True)
@@ -249,3 +259,64 @@ def test_broken_config_exits_0_silently_and_logs(run_hook: Run, tmp_path: Path) 
     done = run_hook(HOOK, {"cwd": str(tmp_path)})
     assert (done.returncode, done.stdout) == (0, "")
     assert (home(tmp_path) / ".cache" / "coven" / "logs" / "memory-context.jsonl").is_file()
+
+
+def test_systems_index_comes_after_the_user_index_and_before_the_project_one(
+    run_hook: Run, tmp_path: Path
+) -> None:
+    make_store(
+        tmp_path,
+        user="- [likes tea](a.md): tea\n",
+        project="- [uses uv](b.md): uv\n",
+        systems="- [orders-db](orders-db.md): the orders database\n",
+    )
+    text = block(run_hook, make_repo(tmp_path))
+    assert "## Systems (systems/)" in text
+    positions = [
+        text.index(marker)
+        for marker in ("## User", "## Systems", "## Project app", "orders-db](orders-db.md)")
+    ]
+    assert positions[0] < positions[1] < positions[3] < positions[2]
+
+
+def test_without_a_systems_index_the_block_has_no_systems_section(
+    run_hook: Run, tmp_path: Path
+) -> None:
+    make_store(tmp_path, user="- [a](a.md): a\n", project="- [p](p.md): p\n")
+    assert "Systems" not in block(run_hook, make_repo(tmp_path))
+
+
+def test_systems_share_the_8000_character_budget(run_hook: Run, tmp_path: Path) -> None:
+    make_store(
+        tmp_path,
+        user=entries("user", 150),
+        project=entries("project", 150),
+        systems=entries("system", 150),
+    )
+    text = block(run_hook, make_repo(tmp_path))
+    assert 7000 < len(text) <= 8000
+    assert "## Systems" in text
+    assert "system 0]" in text
+    assert "system 149]" not in text
+
+
+def test_a_small_systems_index_keeps_all_its_entries_when_the_others_are_huge(
+    run_hook: Run, tmp_path: Path
+) -> None:
+    make_store(
+        tmp_path,
+        user=entries("user", 300),
+        project=entries("project", 300),
+        systems=entries("system", 3),
+    )
+    text = block(run_hook, make_repo(tmp_path))
+    assert all(f"system {n}]" in text for n in range(3))
+
+
+def test_an_unreadable_systems_index_is_a_section_not_a_failure(
+    run_hook: Run, tmp_path: Path
+) -> None:
+    store = make_store(tmp_path, user="- [a](a.md): a\n", systems="")
+    (store / "systems" / "INDEX.md").write_bytes(b"\xff\xfe\n")
+    text = block(run_hook, make_repo(tmp_path))
+    assert f"(unreadable: {store / 'systems' / 'INDEX.md'})" in text

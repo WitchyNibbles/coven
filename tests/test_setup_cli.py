@@ -479,3 +479,80 @@ def test_a_no_checkout_clone_is_refused_before_any_write(
     assert not settings_file().exists()
     assert not config.config_file().exists()
     assert not (paths.config_dir() / "owned.json").exists()
+
+
+def guarded_store(path: Path, *, committed: bool = True) -> Path:
+    """A coven-shaped store whose first commit holds `systems/guard.json` (made with plain git, so
+    no store hook runs), or whose guard file is only in the work tree."""
+    path.mkdir()
+    git("init", "-q", "-b", "main", cwd=path)
+    git("config", "user.name", "Test", cwd=path)
+    git("config", "user.email", "test@example.com", cwd=path)
+    (path / ".gitattributes").write_text("INDEX.md merge=union\n")
+    (path / "systems").mkdir()
+    (path / "systems" / ".gitkeep").touch()
+    git("add", "-A", cwd=path)
+    git("commit", "-q", "-m", "init", cwd=path)
+    (path / "systems" / "guard.json").write_text('{"systems": {}}\n')
+    if committed:
+        git("add", "-A", cwd=path)
+        git("commit", "-q", "-m", "guard", cwd=path)
+    return path
+
+
+def read_config() -> dict[str, object]:
+    loaded = json.loads(config.config_file().read_text())
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def test_a_committed_guard_file_is_shown_and_applied_as_an_owned_guard_change(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    root = guarded_store(tmp_path / "guarded")
+
+    assert run_setup("--dry-run", "--memory-path", str(root)) == 0
+    assert 'guard: (missing) -> "required"' in capsys.readouterr().out
+    assert not config.config_file().exists()
+
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+    assert config.load_config().guard == "required"
+    assert run_setup("--dry-run", "--memory-path", str(root)) == 0
+    assert "nothing to change" in capsys.readouterr().out
+
+
+def test_undo_restores_the_guard_value_from_before_setup(tmp_path: Path):
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"guard": null}')
+    root = guarded_store(tmp_path / "guarded")
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+    assert read_config()["guard"] == "required"
+
+    assert run_setup("--undo", "--yes") == 0
+
+    assert read_config() == {"guard": None}
+
+
+def test_undo_drops_a_guard_key_setup_added(tmp_path: Path):
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"pm_cap": 2}')
+    root = guarded_store(tmp_path / "guarded")
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+
+    assert run_setup("--undo", "--yes") == 0
+
+    assert read_config() == {"pm_cap": 2}
+
+
+def test_a_guard_file_that_is_not_committed_sets_no_latch(tmp_path: Path):
+    root = guarded_store(tmp_path / "unstaged", committed=False)
+
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+
+    assert "guard" not in read_config()
+
+
+def test_a_store_without_a_guard_file_sets_no_latch(store: Path):
+    assert run_setup("--yes", "--memory-path", str(store)) == 0
+
+    assert "guard" not in read_config()

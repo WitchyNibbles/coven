@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import stat
@@ -54,6 +55,10 @@ def choices(
     )
 
 
+def guarded(guard: str | None = "required") -> Choices:
+    return dataclasses.replace(choices(), guard=guard)
+
+
 def settings_change(wanted: Choices) -> settings.Change:
     (change,) = (c for c in settings.plan(wanted) if c.file == settings_file())
     return change
@@ -83,6 +88,42 @@ def test_apply_writes_config_keys():
     assert loaded.memory_path == Path("/store")
     assert loaded.memory_remote == "git@example.com:a/b.git"
     assert stat.S_IMODE(config.config_file().stat().st_mode) == 0o600
+
+
+def test_guard_required_is_planned_applied_and_undone_with_its_previous_value():
+    config.save_config(config.Config(memory_path=Path("/store"), guard=None))
+    assert not config.load_config().guard
+    settings.apply(settings.plan(guarded()))
+    assert config.load_config().guard == "required"
+    assert settings.plan(guarded()) == []
+
+    settings.undo()
+
+    assert read_json(config.config_file())["guard"] is None
+
+
+def test_guard_undo_restores_a_guard_key_that_was_absent():
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"pm_cap": 3}', encoding="utf-8")
+    settings.apply(settings.plan(dataclasses.replace(choices(pm_cap=3), guard="required")))
+
+    settings.undo()
+
+    assert read_json(config.config_file()) == {"pm_cap": 3}
+
+
+def test_no_guard_choice_plans_no_guard_change():
+    assert all(c.key != ("guard",) for c in settings.plan(choices()))
+
+
+def test_describe_shows_the_guard_change():
+    change = next(c for c in settings.plan(guarded()) if c.key == ("guard",))
+    assert settings.describe(change).endswith('guard: (missing) -> "required"')
+
+
+def test_guard_other_than_required_is_refused():
+    with pytest.raises(CovenError, match="guard"):
+        settings.plan(guarded("optional"))
 
 
 def test_settings_with_comment_stops_with_parse_error():

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# coven-hook-version: 2
+# coven-hook-version: 3
 """Pre-commit hook of the coven memory store: refuse token patterns, regenerate INDEX.md files.
 
 `coven memory init` copies this file to `<store>/.git/hooks/pre-commit`; git runs it in the store's
@@ -9,11 +9,12 @@ copy of `src/coven/memory/entries.py`; a test keeps the two producing the same t
 version line above whenever this file changes: `coven memory sync` refuses to push from a store
 whose installed hook is older than the one shipped.
 
-The hook refuses a commit when COVEN_SESSION_ROLE is exactly `pm` in this process or in any
-ancestor (other values do not count and the walk goes on past them): project-manager sessions send
-facts to the general manager instead. It refuses staged
-text that looks like a token. Then it rebuilds every INDEX.md from the staged entries, so unstaged
-files never reach a committed index. It is a security gate: any internal error refuses the commit.
+The hook refuses a commit when COVEN_SESSION_ROLE is set, to any value (the empty string too), in
+this process or in any ancestor: project-manager sessions send facts to the general manager
+instead, and only a session with the variable unset commits. It refuses staged text that looks
+like a token, in every staged file (approvals/*.json included). Then it rebuilds every INDEX.md
+(user/, systems/ and each projects/<key>/) from the staged entries, so unstaged files never reach
+a committed index. It is a security gate: any internal error refuses the commit.
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ PATTERNS = (
     ("private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
 )
 ROLE_VAR = "COVEN_SESSION_ROLE"
-PM_ROLE = "pm"
 INIT_PID = 1
 # Read at call time, so a test can point the ancestor walk at a fake /proc.
 PROC_ROOT = Path("/proc")
@@ -70,24 +70,24 @@ class Entry(NamedTuple):
     description: str | None
 
 
-def is_pm_session(
+def has_session_role(
     environ: Mapping[str, str], proc_root: Path | None = None, pid: int | None = None
 ) -> bool:
-    """Whether this process or any ancestor has `COVEN_SESSION_ROLE=pm`.
+    """Whether this process or any ancestor has `COVEN_SESSION_ROLE` set, to any value.
 
     A session can clear or change the variable in its own environment, so the walk also reads the
     environments of the processes above it, which it cannot change. It goes on past a process
-    with another value. It stops at pid 1, at a process it cannot read and when a parent chain
+    without the variable. It stops at pid 1, at a process it cannot read and when a parent chain
     loops; none of those count as a role.
     """
-    if environ.get(ROLE_VAR) == PM_ROLE:
+    if ROLE_VAR in environ:
         return True
     root = PROC_ROOT if proc_root is None else proc_root
     current = os.getpid() if pid is None else pid
     seen: set[int] = set()
     while current > INIT_PID and current not in seen:
         seen.add(current)
-        if _process_role(root, current) == PM_ROLE:
+        if _process_role(root, current) is not None:
             return True
         parent = _parent_pid(root, current)
         if parent is None:
@@ -220,12 +220,12 @@ def store_top() -> Path:
 
 
 def session_refusal() -> str | None:
-    """Why this session may not commit (`pm` here or in an ancestor), or None."""
-    if not is_pm_session(os.environ):
+    """Why this session may not commit (a role is set here or in an ancestor), or None."""
+    if not has_session_role(os.environ):
         return None
     return (
-        f"coven memory: commit refused: project-manager sessions cannot commit to {store_top()}; "
-        "send the fact to the general manager"
+        f"coven memory: commit refused: a session with {ROLE_VAR} set (project managers included) "
+        f"cannot commit to {store_top()}; send the fact to the general manager"
     )
 
 
@@ -240,12 +240,12 @@ def scan(text: str) -> list[tuple[int, str]]:
 
 
 def scopes(paths: list[str]) -> dict[str, list[str]]:
-    """Scope folder -> sorted entry file names, for user/ and every projects/<key>/ in paths."""
+    """Scope folder -> sorted entry file names, for user/, systems/ and every projects/<key>/."""
     found: dict[str, list[str]] = {}
     for path in paths:
         parts = path.split("/")
-        if parts[0] == "user" and len(parts) == 2:
-            scope, file = "user", parts[1]
+        if parts[0] in ("user", "systems") and len(parts) == 2:
+            scope, file = parts[0], parts[1]
         elif parts[0] == "projects" and len(parts) == 3:
             scope, file = f"projects/{parts[1]}", parts[2]
         else:

@@ -21,6 +21,8 @@ HOOK_VERSION_LINE = re.compile(r"^# coven-hook-version: (\d+)[ \t]*$", re.MULTIL
 ATTRIBUTES = ".gitattributes"
 UNION_LINE = "INDEX.md merge=union"
 LAYOUT = ("user", "projects", "handoffs")
+GUARD_FILE = "systems/guard.json"
+NOT_PUSHED_GUARDED = "not pushed: guarded store"
 BRANCH = "main"
 RELATIVE_HOOKS = ".git/hooks"
 GIT_TIMEOUT = 60  # seconds per git command
@@ -67,6 +69,16 @@ def is_store(path: Path) -> bool:
     except (OSError, UnicodeDecodeError):
         return False
     return (path / ".git").exists() and UNION_LINE in lines
+
+
+def is_guarded(path: Path) -> bool:
+    """Whether the store's HEAD commit holds `systems/guard.json` (the work tree does not count).
+
+    False for a folder that is not itself a git repo: git would otherwise look at a repo above it.
+    """
+    if not (path / ".git").exists():
+        return False
+    return _git(path, "cat-file", "-e", f"HEAD:{GUARD_FILE}", check=False).returncode == 0
 
 
 def pause() -> None:
@@ -324,6 +336,9 @@ def _push(path: Path, upstream: str | None) -> list[str]:
 def sync_store(path: Path) -> list[str]:
     """Fetch, rebase onto the upstream, rebuild the indexes, push; the report lines.
 
+    A guarded store (HEAD holds `systems/guard.json`) only rebuilds its indexes and reports
+    `not pushed: guarded store`.
+
     On a rebase conflict the rebase is aborted and `CovenError` lists the files and the resolve
     command. A push is refused when the store's pre-commit hook is missing or older than coven's.
     """
@@ -333,6 +348,9 @@ def sync_store(path: Path) -> list[str]:
         )
     _require_clean(path)
     report: list[str] = []
+    if is_guarded(path):
+        # A guarded store stays on this machine: no fetch, no rebase onto remote history, no push.
+        return [*_rebuild_indexes(path), NOT_PUSHED_GUARDED]
     has_remote = _git(path, "remote", "get-url", "origin", check=False).returncode == 0
     upstream = None
     if has_remote:
