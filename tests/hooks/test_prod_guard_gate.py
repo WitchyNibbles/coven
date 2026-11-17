@@ -5,9 +5,11 @@ to prod_guard, which decides exactly as it does when run directly."""
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -203,3 +205,106 @@ def test_an_off_guard_never_looks_for_prod_guard(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(guard_config, "guard_is_off", lambda: True)
     monkeypatch.setitem(sys.modules, "prod_guard", None)  # importing it would raise
     assert gate.main() == 0
+
+
+# --- a config read that hangs must not outlast the gate's own deadline ---
+
+# The hooks.json timeout is 30 s and a timed-out hook lets the call through: the gate's own
+# deadline (2 s) plus the guard's (20 s) must stay under it.
+HOOK_TIMEOUT = 30.0
+
+
+def make_config_a_fifo() -> None:
+    """A config file nobody writes to: opening it for reading blocks for ever."""
+    file = home() / ".config" / "coven" / "config.json"
+    file.parent.mkdir(parents=True)
+    os.mkfifo(file)
+
+
+@pytest.mark.parametrize("role", [None, "pm"], ids=["unrestricted", "restricted"])
+def test_a_config_read_that_hangs_ends_in_a_refusal_before_the_hook_timeout(
+    role: str | None,
+) -> None:
+    make_config_a_fifo()
+    env = {**os.environ, **({} if role is None else {ROLE: role})}
+    started = time.monotonic()
+    done = subprocess.run(
+        [sys.executable, "-I", str(GATE)],
+        input=json.dumps(bash("ls")),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=HOOK_TIMEOUT + 10,
+    )
+    assert done.returncode == 2, done.stderr
+    assert "took too long" in done.stderr
+    assert time.monotonic() - started < HOOK_TIMEOUT - 5
+
+
+@pytest.fixture
+def alarm_state() -> Iterator[object]:
+    """What the test found: SIGALRM's handler and timer, put back afterwards."""
+    handler = signal.getsignal(signal.SIGALRM)
+    yield handler
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, handler)
+
+
+def test_the_off_path_leaves_no_timer_and_the_old_handler(
+    monkeypatch: pytest.MonkeyPatch, alarm_state: object
+) -> None:
+    gate = load_gate()
+    import guard_config
+
+    monkeypatch.setattr(guard_config, "guard_is_off", lambda: True)
+    assert gate.main() == 0
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    assert signal.getsignal(signal.SIGALRM) is alarm_state
+
+
+def test_the_guard_starts_with_no_timer_and_the_old_handler(
+    monkeypatch: pytest.MonkeyPatch, alarm_state: object
+) -> None:
+    gate = load_gate()
+    import guard_config
+
+    seen: list[object] = []
+
+    class Guard:
+        @staticmethod
+        def cli() -> int:
+            seen.extend([signal.getitimer(signal.ITIMER_REAL), signal.getsignal(signal.SIGALRM)])
+            return 7
+
+    monkeypatch.setattr(guard_config, "guard_is_off", lambda: False)
+    monkeypatch.setitem(sys.modules, "prod_guard", Guard)
+    assert gate.main() == 7
+    assert seen == [(0.0, 0.0), alarm_state]
+
+
+def test_a_check_past_the_gate_deadline_hands_over_with_the_timer_cleared(
+    monkeypatch: pytest.MonkeyPatch, alarm_state: object
+) -> None:
+    gate = load_gate()
+    import guard_config
+
+    seen: list[object] = []
+
+    class Guard:
+        @staticmethod
+        def cli() -> int:
+            seen.extend([signal.getitimer(signal.ITIMER_REAL), signal.getsignal(signal.SIGALRM)])
+            return 7
+
+    def hangs() -> bool:
+        time.sleep(30)
+        return True
+
+    monkeypatch.setattr(gate, "GATE_DEADLINE", 0.05)
+    monkeypatch.setattr(guard_config, "guard_is_off", hangs)
+    monkeypatch.setitem(sys.modules, "prod_guard", Guard)
+    started = time.monotonic()
+    assert gate.main() == 7
+    assert time.monotonic() - started < 10
+    assert seen == [(0.0, 0.0), alarm_state]
