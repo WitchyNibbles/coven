@@ -98,7 +98,7 @@ def _command_text(args: argparse.Namespace) -> str | None:
 def _cwd(args: argparse.Namespace) -> str:
     if args.cwd is None:
         return os.getcwd()
-    folder = os.path.abspath(args.cwd)
+    folder: str = os.path.abspath(args.cwd)
     if not os.path.isdir(folder):
         raise CovenError(f"--cwd {args.cwd} is not a folder")
     return folder
