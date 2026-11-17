@@ -21,10 +21,13 @@ Who it restricts. The target rule applies to every session. A session whose COVE
 set to any value, an empty or unknown one included, is also restricted: only an unset variable is
 unrestricted. A subagent's call is judged like its session's. A restricted session meets the rules
 in RESTRICTED_RULES first, and no approval lifts one. It may not:
-- write the memory store or coven's config file (`~/.config/coven/config.json`, the one the hook
-  reads): Write, Edit, MultiEdit and NotebookEdit under either path, any MCP input that names one,
-  and any Bash command that runs in it or whose text reaches it, by name, by a path that resolves
-  into it (`~`, `$HOME`, symlinks) or by a glob that can match it. Read, Grep and Glob stay allowed;
+- write the memory store, coven's config file (`~/.config/coven/config.json`, the one the hook
+  reads), Claude Code's settings (`settings.json` and `settings.local.json` in CLAUDE_CONFIG_DIR or
+  `~/.claude`, and in any folder's `.claude/`) or its `plugins/` folder: Write, Edit, MultiEdit and
+  NotebookEdit under any of them, any MCP input that names one, and any Bash command that runs in
+  one or whose text reaches it, by name, by a path that resolves into it (`~`, `$HOME`, symlinks),
+  by a glob that can match it, or, after a `cd`, `env -C`, `git -C` or `find` in its holding folder,
+  by its plain name. Read, Grep and Glob stay allowed;
 - change COVEN_SESSION_ROLE (the lone `printenv COVEN_SESSION_ROLE` self-check stays allowed);
 - start `claude` (`claude --version` and `claude -v` alone excepted) or run its package;
 - run `coven approve`, `coven setup`, `coven memory adopt|init|sync`, or `coven` with a
@@ -56,6 +59,10 @@ never its code text.
 Code text. `shell_words.code_text` blanks data only where the command runs nothing it is given (a
 commit message, a grep pattern, quoted echo text); a shell, an interpreter, `$(...)`, backticks or
 anything the scanner cannot follow is read whole.
+
+Known limits of the restricted rules: a path built from strings or variables
+(`python3 -c "...'~/cov'+'en-memory'"`, `d=coven-mem; ... ~/${d}ory`) and a write into a folder that
+holds a zone (`rsync -a x/ ~/`, `tar -C ~ -xf`, `cp -r x/coven ~/.config/`) are not read.
 
 Limits. The whole check has a deadline of DEADLINE seconds and each git call a timeout; past either,
 the call is refused. The guard is best effort against a session that follows its role: its rules are
@@ -292,6 +299,11 @@ COMMAND_BLANKS = frozenset(" \t\n")  # in a word in command position: a command 
 STORE_ENTRIES = (".git", "systems", "approvals", "projects", "user", "handoffs")
 # What sits in coven's config folder: a `*` before one of these after a cd can reach into it.
 CONFIG_ENTRIES = ("config.json", "owned.json")
+# Claude Code's folder, the settings files it reads there and in every project, and its plugins.
+CLAUDE_FOLDER = ".claude"
+SETTINGS_FILES = ("settings.json", "settings.local.json")
+PLUGINS_FOLDER = "plugins"
+PLUGIN_ENTRIES = ("cache", "marketplaces", "data", "installed_plugins.json")
 # Fields whose value is a path in the built-in edit tools.
 PATH_KEYS = frozenset({"file_path", "notebook_path", "path"})
 
@@ -1862,17 +1874,18 @@ def _host_problem(command: str, depth: int = 0) -> _HostProblem | None:
 class _Zone(NamedTuple):
     """A place a restricted session may not write: what a Bash or MCP text can name it by."""
 
-    root: Path
+    roots: tuple[Path, ...]  # the folders and files it is
     label: str  # how the refusal names it
     tokens: frozenset[str]  # names that count wherever they are a whole token in a text
-    globs: frozenset[str]  # names a relative glob component may stand for after a `cd`
+    globs: frozenset[str]  # names a relative component may stand for after a `cd`
     entries: tuple[str, ...]  # what sits at its top: a bare `*` before one can reach in
-    parent: str | None = None  # the folder holding it, when a glob needs that named too
+    parents: tuple[str, ...] = ()  # the folders that may hold it: a name counts when one is named
+    suffixes: tuple[tuple[str, ...], ...] = ()  # paths in any folder that end in these parts
 
 
 def _store_zone(store: Path) -> _Zone:
     names = frozenset({store.name, os.path.basename(os.path.realpath(store))})
-    return _Zone(store, f"the memory store ({store})", names, names, STORE_ENTRIES)
+    return _Zone((store,), f"the memory store ({store})", names, names, STORE_ENTRIES)
 
 
 def _config_zone() -> _Zone:
@@ -1880,13 +1893,51 @@ def _config_zone() -> _Zone:
     folder = config_file().parent
     token = f"{folder.parent.name}/{folder.name}"
     return _Zone(
-        folder,
+        (folder,),
         f"coven's config ({config_file()})",
         frozenset({token}),
         frozenset({folder.name}),
         CONFIG_ENTRIES,
-        folder.parent.name,
+        (folder.parent.name,),
     )
+
+
+def claude_dir() -> Path:
+    """Claude Code's user folder: CLAUDE_CONFIG_DIR, or `~/.claude`."""
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(os.path.abspath(configured)) if configured else Path.home() / CLAUDE_FOLDER
+
+
+def _settings_zone() -> _Zone:
+    """Claude Code's settings files, the user's and any project's: they register the hooks."""
+    folder = claude_dir()
+    return _Zone(
+        tuple(folder / name for name in SETTINGS_FILES),
+        "Claude Code's settings files",
+        frozenset(f"{CLAUDE_FOLDER}/{name}" for name in SETTINGS_FILES),
+        frozenset(SETTINGS_FILES),
+        (),
+        (CLAUDE_FOLDER, folder.name),
+        tuple((CLAUDE_FOLDER, name) for name in SETTINGS_FILES),
+    )
+
+
+def _plugins_zone() -> _Zone:
+    """Claude Code's plugins folder: it holds the installed hooks themselves."""
+    folder = claude_dir()
+    return _Zone(
+        (folder / PLUGINS_FOLDER,),
+        f"Claude Code's plugins folder ({folder / PLUGINS_FOLDER})",
+        frozenset({f"{CLAUDE_FOLDER}/{PLUGINS_FOLDER}"}),
+        frozenset({PLUGINS_FOLDER}),
+        PLUGIN_ENTRIES,
+        (CLAUDE_FOLDER, folder.name),
+    )
+
+
+def _zones(store: Path) -> tuple[_Zone, ...]:
+    """The places a restricted session may not write, in the order a refusal names them."""
+    return (_store_zone(store), _config_zone(), _settings_zone(), _plugins_zone())
 
 
 def _glob_reaches(word: str, cwd: str, roots: Sequence[tuple[str, ...]]) -> bool:
@@ -1914,7 +1965,7 @@ def _matches_any(names: Iterable[str], part: str) -> bool:
 def _part_names_zone(
     parts: Sequence[str], index: int, zone: _Zone, *, in_body: bool, parent_named: bool
 ) -> bool:
-    """Whether glob component `index` can be the zone's own folder. A bare `*` can be any
+    """Whether component `index` can be the zone's own folder. A bare `*` can be any
     directory, so it counts only when the next component can be one of its entries
     (`*/.git/HEAD`, `*/systems/...`), not for `rm -rf *`, `*/node_modules` or `*/*.py`. In a
     heredoc body a component with no literal character (`[a-z]*`, `?*`) is as loose as a bare `*`
@@ -1929,20 +1980,25 @@ def _part_names_zone(
 
 
 def _names_parent(words: Iterable[str], zone: _Zone) -> bool:
-    """Whether some word of the text can name the folder that holds the zone (`~/.config`)."""
-    if zone.parent is None:
-        return True
+    """Whether some word of the text can name a folder that holds the zone (`~/.config`)."""
     return any(
-        fnmatch.fnmatchcase(zone.parent, part) for word in words for part in word.split("/") if part
+        fnmatch.fnmatchcase(parent, part)
+        for word in words
+        for part in word.split("/")
+        if part
+        for parent in zone.parents
     )
 
 
 def _relative_glob_names_zone(words: Sequence[str], zone: _Zone, *, in_body: bool = False) -> bool:
-    """A relative glob with a component that can be the zone's own folder: after a `cd` the
-    session cwd no longer tells where a relative path points."""
-    parent_named = _names_parent(words, zone)
+    """A relative glob, or for a zone with a holding folder a plain name, with a component that
+    can be the zone's own folder: after a `cd` (or `env -C`, `git -C`, `find`) the session cwd no
+    longer tells where a relative path points."""
+    parent_named = not zone.parents or _names_parent(words, zone)
     for word in words:
-        if word.startswith(("/", "~", "$")) or not GLOB_CHARS.intersection(word):
+        if word.startswith(("/", "~", "$")):
+            continue
+        if not zone.parents and not GLOB_CHARS.intersection(word):
             continue
         parts = [part for part in word.split("/") if part not in ("", ".", "..")]
         if any(
@@ -2032,10 +2088,14 @@ def _text_reaches(text: str, cwd: str, zone: _Zone, *, cwd_known: bool) -> bool:
     therefore blocks ordinary commands: doctor warns about it."""
     if _names_token(text, zone.tokens) or _names_token(_unquoted(text), zone.tokens):
         return True
-    real = os.path.realpath(zone.root)
-    roots = (zone.root.parts, Path(real).parts)
+    reals = [os.path.realpath(root) for root in zone.roots]
+    roots = (*(root.parts for root in zone.roots), *(Path(real).parts for real in reals))
     words = _words_of(text)
-    cwd_moves = not cwd_known or bool(CHANGE_DIR.intersection(words))
+    cwd_moves = (
+        not cwd_known
+        or bool(CHANGE_DIR.intersection(words))
+        or bool(zone.parents and _names_parent(words, zone))
+    )
     if cwd_moves and (
         _bash_glob_names_zone(text, zone) if cwd_known else _relative_glob_names_zone(words, zone)
     ):
@@ -2043,21 +2103,32 @@ def _text_reaches(text: str, cwd: str, zone: _Zone, *, cwd_known: bool) -> bool:
     for word in words:
         if GLOB_CHARS.intersection(word) and _glob_reaches(word, cwd, roots):
             return True
-        if _inside(_resolve(word, cwd), real):
+        if _in_zone(_resolve(word, cwd), zone):
             return True
     return False
 
 
+def _in_zone(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved path is one of the zone's roots, inside one, or ends in its suffixes."""
+    if path is None:
+        return False
+    if any(_inside(path, os.path.realpath(root)) for root in zone.roots):
+        return True
+    parts = Path(path).parts
+    return any(parts[-len(suffix) :] == suffix for suffix in zone.suffixes)
+
+
 def _bash_touches(call: Call, zone: _Zone) -> bool:
     """A command run in the zone, or whose text reaches it."""
-    if _inside(os.path.realpath(call.cwd), os.path.realpath(zone.root)):
+    cwd = os.path.realpath(call.cwd)
+    if any(_inside(cwd, os.path.realpath(root)) for root in zone.roots):
         return True
     return _text_reaches(_bash(call).code, call.cwd, zone, cwd_known=True)
 
 
 def _is_zone_path(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether `text`, trimmed, is a path in the zone (a path may hold spaces)."""
-    return _inside(_resolve(text.strip(), cwd), os.path.realpath(zone.root))
+    return _in_zone(_resolve(text.strip(), cwd), zone)
 
 
 def _string_reaches(text: str, cwd: str, zone: _Zone) -> bool:
@@ -2296,14 +2367,13 @@ def _store_writer_rule(call: Call, _store: Path, role: str, _now: datetime) -> s
     )
 
 
-def _store_rule(call: Call, store: Path, role: str, _now: datetime) -> str | None:
-    zone = _store_zone(store)
-    return _zone_refusal(zone, role) if _bash_touches(call, zone) else None
-
-
-def _config_rule(call: Call, _store: Path, role: str, _now: datetime) -> str | None:
-    zone = _config_zone()
-    return _zone_refusal(zone, role) if _bash_touches(call, zone) else None
+def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> str | None:
+    """A Bash command that runs in, or whose text reaches, a place a restricted session may not
+    write."""
+    for zone in _zones(store):
+        if _bash_touches(call, zone):
+            return _zone_refusal(zone, role)
+    return None
 
 
 # A restricted session's Bash checks, in order: the first refusal wins. New checks are new rules.
@@ -2313,8 +2383,7 @@ BASH_RULES: tuple[Rule, ...] = (
     _start_claude_rule,
     _remote_host_rule,
     _store_writer_rule,
-    _store_rule,
-    _config_rule,
+    _zone_rule,
 )
 
 
@@ -2331,10 +2400,10 @@ def _bash_refusal(call: Call, store: Path, role: str, now: datetime) -> str | No
 
 def _tool_refusal(call: Call, store: Path, role: str, _now: datetime) -> str | None:
     """Why a restricted session may not make this non-Bash call: it writes or reaches the memory
-    store or coven's config."""
+    store, coven's config, or Claude Code's settings and plugins."""
     if call.bash is not None:
         return None
-    for zone in (_store_zone(store), _config_zone()):
+    for zone in _zones(store):
         if _tool_writes(call, zone):
             return _zone_refusal(zone, role)
     return None

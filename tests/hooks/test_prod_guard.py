@@ -1545,7 +1545,11 @@ def test_the_dangerous_twin_is_refused(
     if role is None:
         assert "is production" in proc.stderr or "is gated" in proc.stderr
     else:  # a restricted rule may speak first: a shell run on text whose host is not written out
-        assert proc.stderr.startswith(PREFIX)
+        assert (
+            "is production" in proc.stderr
+            or "is gated" in proc.stderr
+            or HOST_REFUSAL in proc.stderr
+        )
 
 
 def test_an_approval_still_matches_the_whole_command(run: Run, store: Path) -> None:
@@ -1799,7 +1803,7 @@ def pm_write_calls(store):
         },
         {"tool_name": "mcp__fs__write", "tool_input": {"to": f"  {approvals}/a.json\n"}},
         {
-            "tool_name": "mcp__slack__send",
+            "tool_name": "mcp__chat__send",
             "tool_input": {"text": f"{store}/systems/billing-api.md needs an update"},
         },
         {
@@ -1824,7 +1828,7 @@ def pm_write_calls(store):
         },
         {"tool_name": "mcp__x__y", "tool_input": {"a": {"b": "/tmp/c"}, "z": f"{store}\u0000"}},
         {
-            "tool_name": "mcp__slack__send",
+            "tool_name": "mcp__chat__send",
             "tool_input": {"text": f"Please update {store}/systems/billing-api.md today"},
         },
         {
@@ -3133,7 +3137,7 @@ BODY_REGEXES = {
 }
 
 
-def heredoc(command, body):
+def heredoc(command: str, body: str) -> str:
     return f"{command} <<'EOF'\nimport re\n{body}\nEOF"
 
 
@@ -3386,6 +3390,7 @@ def test_an_mcp_string_with_a_regex_is_read_as_it_was(
     payload = {"tool_name": "mcp__shell__exec", "tool_input": {"command": text}}
     proc = run(payload, role="pm")
     assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
 
 
 UNTOLD_MESSAGE = (
@@ -3756,6 +3761,14 @@ def config_calls() -> list[Payload]:
             "tool_name": "mcp__shell__exec",
             "tool_input": {"cwd": "~/.config", "command": "rm co*/config.json"},
         },
+        # The folder named without a glob, from a parent: the literal name is no safer than `co*`.
+        bash('cd ~/.config && echo \'{"memory_path":"/tmp/nowhere"}\' > coven/config.json'),
+        bash("cd ~/.config && rm -rf coven"),
+        bash("pushd ~/.config; echo '{}' > coven/config.json"),
+        bash("cd ~/.config; cd coven; echo {} > config.json"),
+        bash("env -C ~/.config rm -rf coven"),
+        bash("git -C ~/.config rm -r coven"),
+        bash("find ~/.config -name coven -exec rm -rf {} +"),
     ]
 
 
@@ -3796,6 +3809,13 @@ CONFIG_IDS = [
     "env-c",
     "git-c",
     "mcp-own-cwd",
+    "cd-parent-then-literal-folder-file",
+    "cd-parent-then-rm-folder",
+    "pushd-parent-then-literal-folder-file",
+    "cd-parent-cd-folder-then-file",
+    "env-c-parent-rm-folder",
+    "git-c-parent-rm-folder",
+    "find-parent-exec-rm",
 ]
 
 
@@ -3887,6 +3907,157 @@ def test_coven_config_is_guarded_with_no_config_file_too(run: Run, tmp_path: Pat
     assert CONFIG_REFUSAL in proc.stderr
 
 
+# --- Claude Code's own settings and plugins: a restricted session cannot switch the hooks off ---
+
+SETTINGS_REFUSAL = f"{PREFIX} a 'pm' session cannot write to Claude Code's settings"
+PLUGINS_REFUSAL = f"{PREFIX} a 'pm' session cannot write to Claude Code's plugins folder"
+
+
+def claude_dir() -> Path:
+    return Path(os.environ["CLAUDE_CONFIG_DIR"])
+
+
+def claude_calls(repo: Path, folder: Path) -> dict[str, tuple[Payload, str]]:
+    """Calls that change Claude Code's settings or plugins, each with the refusal it must meet."""
+    settings, local = folder / "settings.json", folder / "settings.local.json"
+    project = repo / ".claude" / "settings.local.json"
+    return {
+        "redirect-tilde": (
+            bash("echo '{\"disableAllHooks\":true}' > ~/.claude/settings.json"),
+            SETTINGS_REFUSAL,
+        ),
+        "write": (tool("Write", file_path=str(settings), content="{}"), SETTINGS_REFUSAL),
+        "edit-local": (
+            tool("Edit", file_path=str(local), old_string="a", new_string="b"),
+            SETTINGS_REFUSAL,
+        ),
+        "notebook-edit": (tool("NotebookEdit", notebook_path=str(settings)), SETTINGS_REFUSAL),
+        "mcp-path": (
+            {"tool_name": "mcp__fs__write", "tool_input": {"args": {"path": str(local)}}},
+            SETTINGS_REFUSAL,
+        ),
+        "write-project-local": (
+            tool("Write", file_path=str(project), content="{}"),
+            SETTINGS_REFUSAL,
+        ),
+        "write-project-relative": (
+            {**tool("Write", file_path=".claude/settings.json"), "cwd": str(repo)},
+            SETTINGS_REFUSAL,
+        ),
+        "redirect-project": (
+            bash("echo '{}' > .claude/settings.local.json", cwd=str(repo)),
+            SETTINGS_REFUSAL,
+        ),
+        "redirect-project-absolute": (bash(f"echo '{{}}' > {project}"), SETTINGS_REFUSAL),
+        "cd-into-project-folder": (
+            bash("cd .claude && echo '{}' > settings.json", cwd=str(repo)),
+            SETTINGS_REFUSAL,
+        ),
+        "cwd-in-project-folder": (
+            bash("echo '{}' > settings.json", cwd=str(repo / ".claude")),
+            SETTINGS_REFUSAL,
+        ),
+        "cd-into-folder": (bash("cd ~/.claude && echo '{}' > settings.json"), SETTINGS_REFUSAL),
+        "cd-into-folder-local": (
+            bash("cd ~/.claude; echo '{}' > settings.local.json"),
+            SETTINGS_REFUSAL,
+        ),
+        "glob": (bash("rm -f ~/.claude/settings*"), SETTINGS_REFUSAL),
+        "glob-dotted-parent": (bash("rm -f ~/.cl*/settings.json"), SETTINGS_REFUSAL),
+        "cp": (bash("cp /tmp/s.json ~/.claude/settings.json"), SETTINGS_REFUSAL),
+        "tee": (bash("echo '{}' | tee ~/.claude/settings.local.json"), SETTINGS_REFUSAL),
+        "ln": (bash("ln -sf /tmp/s.json ~/.claude/settings.json"), SETTINGS_REFUSAL),
+        "mv": (bash("mv ~/.claude/settings.json /tmp/s.json"), SETTINGS_REFUSAL),
+        "home-variable": (bash("echo '{}' >$HOME/.claude/settings.json"), SETTINGS_REFUSAL),
+        "rm-plugins-cache": (bash("rm -rf ~/.claude/plugins/cache/coven"), PLUGINS_REFUSAL),
+        "rm-plugins": (bash("rm -rf ~/.claude/plugins"), PLUGINS_REFUSAL),
+        "mv-plugins": (bash("mv ~/.claude/plugins /tmp/p"), PLUGINS_REFUSAL),
+        "cd-then-rm-plugins": (bash("cd ~/.claude && rm -rf plugins"), PLUGINS_REFUSAL),
+        "write-plugin-file": (
+            tool("Write", file_path=str(folder / "plugins" / "cache" / "x.py")),
+            PLUGINS_REFUSAL,
+        ),
+        "glob-plugins": (bash("rm -rf ~/.claude/plug*"), PLUGINS_REFUSAL),
+    }
+
+
+CLAUDE_IDS = list(claude_calls(Path("/x"), Path("/y")))
+
+
+@pytest.mark.parametrize("name", CLAUDE_IDS)
+def test_a_restricted_session_cannot_change_claude_settings_or_plugins(
+    run: Run, store: Path, name: str
+) -> None:
+    payload, refusal = claude_calls(project_dir(), claude_dir())[name]
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert refusal in proc.stderr
+    assert run(payload).returncode == 0
+
+
+def test_a_custom_claude_config_dir_is_guarded_where_it_is(
+    run: Run, store: Path, tmp_path: Path
+) -> None:
+    folder = tmp_path / "elsewhere"
+    env = {"CLAUDE_CONFIG_DIR": str(folder)}
+    for payload, refusal in (
+        (bash(f"echo '{{}}' > {folder}/settings.json"), SETTINGS_REFUSAL),
+        (bash(f"cd {folder} && echo '{{}}' > settings.local.json"), SETTINGS_REFUSAL),
+        (tool("Write", file_path=f"{folder}/plugins/x"), PLUGINS_REFUSAL),
+    ):
+        proc = run(payload, role="pm", env=env)
+        assert proc.returncode == 2
+        assert refusal in proc.stderr
+        assert run(payload, env=env).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        tool("Read", file_path="CLAUDE/settings.json"),
+        tool("Read", file_path="CLAUDE/plugins/cache/x.py"),
+        tool("Grep", pattern="hooks", path="CLAUDE/settings.json"),
+        tool("Glob", pattern="*.json", path="CLAUDE"),
+        tool("Write", file_path="/tmp/settings.json", content="{}"),
+        tool("Write", file_path="/tmp/n.md", content="see ~/.claude/settings.json"),
+        tool("Write", file_path="CLAUDE/projects/notes.md", content="x"),
+        bash("git status"),
+        bash("ls .claude-plugin"),
+        bash("echo 'edit ~/.claude/settings.json by hand' >> notes.md"),
+        bash("git commit -m 'docs: explain .claude/settings.json'"),
+        bash("grep -rn '.claude/settings.json' docs"),
+        bash("ls ~/.claude-backup ~/.config/git"),
+        bash("cat docs/settings.json"),
+        bash("cd src && ls plugins"),
+        bash("coven doctor"),
+    ],
+    ids=[
+        "read-settings",
+        "read-plugin",
+        "grep-settings",
+        "glob-folder",
+        "write-another-settings-json",
+        "write-text-naming-settings",
+        "write-elsewhere-in-the-folder",
+        "git-status",
+        "plugin-manifest-folder",
+        "echo-text",
+        "commit-message",
+        "grep-pattern",
+        "longer-names",
+        "another-settings-json",
+        "plugins-folder-of-a-project",
+        "coven-doctor",
+    ],
+)
+def test_a_restricted_session_reads_claude_settings_and_runs_ordinary_commands(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    text = json.dumps(payload).replace("CLAUDE", str(claude_dir()))
+    proc = run(json.loads(text), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- who is restricted, and what no approval lifts ---
 
 
@@ -3947,9 +4118,6 @@ SUBAGENT = {"agent_id": "a1b2c3", "agent_type": "general-purpose"}
         bash("ssh $H uptime"),
         bash("echo x > ~/coven-memory/approvals/a.json"),
         bash("coven setup"),
-        tool("Write", file_path="/tmp/x"),
-    ][:4]
-    + [
         {"tool_name": "Write", "tool_input": {"file_path": "~/coven-memory/systems/x.md"}},
         {"tool_name": "Write", "tool_input": {"file_path": "~/.config/coven/config.json"}},
     ],
