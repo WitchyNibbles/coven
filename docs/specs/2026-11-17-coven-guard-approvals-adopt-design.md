@@ -397,6 +397,15 @@ run any CLI the user installs.
 - The GM revokes a task's approvals on its `DONE` or `BLOCKED`, and `coven approve` prunes expired
   ones — source: an approval is reusable until expiry and the guard cannot count runs — cost if
   wrong: one extra commit per step.
+- Restricted sessions also may not write coven's config file or run `coven setup` or
+  `coven memory adopt|init|sync`: the latch and the store path live in the config — precedent:
+  the private guard refuses a PM its own installer commands — cost if wrong: a PM asks the GM for
+  a setup change.
+- The store's pre-commit hook refuses commits when the role variable has any value, not only
+  `pm` (hook version bump) — source: the stricter role rule — cost if wrong: none for sessions
+  that never set it.
+- The PreToolUse `*` matcher covers every tool — source: the Claude Code hooks docs and the
+  private toolkit's registration; checked live only at rollout — cost if wrong: one matcher change.
 - Adopt backs up with gzip, not zstd — source: stdlib only (v1 constraint) — cost if wrong: larger
   backups.
 - `systems/INDEX.md` joins the session-start block within the existing budget — cost if wrong:
