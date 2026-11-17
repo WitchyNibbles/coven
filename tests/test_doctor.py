@@ -6,14 +6,16 @@ import shutil
 import stat
 import sys
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from memory.memory_support import neutral_hook
 from pm.fixtures import SLEEP_CLI, fake_claude
+from support import commit_all, git
 
-from coven import claude_version, cli, doctor, paths, settings
+from coven import claude_version, cli, config, doctor, guard, paths, settings
 from coven.memory import store
 
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
@@ -32,6 +34,8 @@ NAMES = [
     "crossSessionInbound",
     "owned settings",
     "hook errors",
+    "guard",
+    "guard refusals",
 ]
 
 
@@ -442,7 +446,7 @@ def test_one_crashing_check_fails_alone_and_the_rest_still_run(world, monkeypatc
     monkeypatch.setattr(claude_version, "installed", boom)
     found = results()
     assert found["claude code"] == ("fail", "RuntimeError: boom")
-    assert [found[name][0] for name in NAMES if name != "claude code"] == ["ok"] * 11
+    assert [found[name][0] for name in NAMES if name != "claude code"] == ["ok"] * (len(NAMES) - 1)
 
 
 def test_doctor_exit_1_on_any_fail(world, capsys):
@@ -479,3 +483,428 @@ def test_doctor_writes_nothing(world, tmp_path):
     before = snapshot()
     doctor.run_checks(NOW)
     assert snapshot() == before
+
+
+# ---- the production guard ------------------------------------------------------------------
+
+GUARD_JSON = {
+    "targets": [
+        {
+            "system": "orders-db",
+            "kind": "production",
+            "match": ["psql\\s+.*-h\\s*orders-db"],
+            "tools": [],
+        }
+    ]
+}
+PROD_COMMAND = "psql -h orders-db.example.internal -c 'select 1'"
+REMOTE = "https://git.example.internal/user/notes.git"
+
+
+def write_config(**fields: object) -> None:
+    file = config.config_file()
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps(fields))
+
+
+def commit_guard(world: World, content: object = GUARD_JSON) -> None:
+    (world.store / "systems").mkdir(exist_ok=True)
+    text = content if isinstance(content, str) else json.dumps(content)
+    (world.store / "systems" / "guard.json").write_text(text)
+    commit_all(world.store)
+
+
+def approval(world: World, name: str, delta: timedelta, **fields: object) -> str:
+    expires = (NOW + delta).isoformat()
+    record: dict[str, object] = {
+        "id": name,
+        "system": "orders-db",
+        "commands": [PROD_COMMAND],
+        "tools": [],
+        "expires": expires,
+        **fields,
+    }
+    folder = world.store / "approvals"
+    folder.mkdir(exist_ok=True)
+    (folder / f"{name}.json").write_text(json.dumps(record))
+    commit_all(world.store)
+    return str(record["expires"])
+
+
+def guard_result(name: str = "guard") -> doctor.Result:
+    [found] = [r for r in doctor.run_checks(NOW) if r.name == name]
+    return found
+
+
+def warnings(found: doctor.Result) -> list[str]:
+    return [line for line in found.more if "warning" in line]
+
+
+def test_the_guard_is_off_in_one_quiet_line_for_a_store_without_one(world):
+    found = guard_result()
+    assert (found.status, found.more) == ("ok", ())
+    assert found.detail.startswith("off (")
+    assert "systems/guard.json" in found.detail
+
+
+def test_a_missing_store_folder_is_off_with_that_reason(world, tmp_path):
+    write_config(memory_path=str(tmp_path / "nowhere"))
+    found = guard_result()
+    assert (found.status, found.more) == ("ok", ())
+    assert found.detail.startswith("off (no memory store folder")
+
+
+def test_a_committed_guard_file_with_no_latch_is_on_and_warns_to_run_setup(world):
+    commit_guard(world)
+    found = guard_result()
+    assert found.status == "warn"
+    assert found.detail.startswith("on (guard.json committed)")
+    [line] = warnings(found)
+    assert "coven setup --yes" in line
+
+
+def test_a_set_latch_is_on_and_says_so_without_warning(world):
+    commit_guard(world)
+    write_config(guard="required")
+    found = guard_result()
+    assert (found.status, found.detail.split(";")[0]) == ("ok", "on (latch set)")
+    assert warnings(found) == []
+
+
+def test_the_latch_alone_keeps_the_guard_on_when_the_file_is_not_in_the_work_tree(world):
+    commit_guard(world)
+    (world.store / "systems" / "guard.json").unlink()
+    write_config(guard="required")
+    assert guard_result().detail.startswith("on (latch set)")
+
+
+def test_a_committed_guard_file_deleted_from_the_work_tree_still_warns(world):
+    commit_guard(world)
+    (world.store / "systems" / "guard.json").unlink()
+    found = guard_result()
+    assert found.status == "warn"
+    assert found.detail.startswith("off (")
+    assert any("coven setup --yes" in line for line in warnings(found))
+
+
+def test_a_valid_guard_file_at_head_is_reported_with_its_target_count(world):
+    commit_guard(world)
+    write_config(guard="required")
+    assert any("guard.json at HEAD: ok: 1 targets" in line for line in guard_result().more)
+
+
+def test_an_invalid_guard_file_at_head_warns_with_the_reason(world):
+    commit_guard(world, "{not json")
+    write_config(guard="required")
+    found = guard_result()
+    assert found.status == "warn"
+    [line] = warnings(found)
+    assert "guard.json at HEAD is not valid" in line
+    assert "not valid JSON" in line
+
+
+def test_an_invalid_head_with_an_older_valid_version_says_which_one_is_enforced(world):
+    commit_guard(world)
+    commit_guard(world, {"targets": [{"system": "orders-db", "kind": "prod"}]})
+    write_config(guard="required")
+    found = guard_result()
+    [line] = warnings(found)
+    assert "kind" in line
+    assert "older" in line
+
+
+def test_an_uncommitted_guard_file_is_on_but_not_committed(world):
+    (world.store / "systems").mkdir(exist_ok=True)
+    (world.store / "systems" / "guard.json").write_text(json.dumps(GUARD_JSON))
+    found = guard_result()
+    assert found.detail.startswith("on (")
+    assert any("not committed" in line for line in found.more)
+
+
+def test_live_approvals_show_id_system_and_expiry_one_line_each(world):
+    commit_guard(world)
+    write_config(guard="required")
+    first = approval(world, "step-a", timedelta(hours=2))
+    second = approval(world, "step-b", timedelta(hours=1), system="billing-api")
+    lines = [line for line in guard_result().more if line.strip().startswith("approval ")]
+    assert len(lines) == 2
+    assert any("step-a" in line and "orders-db" in line and first in line for line in lines)
+    assert any("step-b" in line and "billing-api" in line and second in line for line in lines)
+
+
+def test_expired_and_too_long_approvals_are_not_live(world):
+    commit_guard(world)
+    write_config(guard="required")
+    approval(world, "old", timedelta(hours=-1))
+    approval(world, "forever", timedelta(hours=13))
+    found = guard_result()
+    assert any("no live approvals" in line for line in found.more)
+    assert not any("old" in line or "forever" in line for line in found.more)
+
+
+def test_a_malformed_approval_is_not_live_and_does_not_break_doctor(world):
+    commit_guard(world)
+    write_config(guard="required")
+    approval(world, "odd", timedelta(hours=1), extra="field")
+    assert any("no live approvals" in line for line in guard_result().more)
+
+
+def test_a_guarded_store_with_a_remote_in_the_config_warns(world):
+    commit_guard(world)
+    write_config(guard="required", memory_remote=REMOTE)
+    [line] = warnings(guard_result())
+    assert "never pushes" in line
+    assert "remote" in line
+
+
+def test_a_guarded_store_with_an_origin_in_git_warns(world):
+    commit_guard(world)
+    write_config(guard="required")
+    git(world.store, "remote", "add", "origin", REMOTE)
+    [line] = warnings(guard_result())
+    assert "never pushes" in line
+
+
+def test_a_remote_on_a_store_without_a_guard_is_not_a_guard_warning(world):
+    write_config(memory_remote=REMOTE)
+    assert guard_result().more == ()
+
+
+def test_doctor_gives_one_warning_line_when_the_guard_check_times_out(world, monkeypatch):
+    commit_guard(world)
+    write_config(guard="required")
+    hook = guard.load_guard()
+    monkeypatch.setattr(hook, "DEADLINE", 0.2)
+    monkeypatch.setattr(hook, "load_targets", lambda _store: time.sleep(5))
+    found = guard_result()
+    assert found.status == "warn"
+    assert guard.TIMED_OUT in found.detail
+    assert "\n" not in found.detail
+
+
+def test_a_latched_store_that_cannot_be_read_is_one_warning_not_a_crash(world, tmp_path):
+    write_config(guard="required", memory_path=str(tmp_path / "gone"))
+    found = guard_result()
+    assert found.status == "warn"
+    assert "gone" in found.detail
+    assert "\n" not in found.detail
+
+
+def test_an_unreadable_config_is_a_guard_warning_not_a_crash(world):
+    config.config_file().parent.mkdir(parents=True, exist_ok=True)
+    config.config_file().write_text("{broken")
+    assert guard_result().status == "warn"
+
+
+def test_doctor_writes_nothing_for_a_guarded_store_with_a_refusal_log(world, tmp_path):
+    commit_guard(world)
+    write_config(guard="required", memory_remote=REMOTE)
+    approval(world, "step-a", timedelta(hours=2))
+    world.log("prod-guard", refusal())
+
+    def snapshot() -> dict[str, tuple[int, bytes | None]]:
+        found = {}
+        for folder, dirs, files in os.walk(tmp_path):
+            for name in [*files, *dirs]:
+                path = Path(folder, name)
+                found[str(path)] = (
+                    path.stat().st_mtime_ns,
+                    path.read_bytes() if path.is_file() and ".git" not in path.parts else None,
+                )
+        return found
+
+    before = snapshot()
+    doctor.run_checks(NOW)
+    assert snapshot() == before
+
+
+# ---- the guard's refusals ------------------------------------------------------------------
+
+
+def refusal(
+    delta: timedelta = timedelta(hours=1),
+    command: str | None = PROD_COMMAND,
+    message: str = "coven prod-guard: 'orders-db' is production; this exact step needs the "
+    "user's approval (send a PROD-STEP)",
+    **more: object,
+) -> dict[str, object]:
+    return {
+        "ts": at(delta),
+        "decision": "deny",
+        "tool": "Bash",
+        "command": command,
+        "message": message,
+        **more,
+    }
+
+
+def refusal_lines() -> tuple[str, tuple[str, ...]]:
+    found = guard_result("guard refusals")
+    assert found.status == "ok"
+    return found.detail, found.more
+
+
+def test_no_log_says_no_guard_refusals_logged(world):
+    assert refusal_lines() == ("no guard refusals logged", ())
+
+
+def test_a_log_of_allowed_calls_only_says_no_guard_refusals_logged(world):
+    world.log("prod-guard", {**refusal(), "decision": "allow", "message": None})
+    assert refusal_lines()[0] == "no guard refusals logged"
+
+
+def test_refusals_show_newest_first_one_line_each_without_warning(world):
+    world.log(
+        "prod-guard",
+        refusal(timedelta(hours=3), command="first command"),
+        {"ts": at(timedelta(hours=2)), "decision": "allow", "tool": "Bash", "command": "ls"},
+        refusal(timedelta(hours=1), command="last command"),
+    )
+    _detail, lines = refusal_lines()
+    assert len(lines) == 2
+    assert "last command" in lines[0]
+    assert "first command" in lines[1]
+    assert "2026-11-13T11:00:00" in lines[0]
+    assert "'orders-db' is production" in lines[0]
+
+
+def test_only_the_last_five_refusals_show(world):
+    world.log(
+        "prod-guard",
+        *[refusal(timedelta(hours=10 - n), command=f"command {n}") for n in range(8)],
+    )
+    _detail, lines = refusal_lines()
+    assert [n for n in range(8) if any(f"command {n}" in line for line in lines)] == [
+        3,
+        4,
+        5,
+        6,
+        7,
+    ]
+    assert "command 7" in lines[0]
+
+
+def test_older_refusals_come_from_the_rotated_log_when_the_current_one_is_short(world):
+    folder = paths.logs_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "prod-guard.jsonl.1").write_text(
+        json.dumps(refusal(timedelta(hours=9), command="rotated")) + "\n"
+    )
+    world.log("prod-guard", refusal(command="current"))
+    _detail, lines = refusal_lines()
+    assert ["current" in lines[0], "rotated" in lines[1]] == [True, True]
+
+
+@pytest.mark.parametrize(
+    ("role", "shown"),
+    [("pm", "pm"), ("gm", "other"), ("", "other"), (None, "unset")],
+    ids=["pm", "other", "empty", "none"],
+)
+def test_the_role_is_pm_other_or_unset_and_never_the_raw_value(world, role, shown):
+    world.log("prod-guard", refusal(role=role))
+    [line] = refusal_lines()[1]
+    assert f" {shown} " in line
+    if role == "gm":
+        assert "gm" not in line
+
+
+def test_a_record_with_no_role_field_says_the_role_was_not_logged(world):
+    world.log("prod-guard", refusal())
+    [line] = refusal_lines()[1]
+    assert " role not logged " in line
+
+
+def test_a_role_value_in_a_restricted_message_is_not_printed(world):
+    message = "coven prod-guard: a 'secret-role-7' session cannot run claude; ask the GM"
+    world.log("prod-guard", refusal(message=message, role="secret-role-7"))
+    [line] = refusal_lines()[1]
+    assert "secret-role-7" not in line
+    assert "session cannot run claude" in line
+
+
+def test_a_command_is_cut_to_80_characters_on_one_printable_line(world):
+    command = "psql\n-h orders-db.example.internal \u202e\u200b\x00 " + "x" * 300
+    world.log("prod-guard", refusal(command=command))
+    [line] = refusal_lines()[1]
+    assert "\n" not in line
+    assert all(ch.isprintable() for ch in line)
+    assert "xxx" in line
+    assert "x" * 81 not in line
+    assert line.count("x") <= 80
+
+
+def test_a_refusal_with_no_command_shows_the_tool(world):
+    world.log("prod-guard", refusal(command=None, tool="mcp__orders__write"))
+    [line] = refusal_lines()[1]
+    assert "mcp__orders__write" in line
+
+
+def test_a_long_reason_is_cut_too(world):
+    world.log("prod-guard", refusal(message="coven prod-guard: " + "y" * 500))
+    [line] = refusal_lines()[1]
+    assert len(line) < 400
+
+
+def test_hostile_log_lines_are_skipped_silently(world):
+    folder = paths.logs_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(refusal(command="kept one")),
+        "[1, 2, 3]",
+        '"just a string"',
+        "null",
+        "{not json at all",
+        json.dumps({"decision": "deny"}),  # no message
+        json.dumps(
+            {"decision": "deny", "message": 5, "tool": "Bash", "ts": at(timedelta(hours=1))}
+        ),
+        json.dumps({**refusal(), "tool": ["Bash"]}),
+        json.dumps({**refusal(), "command": {"a": 1}}),
+        json.dumps({**refusal(), "ts": 12}),
+        "[" * 3000,
+        json.dumps(refusal(command="kept two")),
+    ]
+    (folder / "prod-guard.jsonl").write_text("\n".join(lines) + "\n" + '{"decision": "de')
+    _detail, shown = refusal_lines()
+    assert len(shown) == 2
+    assert "kept two" in shown[0]
+    assert "kept one" in shown[1]
+
+
+def test_a_one_megabyte_line_and_a_torn_last_line_do_not_break_it(world):
+    folder = paths.logs_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    big = json.dumps(refusal(command="z" * (1024 * 1024)))
+    (folder / "prod-guard.jsonl").write_text(
+        json.dumps(refusal(command="early"))
+        + "\n"
+        + big
+        + "\n"
+        + json.dumps(refusal(command="after"))
+        + "\n"
+        + '{"ts": "2026-11-13T1'
+    )
+    _detail, shown = refusal_lines()
+    assert len(shown) == 1
+    assert "after" in shown[0]
+
+
+def test_only_the_last_64_kib_of_the_log_is_read(world):
+    folder = paths.logs_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    filler = json.dumps({"ts": at(timedelta(hours=1)), "decision": "allow", "pad": "p" * 200})
+    body = json.dumps(refusal(command="ancient")) + "\n" + (filler + "\n") * 400
+    (folder / "prod-guard.jsonl").write_text(body + json.dumps(refusal(command="recent")) + "\n")
+    _detail, shown = refusal_lines()
+    assert len(shown) == 1
+    assert "recent" in shown[0]
+
+
+def test_a_refusal_log_fifo_does_not_hang_doctor(world):
+    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    os.mkfifo(paths.logs_dir() / "prod-guard.jsonl")
+    done: list[object] = []
+    worker = threading.Thread(target=lambda: done.append(doctor.run_checks(NOW)), daemon=True)
+    worker.start()
+    worker.join(10)
+    assert done, "doctor is stuck reading a FIFO"
