@@ -9,8 +9,9 @@
 # (block) pass through, any other exit becomes 2. With no command at all, it blocks.
 #
 # Hooks need Python 3.12 or later, and some systems ship an older python3 (macOS has 3.9) or none.
-# Then deny_secrets.py falls back to a plain text check of the raw payload (below) and every other
-# hook exits 0 (allowed, skipped). Either way the script prints, once per session, how to fix it.
+# Then deny_secrets.py falls back to a plain text check of the raw payload (below), prod_guard.py to
+# a plain check of whether the guard is on (further below), and every other hook exits 0 (allowed,
+# skipped). Either way the script prints, once per session, how to fix it.
 #
 # Once-per-session marker: a file in ${XDG_CACHE_HOME:-$HOME/.cache}/coven/ named after the
 # payload's session_id, read from the raw payload with sed (no JSON parser is available here).
@@ -67,6 +68,39 @@ fallback_deny_secrets() {
     return 0
 }
 
+# Without a new enough python3 the prod guard cannot read its store, and skipping it would switch it
+# off on exactly the machines where nobody sees it. So it refuses Bash and MCP tool calls, the ones
+# that reach outside, while the guard is on, and lets every call through while it is off. "On" is
+# the Python hook's own rule, read with sed and grep from the same config: a config file, a store
+# folder (`memory_path`, `~/coven-memory` by default) and either `"guard": "required"` or a
+# systems/guard.json in its working tree. Whatever the config says beyond that is left to python.
+guard_is_on() {
+    config="${HOME}/.config/coven/config.json"
+    [ -f "$config" ] || return 1
+    store=$(sed -n 's/.*"memory_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | sed 1q)
+    [ -n "$store" ] || store="${HOME}/coven-memory"
+    case $store in
+    \~) store=$HOME ;;
+    \~/*) store="${HOME}/${store#\~/}" ;;
+    esac
+    [ -d "$store" ] || return 1
+    grep -q '"guard"[[:space:]]*:[[:space:]]*"required"' "$config"
+    found=$?
+    [ "$found" -eq 1 ] || return 0 # on, or grep failed: not knowing is not "off"
+    [ -e "$store/systems/guard.json" ] || [ -L "$store/systems/guard.json" ]
+}
+
+fallback_prod_guard() {
+    payload=$1
+    tell_once "$payload"
+    guard_is_on || return 0
+    printf '%s' "$payload" | grep -E -q '"tool_name"[[:space:]]*:[[:space:]]*"(Bash|mcp__[^"]*)"'
+    found=$?
+    [ "$found" -eq 1 ] && return 0
+    printf '%s\n' "coven prod-guard: this python3 is too old to run the production guard; Bash and MCP tools are blocked until Python 3.12+ is installed" >&2
+    return 2
+}
+
 # Append one line to the hook's log, unless it already holds 1 MB (the hooks rotate their own).
 log_failure() {
     folder="$(cache_root)/logs"
@@ -93,6 +127,10 @@ if ! python_is_new_enough; then
     [ -t 0 ] || payload=$(cat)
     if [ "$name" = "deny-secrets" ]; then
         fallback_deny_secrets "$payload"
+        exit $?
+    fi
+    if [ "$name" = "prod-guard" ]; then
+        fallback_prod_guard "$payload"
         exit $?
     fi
     tell_once "$payload"

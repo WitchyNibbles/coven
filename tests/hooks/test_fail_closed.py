@@ -362,3 +362,123 @@ def test_a_python_of_3_12_is_new_enough(
     proc = run_hook(WRAPPER, "", modern_python, args=(str(hook),))
     assert (proc.returncode, proc.stderr) == (0, "")
     assert marker_files() == []
+
+
+# --- the prod guard has no fallback of its own: an old python3 must not switch it off ---
+
+PROD_GUARD = HOOKS / "prod_guard.py"
+OLD_PYTHON_GUARD = "coven prod-guard: this python3 is too old to run the production guard"
+
+
+def bash_payload(command: str = "ls") -> dict[str, object]:
+    return {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "s1"}
+
+
+def guarded_store(
+    *, latch: bool, guard_file: bool, folder: Path | None = None, configured: str | None = None
+) -> None:
+    """A memory store (`folder`, by default `~/coven-memory`) and coven's config, which names
+    `configured` as its path when given."""
+    home = Path(os.environ["HOME"])
+    store = home / "coven-memory" if folder is None else folder
+    (store / "systems").mkdir(parents=True)
+    if guard_file:
+        (store / "systems" / "guard.json").write_text('{"targets": []}')
+    config: dict[str, str] = {} if configured is None else {"memory_path": configured}
+    if latch:
+        config["guard"] = "required"
+    (home / ".config" / "coven").mkdir(parents=True)
+    (home / ".config" / "coven" / "config.json").write_text(json.dumps(config, indent=2))
+
+
+@pytest.mark.parametrize("python", ["old_python", "no_python"])
+@pytest.mark.parametrize("tool", ["Bash", "mcp__mail__send", "mcp__x__y"])
+def test_old_python_refuses_bash_and_mcp_while_the_guard_is_on(
+    request: pytest.FixtureRequest, run_hook: Run, python: str, tool: str
+) -> None:
+    guarded_store(latch=True, guard_file=False)
+    env: dict[str, str] = request.getfixturevalue(python)
+    payload = {"tool_name": tool, "tool_input": {}, "session_id": "s1"}
+    proc = run_hook(WRAPPER, payload, env, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
+    assert NEED_PYTHON in proc.stderr
+
+
+@pytest.mark.parametrize("tool", ["Read", "Write", "Task", "WebFetch"])
+def test_old_python_leaves_the_other_tools_alone_while_the_guard_is_on(
+    run_hook: Run, old_python: dict[str, str], tool: str
+) -> None:
+    guarded_store(latch=True, guard_file=True)
+    payload = {"tool_name": tool, "tool_input": {}, "session_id": "s1"}
+    proc = run_hook(WRAPPER, payload, old_python, args=(str(PROD_GUARD),))
+    assert (proc.returncode, proc.stderr) == (0, NEED_PYTHON + "\n")
+
+
+def test_old_python_treats_a_working_tree_guard_file_as_the_guard_being_on(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    guarded_store(latch=False, guard_file=True)
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
+
+
+def test_old_python_reads_the_store_path_from_the_config(
+    run_hook: Run, old_python: dict[str, str], tmp_path: Path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    guarded_store(latch=False, guard_file=True, folder=elsewhere, configured=str(elsewhere))
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+
+
+def test_old_python_expands_a_tilde_in_the_store_path(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    folder = Path(os.environ["HOME"]) / "notes-store"
+    guarded_store(latch=False, guard_file=True, folder=folder, configured="~/notes-store")
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+
+
+@pytest.mark.parametrize("python", ["old_python", "no_python"])
+def test_old_python_lets_everything_through_while_the_guard_is_off(
+    request: pytest.FixtureRequest, run_hook: Run, python: str
+) -> None:
+    env: dict[str, str] = request.getfixturevalue(python)
+    proc = run_hook(WRAPPER, bash_payload(), env, args=(str(PROD_GUARD),))  # no config file
+    assert (proc.returncode, proc.stderr) == (0, NEED_PYTHON + "\n")
+
+
+def test_old_python_with_no_latch_and_no_guard_file_is_off(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    guarded_store(latch=False, guard_file=False)
+    proc = run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 0
+
+
+def test_old_python_with_a_missing_store_folder_is_off(
+    run_hook: Run, old_python: dict[str, str], tmp_path: Path
+) -> None:
+    config = Path(os.environ["HOME"]) / ".config" / "coven"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(
+        json.dumps({"memory_path": str(tmp_path / "nowhere"), "guard": "required"})
+    )
+    assert run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),)).returncode == 0
+
+
+def test_old_python_refuses_when_grep_fails(run_hook: Run, tmp_path: Path) -> None:
+    guarded_store(latch=True, guard_file=False)
+    shim = tmp_path / "broken-grep-bin"
+    shim.mkdir()
+    for tool in POSIX_TOOLS:
+        found = shutil.which(tool)
+        assert found, tool
+        (shim / tool).symlink_to(found)
+    (shim / "grep").unlink()
+    executable(shim / "grep", "#!/bin/sh\nexit 2\n")
+    proc = run_hook(WRAPPER, bash_payload(), {"PATH": str(shim)}, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
