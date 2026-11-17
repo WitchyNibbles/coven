@@ -562,6 +562,52 @@ def test_a_target_that_lists_the_bash_tool_cannot_be_approved_by_command(store: 
     assert head(shared) == start
 
 
+ANY_ORDERS_HOST = {
+    "targets": [{"system": "orders-db", "kind": "production", "match": ["psql\\s+.*orders-db"]}]
+}
+HOST_UNREAD = 'psql -h "$ORDERS" -c "select 1" orders-db.example.internal'
+HEREDOC = "psql -h orders-db.example.internal <<SQL\nselect 1;\nSQL"
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        (f"{HOST_UNREAD}\n", HOST_UNREAD),
+        (f"```sh\n{HEREDOC}\n```\n", "<<SQL"),
+        (f"{ORDERS}\n{HOST_UNREAD}\n", HOST_UNREAD),
+    ],
+    ids=["host-not-written-out", "unquoted-heredoc", "second-command"],
+)
+def test_a_command_the_guard_refuses_a_pm_cannot_be_approved(text: str, named: str) -> None:
+    """With a guard on the PM runs every step, so an approval for a command that trips a restricted
+    rule would print `approved` and the hook would still refuse the PM."""
+    shared = make_store(home() / "any-memory", ANY_ORDERS_HOST)
+    start = head(shared)
+    message = refused(shared, "step-pm", text, "a PM cannot run this")
+    assert named in message
+    assert "ask the PM for a form the guard can read" in message
+    assert approval_files(shared) == []
+    assert head(shared) == start
+    assert git(shared, "status", "--porcelain", "--untracked-files=all") == step_only(shared, "step-pm")
+
+
+def test_a_refusal_for_a_pm_names_the_rule_the_guard_gave() -> None:
+    shared = make_store(home() / "any-memory", ANY_ORDERS_HOST)
+    message = refused(shared, "step-rule", f"{HOST_UNREAD}\n", "a PM cannot run this")
+    assert "host" in message and "not written out" in message
+
+
+def test_an_approved_command_is_allowed_for_a_pm_by_the_real_guard(
+    store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ROLE, "pm")
+    assert guard_exit(bash(ORDERS)) == 2
+    monkeypatch.delenv(ROLE)
+    approved(store, "e2e-pm", f"{ORDERS}\n", now=live())
+    monkeypatch.setenv(ROLE, "pm")
+    assert guard_exit(bash(ORDERS)) == 0
+
+
 def test_an_existing_approval_is_never_overwritten(store: Path) -> None:
     approved(store, "step-17", f"{ORDERS}\n")
     first = committed(store, "step-17.json")

@@ -30,6 +30,9 @@ from coven.errors import CovenError, warn
 from coven.memory import store as memory_store
 
 ROLE_VAR = "COVEN_SESSION_ROLE"
+# Where a step is judged from: a PM runs it in a project, never in the store, whose own cwd the
+# guard refuses a PM.
+PM_CWD = "/"
 APPROVALS_DIR = "approvals"
 STEP_SUFFIX = ".step"
 JSON_SUFFIX = ".json"
@@ -183,15 +186,23 @@ def _committed_systems(hook: ModuleType, store: Path) -> set[str]:
 
 
 def _owners(
-    hook: ModuleType, store: Path, payload: Mapping[str, object], now: datetime
+    hook: ModuleType, store: Path, payload: Mapping[str, object], now: datetime, what: str
 ) -> set[str]:
-    """The systems whose targets the guard says this call reaches."""
+    """The systems whose targets the guard says this call reaches.
+
+    CovenError for a call the guard refuses a PM whatever is approved: with a guard on the PM runs
+    every step, so no approval file would let it through."""
     try:
         found = hook.explain(payload, store, None, now)
     except hook.PayloadError as error:
         raise CovenError(f"not a call the guard can judge: {error}") from error
     if found.unreadable:
         raise CovenError(found.unreadable)
+    if found.restricted:
+        raise CovenError(
+            f"a PM cannot run this ({found.restricted}); ask the PM for a form the guard can read:"
+            f" {what}"
+        )
     if payload["tool_name"] != "Bash":
         return {hit.system for hit in found.hits if hit.via == "tool"}
     for hit in found.hits:
@@ -234,12 +245,14 @@ def _assign(
         raise CovenError(f"guard.json has no target for system {system!r}")
     grants: dict[str, Grant] = {}
     for command in step.commands:
-        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(store)}
-        for owner in _chosen(_owners(hook, store, payload, now), system, f"the command: {command}"):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": PM_CWD}
+        what = f"the command: {command}"
+        for owner in _chosen(_owners(hook, store, payload, now, what), system, what):
             grants.setdefault(owner, Grant()).commands.append(command)
     for tool in step.tools:
-        payload = {"tool_name": tool, "tool_input": {}, "cwd": str(store)}
-        for owner in _chosen(_owners(hook, store, payload, now), system, f"the tool: {tool}"):
+        payload = {"tool_name": tool, "tool_input": {}, "cwd": PM_CWD}
+        what = f"the tool: {tool}"
+        for owner in _chosen(_owners(hook, store, payload, now, what), system, what):
             grants.setdefault(owner, Grant()).tools.append(tool)
     return grants
 
