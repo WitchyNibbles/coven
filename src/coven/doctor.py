@@ -361,13 +361,12 @@ def _guard_on(hook: ModuleType, config: Any, now: datetime) -> Outcome:
         lines += _remote_warning(config.store)
     except hook.StoreError as error:
         return Outcome("warn", _one_line(f"on; cannot read the store: {error}"))
-    why = (
-        "latch set"
-        if config.latch
-        else "guard.json committed"
-        if committed
-        else "guard.json present"
-    )
+    if config.latch:
+        why = "latch set"
+    elif committed:
+        why = "guard.json committed"
+    else:
+        why = "guard.json present"
     problems = sum(1 for line in lines if line.startswith("  warning:"))
     detail = f"on ({why})" + (f"; {problems} warning(s)" if problems else "")
     return Outcome("warn" if problems else "ok", detail, tuple(lines))

@@ -372,10 +372,11 @@ def _expired(store: Path, now: datetime) -> tuple[str, ...]:
 def _files_of(store: Path, approval_id: str) -> tuple[str, ...]:
     """`<id>.json` and each `<id>-*.json` whose own id is this one (`a-b.json` may belong to the
     approval `a-b`, which `a` must not remove, and `a.json` may hold another id)."""
-    own = (f"{approval_id}{JSON_SUFFIX}", f"{approval_id}-")
+    own_name = f"{approval_id}{JSON_SUFFIX}"
+    system_prefix = f"{approval_id}-"
     names = []
     for name in _approval_names(store):
-        if name.startswith(own[1]) or name == own[0]:
+        if name == own_name or name.startswith(system_prefix):
             record = _record(store / APPROVALS_DIR / name)
             if record is not None and record.get("id") == approval_id:
                 names.append(name)
@@ -418,6 +419,10 @@ def _head(store: Path) -> str:
     return _git(store, "rev-parse", "HEAD").strip()
 
 
+def _rel(name: str) -> str:
+    return f"{APPROVALS_DIR}/{name}"
+
+
 def _write_and_stage(store: Path, change: Change, written: list[Path]) -> None:
     folder = store / APPROVALS_DIR
     folder.mkdir(exist_ok=True)
@@ -426,9 +431,9 @@ def _write_and_stage(store: Path, change: Change, written: list[Path]) -> None:
             written.append(folder / name)
             handle.write(text)
     if change.write:
-        _git(store, "add", "--", *(f"{APPROVALS_DIR}/{name}" for name in change.write))
+        _git(store, "add", "--", *map(_rel, change.write))
     if change.delete:
-        _git(store, "rm", "-q", "--", *(f"{APPROVALS_DIR}/{name}" for name in change.delete))
+        _git(store, "rm", "-q", "--", *map(_rel, change.delete))
 
 
 def _commit_change(store: Path, change: Change) -> None:
@@ -440,7 +445,7 @@ def _commit_change(store: Path, change: Change) -> None:
     """
     start = _head(store)
     written: list[Path] = []
-    rels = [f"{APPROVALS_DIR}/{name}" for name in change.names]
+    rels = [_rel(name) for name in change.names]
     try:
         _write_and_stage(store, change, written)
         _git(store, "commit", "-q", "-m", change.message, "--", *rels)
@@ -466,12 +471,12 @@ def _landed(store: Path, start: str) -> bool:
 
 def _rollback(store: Path, change: Change, written: list[Path], cause: Exception) -> None:
     """Unstage this change's files, delete the ones this run wrote, restore the ones it deleted."""
-    rels = [f"{APPROVALS_DIR}/{name}" for name in change.names]
+    rels = [_rel(name) for name in change.names]
     problems: list[str] = []
     try:
         _git(store, "reset", "-q", "--", *rels)
         if change.delete:
-            _git(store, "checkout", "--", *(f"{APPROVALS_DIR}/{name}" for name in change.delete))
+            _git(store, "checkout", "--", *map(_rel, change.delete))
     except CovenError as error:
         problems.append(str(error))
     for path in written:
