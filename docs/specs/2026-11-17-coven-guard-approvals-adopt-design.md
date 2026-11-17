@@ -170,7 +170,7 @@ live approval for each.
 grep pattern, quoted echo text); a shell, an interpreter, `$(...)`, backticks or anything the
 scanner cannot follow is read whole. Approvals match the whole command exactly, never its code text.
 
-**Limits.** 20 s for the whole check, a timeout per git call; past either, refuse. Every refusal
+**Limits.** 20 s for the whole check, a timeout per git call; past either, refuse. Every target refusal
 names the target or rule and says to send a `PROD-STEP`. Decisions and failures go to the hook log
 (`prod-guard.jsonl`), as v1's other hooks do. The guard is best effort against a PM that follows
 its role; its rules are public, as pm-permissions' are. Its boundary is the committed store and the
