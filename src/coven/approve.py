@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -30,9 +31,6 @@ from coven.errors import CovenError, warn
 from coven.memory import store as memory_store
 
 ROLE_VAR = "COVEN_SESSION_ROLE"
-# Where a step is judged from: a PM runs it in a project, never in the store, whose own cwd the
-# guard refuses a PM.
-PM_CWD = "/"
 APPROVALS_DIR = "approvals"
 STEP_SUFFIX = ".step"
 JSON_SUFFIX = ".json"
@@ -244,16 +242,20 @@ def _assign(
     if system is not None and system not in systems:
         raise CovenError(f"guard.json has no target for system {system!r}")
     grants: dict[str, Grant] = {}
-    for command in step.commands:
-        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": PM_CWD}
-        what = f"the command: {command}"
-        for owner in _chosen(_owners(hook, store, payload, now, what), system, what):
-            grants.setdefault(owner, Grant()).commands.append(command)
-    for tool in step.tools:
-        payload = {"tool_name": tool, "tool_input": {}, "cwd": PM_CWD}
-        what = f"the tool: {tool}"
-        for owner in _chosen(_owners(hook, store, payload, now, what), system, what):
-            grants.setdefault(owner, Grant()).tools.append(tool)
+    # A PM runs the step in its project, never in the store (whose cwd the guard refuses a PM), so
+    # it is judged from an empty folder: a relative word or a `*` there reaches no zone, where from
+    # `/` a `*` would match a parent of the store.
+    with tempfile.TemporaryDirectory(prefix="coven-approve-") as cwd:
+        for command in step.commands:
+            payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}
+            what = f"the command: {command}"
+            for owner in _chosen(_owners(hook, store, payload, now, what), system, what):
+                grants.setdefault(owner, Grant()).commands.append(command)
+        for tool in step.tools:
+            payload = {"tool_name": tool, "tool_input": {}, "cwd": cwd}
+            what = f"the tool: {tool}"
+            for owner in _chosen(_owners(hook, store, payload, now, what), system, what):
+                grants.setdefault(owner, Grant()).tools.append(tool)
     return grants
 
 

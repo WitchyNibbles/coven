@@ -593,6 +593,22 @@ def test_a_command_the_guard_refuses_a_pm_cannot_be_approved(text: str, named: s
     )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        'psql -h orders-db.example.internal -c "select * from t"',
+        'psql -h orders-db.example.internal -c "select count(*) from t"',
+    ],
+    ids=["star", "count-star"],
+)
+def test_a_command_with_a_star_is_approved(command: str) -> None:
+    """A `*` is judged from an empty folder, as the PM's project would be, so it reaches nothing;
+    judged from `/` it would match a parent of the store and refuse plain SQL."""
+    shared = make_store(home() / "any-memory", ANY_ORDERS_HOST)
+    approved(shared, "step-star", f"{command}\n")
+    assert committed(shared, "step-star.json")["commands"] == [command]
+
+
 def test_a_refusal_for_a_pm_names_the_rule_the_guard_gave() -> None:
     shared = make_store(home() / "any-memory", ANY_ORDERS_HOST)
     message = refused(shared, "step-rule", f"{HOST_UNREAD}\n", "a PM cannot run this")
