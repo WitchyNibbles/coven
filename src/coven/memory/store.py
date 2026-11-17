@@ -115,6 +115,8 @@ def pause() -> None:
 def _run(path: Path, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if k not in REPO_VARIABLES}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    # A replace ref swaps the objects git reads without a commit: `is_guarded` must not be fooled.
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
     try:
         return subprocess.run(

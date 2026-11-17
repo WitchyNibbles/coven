@@ -479,15 +479,28 @@ def test_old_python_with_no_latch_and_no_guard_file_is_off(
     assert proc.returncode == 0
 
 
-def test_old_python_with_a_missing_store_folder_is_off(
+def test_old_python_with_a_missing_store_folder_and_no_latch_is_off(
     run_hook: Run, old_python: dict[str, str], tmp_path: Path
+) -> None:
+    config = Path(os.environ["HOME"]) / ".config" / "coven"
+    config.mkdir(parents=True)
+    (config / "config.json").write_text(json.dumps({"memory_path": str(tmp_path / "nowhere")}))
+    assert run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),)).returncode == 0
+
+
+@pytest.mark.parametrize("tool", ["Bash", "mcp__x__y"])
+def test_old_python_with_a_missing_store_folder_and_the_latch_refuses(
+    run_hook: Run, old_python: dict[str, str], tmp_path: Path, tool: str
 ) -> None:
     config = Path(os.environ["HOME"]) / ".config" / "coven"
     config.mkdir(parents=True)
     (config / "config.json").write_text(
         json.dumps({"memory_path": str(tmp_path / "nowhere"), "guard": "required"})
     )
-    assert run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),)).returncode == 0
+    payload = {"tool_name": tool, "tool_input": {}}
+    proc = run_hook(WRAPPER, payload, old_python, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
 
 
 def test_old_python_refuses_when_grep_fails(run_hook: Run, tmp_path: Path) -> None:

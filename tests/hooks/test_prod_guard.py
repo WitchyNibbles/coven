@@ -87,8 +87,11 @@ def patient_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pg, "DEADLINE", PATIENT_SECONDS)
 
 
-def git(store: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(store), *args], capture_output=True, text=True, check=True)
+def git(store: Path, *args: str, stdin: str | None = None) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(store), *args], input=stdin, capture_output=True, text=True, check=True
+    )
+    return done.stdout.strip()
 
 
 def commit(store: Path) -> None:
@@ -242,11 +245,32 @@ def test_the_default_store_is_coven_memory_in_home(run: Run, no_git: dict[str, s
     assert run(bash(PROD_COMMAND), env=no_git).returncode == 0
 
 
-def test_a_missing_store_folder_is_off_even_with_the_latch(
+def test_a_missing_store_folder_without_the_latch_is_off(
     run: Run, tmp_path: Path, no_git: dict[str, str]
 ) -> None:
-    configure(tmp_path / "nowhere", latch=True)
+    configure(tmp_path / "nowhere")
     assert run(bash(PROD_COMMAND), role="pm", env=no_git).returncode == 0
+
+
+@pytest.mark.parametrize("payload", [bash("ls"), tool("mcp__x__y")], ids=["bash", "mcp"])
+@pytest.mark.parametrize("role", [None, "pm"], ids=["unrestricted", "restricted"])
+def test_a_missing_store_folder_with_the_latch_refuses_outward_calls(
+    run: Run, tmp_path: Path, payload: Payload, role: str | None
+) -> None:
+    """The latch says the store held a guard.json: a deleted or moved folder must not unguard it."""
+    nowhere = tmp_path / "nowhere"
+    configure(nowhere, latch=True)
+    proc = run(payload, role=role)
+    assert proc.returncode == 2
+    assert proc.stderr.startswith(unreadable_store(nowhere))
+    assert "does not exist" in proc.stderr
+
+
+def test_a_missing_store_folder_with_the_latch_leaves_the_other_tools_alone(
+    run: Run, tmp_path: Path
+) -> None:
+    configure(tmp_path / "nowhere", latch=True)
+    assert run(tool("Read", file_path="/tmp/x"), role="pm").returncode == 0
 
 
 def test_the_off_path_does_not_read_stdin(run: Run) -> None:
@@ -307,6 +331,7 @@ BAD_CONFIGS = {
     "bad-json": "{nope",
     "not-an-object": "[]",
     "memory-path-not-str": json.dumps({"memory_path": 3}),
+    "memory-path-relative": json.dumps({"memory_path": "coven-memory"}),
     "guard-unknown-value": json.dumps({"guard": "yes"}),
     "guard-not-str": json.dumps({"guard": True}),
 }
@@ -1079,6 +1104,58 @@ def test_git_variables_cannot_move_the_guard_to_another_repo(
     assert PROD_MESSAGE in proc.stderr
 
 
+# --- git replace refs and grafts change what git reads without a commit ---
+
+
+def blob(store: Path, text: str) -> str:
+    return git(store, "hash-object", "-w", "--stdin", stdin=text)
+
+
+def test_a_replace_ref_on_guard_json_changes_nothing(run: Run, store: Path) -> None:
+    old = git(store, "rev-parse", "HEAD:systems/guard.json")
+    git(store, "replace", old, blob(store, json.dumps({"targets": []})))
+    proc = run(bash(PROD_COMMAND))
+    assert proc.returncode == 2
+    assert PROD_MESSAGE in proc.stderr
+
+
+def test_a_replace_ref_on_an_approval_changes_nothing(run: Run, store: Path) -> None:
+    approve(store, expires=in_hours(-1))  # expired: it approves nothing
+    old = git(store, "rev-parse", "HEAD:approvals/a.json")
+    git(store, "replace", old, blob(store, approval()))  # a live one
+    proc = run(bash(PROD_COMMAND))
+    assert proc.returncode == 2
+    assert PROD_MESSAGE in proc.stderr
+
+
+def test_a_graft_on_head_changes_nothing(run: Run, store: Path) -> None:
+    """HEAD's guard.json is invalid, so the last valid version in the history is enforced: a graft
+    that gives HEAD another parent must not swap that history for one with a lax guard.json."""
+    break_guard(store)
+    head = git(store, "rev-parse", "HEAD")
+    (store / "systems/guard.json").write_text(json.dumps({"targets": []}))
+    git(store, "add", "-A")
+    tree = git(store, "write-tree")
+    lax = git(store, "commit-tree", tree, "-m", "lax")
+    git(store, "replace", "--graft", head, lax)
+    proc = run(bash(PROD_COMMAND))
+    assert proc.returncode == 2
+    assert PROD_MESSAGE in proc.stderr
+
+
+def test_git_gets_no_git_variable_but_the_one_that_turns_replace_refs_off(
+    store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = tmp_path / "git-env"
+    real = shutil.which("git")
+    fake_git(tmp_path, monkeypatch, f'env | grep "^GIT_" | sort >> {seen}\nexec {real} "$@"')
+    monkeypatch.setenv("GIT_TRACE", "0")
+    monkeypatch.setenv("GIT_REPLACE_REF_BASE", "refs/elsewhere/")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
+    assert decide(bash("ls"), store) is None
+    assert set(seen.read_text().split()) == {"GIT_NO_REPLACE_OBJECTS=1"}
+
+
 # --- fail closed ---
 
 
@@ -1370,7 +1447,19 @@ def test_explain_says_allowed_when_nothing_refuses(store: Path) -> None:
     ],
 )
 @pytest.mark.parametrize("role", [None, "pm", ""])
-def test_decide_is_the_message_of_explain(store: Path, payload: Payload, role: str | None) -> None:
+@pytest.mark.parametrize("granted", [False, True], ids=["unapproved", "approved"])
+def test_decide_is_the_message_of_explain(
+    store: Path, payload: Payload, role: str | None, granted: bool
+) -> None:
+    if granted:
+        approve(store, commands=[PROD_COMMAND, "mail-cli send"], tools=["mcp__mail__send"])
+        approve(
+            store,
+            name="b",
+            system="mail-send",
+            commands=["mail-cli send"],
+            tools=["mcp__mail__send"],
+        )
     assert (
         decide(payload, store, role, datetime.now(UTC)) == explanation(payload, store, role).message
     )
@@ -1541,7 +1630,12 @@ def test_a_short_named_store_still_enforces_its_targets(run: Run, short: Path) -
 
 @pytest.mark.parametrize(
     "command",
-    ["ls work-memory-notes", "cat homework-memory", "echo work-memory.bak", "ls my_work-memory"],
+    [
+        "ls coven-memory-notes",
+        "cat homecoven-memory",
+        "echo coven-memory.bak",
+        "ls my_coven-memory",
+    ],
 )
 def test_a_restricted_session_may_use_words_that_only_contain_the_store_name(
     run: Run, store: Path, command: str
@@ -1550,7 +1644,7 @@ def test_a_restricted_session_may_use_words_that_only_contain_the_store_name(
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.parametrize("command", ["echo 'work-memory'", 'echo "work-memory"'])
+@pytest.mark.parametrize("command", ["echo 'coven-memory'", 'echo "coven-memory"'])
 def test_a_restricted_session_may_echo_the_store_name_as_text(
     run: Run, store: Path, command: str
 ) -> None:

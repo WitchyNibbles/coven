@@ -66,7 +66,10 @@ def _from_dict(data: dict[str, object], file: Path) -> Config:
         raise CovenError(f"{file}: pm_cap must be a whole number of 1 or more")
     if guard is not None and guard != GUARD_REQUIRED:
         raise CovenError(f'{file}: guard must be "{GUARD_REQUIRED}" or null')
-    return Config(Path(memory_path).expanduser(), memory_remote, pm_cap, guard)
+    store = Path(memory_path).expanduser()
+    if not store.is_absolute():
+        raise CovenError(f"{file}: memory_path must be an absolute path")
+    return Config(store, memory_remote, pm_cap, guard)
 
 
 def save_config(config: Config) -> None:

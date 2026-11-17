@@ -8,10 +8,11 @@ validates a file with the same rules before it is committed: it prints `ok: N ta
 or prints the reason and exits 1; it never reads stdin.
 
 When it acts. The hook reads coven's config (`~/.config/coven/config.json`, as plain JSON, the way
-memory-context does) for `memory_path` (default `~/coven-memory`) and `guard`, whose only valid value
-is `"required"`. It is off, and exits 0 at once with no git call and no subprocess, when the store folder is
-missing, or when there is neither `"guard": "required"` nor a `systems/guard.json` in the store's
-working tree. With no config file the store is the default one, so deleting the file does not
+memory-context does) for `memory_path` (default `~/coven-memory`, and it must be absolute) and `guard`, whose only valid value
+is `"required"`. It is off, and exits 0 at once with no git call and no subprocess, when there is no
+`"guard": "required"` and either no store folder or no `systems/guard.json` in its working tree. With
+the latch a missing store folder is not off: Bash and MCP tools are refused for every session, since
+the store held a guard.json once. With no config file the store is the default one, so deleting the file does not
 switch off a store that holds a guard.json. It is on otherwise. A config that exists but cannot be read or is invalid
 refuses Bash and MCP tools in a restricted session (the message points to `coven doctor`) and
 leaves any other session as if the guard were off.
@@ -22,7 +23,8 @@ unrestricted. The extra rules for a restricted session plug in at RESTRICTED_RUL
 
 What it reads. Everything comes from the store's git HEAD (`git cat-file`, `git ls-tree`), never
 from its working tree, so an uncommitted edit, deletion or approval has no effect. Every git call
-runs without the variables that move git to another repository (GIT_VARIABLES).
+runs without any GIT_* variable of the caller and with replace refs and grafts ignored, so neither
+the environment nor a ref can change what the store holds.
 - `systems/guard.json` valid at HEAD is enforced.
 - Invalid at HEAD, the newest valid version among the last GUARD_HISTORY commits that changed it is
   enforced, and every target refusal says so. With no valid version only reads work, and an
@@ -93,18 +95,9 @@ TOO_SLOW = (
 # Commits of guard.json searched for a valid version when HEAD's is invalid.
 GUARD_HISTORY = 50
 MAX_APPROVAL = timedelta(hours=12)
-# The variables that point git at another repository, which a hook inherits from whoever starts it.
-GIT_VARIABLES = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_NAMESPACE",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-)
+# Git reads replace refs and grafts as if they were history: whoever can write the store's refs
+# could swap guard.json, an approval or HEAD without a commit, so git is told to ignore them.
+NO_REPLACE = ("GIT_NO_REPLACE_OBJECTS", "1")
 # One `git cat-file --batch` header: "<oid> <type> <size>"; a missing object is "<name> missing".
 BATCH_HEADER = re.compile(r"(\S+) (\w+) (\d+)")
 BATCH_MISSING = " missing"
@@ -244,14 +237,21 @@ def read_config() -> GuardConfig:
     if guard is not None and guard != LATCH_VALUE:
         raise ConfigError(f'{file}: guard must be "{LATCH_VALUE}" or null')
     store = Path.home() / "coven-memory" if configured is None else Path(configured).expanduser()
+    if not store.is_absolute():
+        raise ConfigError(f"{file}: memory_path must be an absolute path")
     return GuardConfig(store, guard == LATCH_VALUE)
 
 
 def off_reason(config: GuardConfig) -> str | None:
-    """Why the guard is off for this config, or None when it is on. One stat or two, no git."""
+    """Why the guard is off for this config, or None when it is on. One stat or two, no git.
+
+    With the latch a missing store folder is not off: the store held a guard.json once, and a
+    deleted or moved folder must not unguard it. The git reads then refuse, naming the folder."""
+    if config.latch:
+        return None
     if not config.store.is_dir():
         return f"no memory store folder at {config.store}"
-    if config.latch or os.path.lexists(config.store / GUARD_FILE):
+    if os.path.lexists(config.store / GUARD_FILE):
         return None
     return f'no "guard": "{LATCH_VALUE}" in the config and no {GUARD_FILE} in {config.store}'
 
@@ -312,8 +312,10 @@ def check_file(path: Path) -> str:
 
 def _git(store: Path, *args: str, stdin: bytes = b"") -> bytes:
     """git's stdout, run on the store's own repository (never one found above it or named by the
-    environment). StoreError when git is missing, fails or times out."""
-    env = {key: value for key, value in os.environ.items() if key not in GIT_VARIABLES}
+    environment), with every GIT_* variable of the caller dropped and replace refs ignored.
+    StoreError when git is missing, fails or times out."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env[NO_REPLACE[0]] = NO_REPLACE[1]
     try:
         proc = subprocess.run(
             ["git", f"--git-dir={store / '.git'}", *args],
@@ -334,7 +336,9 @@ def _git(store: Path, *args: str, stdin: bytes = b"") -> bytes:
 
 
 def _head(store: Path) -> str:
-    """The commit HEAD points to; StoreError in a store without commits."""
+    """The commit HEAD points to; StoreError in a store without a folder or without commits."""
+    if not store.is_dir():
+        raise StoreError(f"the folder {store} does not exist")
     out = _git(store, "cat-file", "--batch-check", stdin=b"HEAD\n")
     header = out.decode("utf-8", errors="replace").strip()
     if header == "HEAD" + BATCH_MISSING:

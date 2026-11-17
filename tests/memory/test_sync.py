@@ -1,4 +1,5 @@
 import os
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -348,6 +349,24 @@ def test_is_guarded_ignores_an_exported_git_dir(lab: Lab, monkeypatch: pytest.Mo
     root = lab.store("a")
     commit_guard(lab, root)
     point_git_at(monkeypatch, lab.store("other"))
+    assert store.is_guarded(root)
+
+
+def test_is_guarded_ignores_a_replace_ref_on_head(lab: Lab) -> None:
+    """A replace ref swaps the commit git reads: HEAD without guard.json must not unguard a store."""
+    root = lab.store("a")
+    commit_guard(lab, root)
+    empty = subprocess.run(
+        ["git", "-C", str(root), "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"],
+        input="no guard\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    subprocess.run(["git", "-C", str(root), "replace", head, empty], check=True)
     assert store.is_guarded(root)
 
 

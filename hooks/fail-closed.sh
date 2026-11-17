@@ -73,7 +73,12 @@ fallback_deny_secrets() {
 # that reach outside, while the guard is on, and lets every call through while it is off. "On" is
 # the Python hook's own rule, read with sed and grep from the same config: a store folder
 # (`memory_path`, `~/coven-memory` with no config file or key) and either `"guard": "required"` or a
-# systems/guard.json in its working tree. Whatever the config says beyond that is left to python.
+# systems/guard.json in its working tree; with the latch a missing store folder still counts as on.
+# This is a degraded mode, not the guard: it ignores the session's role, never reads the store's
+# targets or approvals, and does not validate the config (a broken one is read best effort). That is
+# acceptable because it only ever refuses more than the real guard would: the one thing it protects
+# is that a machine with an old python3 does not quietly lose the guard, and the fix is to install
+# Python 3.12+, which the message says.
 guard_is_on() {
     config="${HOME}/.config/coven/config.json"
     store=
@@ -83,13 +88,13 @@ guard_is_on() {
     \~) store=$HOME ;;
     \~/*) store="${HOME}/${store#\~/}" ;;
     esac
-    [ -d "$store" ] || return 1
     found=1
     if [ -f "$config" ]; then
         grep -q '"guard"[[:space:]]*:[[:space:]]*"required"' "$config"
         found=$?
     fi
-    [ "$found" -eq 1 ] || return 0 # on, or grep failed: not knowing is not "off"
+    [ "$found" -eq 1 ] || return 0 # the latch (or a grep that failed: not knowing is not "off")
+    [ -d "$store" ] || return 1
     [ -e "$store/systems/guard.json" ] || [ -L "$store/systems/guard.json" ]
 }
 

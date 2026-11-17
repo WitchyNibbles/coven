@@ -105,3 +105,10 @@ def test_config_wrong_types_name_the_file(text: str):
     with pytest.raises(CovenError) as error:
         load_config()
     assert str(config_file()) in str(error.value)
+
+
+def test_a_relative_memory_path_is_refused_with_the_file_named():
+    config_file().parent.mkdir(parents=True)
+    config_file().write_text('{"memory_path": "notes"}')
+    with pytest.raises(CovenError, match=r"config\.json: memory_path must be an absolute path"):
+        load_config()
