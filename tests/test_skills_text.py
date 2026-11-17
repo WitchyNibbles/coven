@@ -390,7 +390,8 @@ def test_manager_commits_the_learning_line_before_writing_the_step_file() -> Non
     """`coven approve` refuses unless the step file is the only change in the store."""
     learning = " ".join(body("manager").split("**Learning.**")[1].split())
     assert "commit the learning line" in learning
-    assert "before" in learning and "step file" in learning
+    assert "before" in learning
+    assert "step file" in learning
     assert "only change in the store" in learning
 
 

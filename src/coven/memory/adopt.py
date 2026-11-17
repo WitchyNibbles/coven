@@ -971,7 +971,9 @@ def _report(plan: Plan, outcome: Outcome) -> list[str]:
         lines.append(f"  core.hooksPath was: {outcome.old_hooks_path}")
     lines.append(f"  commit: {outcome.commit or 'none needed'}")
     if plan.guarded and store.git(plan.root, "remote", check=False).stdout.split():
-        lines.append(f"  warning: this guarded store has a git remote; {store.GUARDED_REMOTE_ADVICE}")
+        lines.append(
+            f"  warning: this guarded store has a git remote; {store.GUARDED_REMOTE_ADVICE}"
+        )
     if outcome.earlier:
         lines.append(
             f"  earlier run, commit {outcome.earlier.commit}: core.hooksPath was "

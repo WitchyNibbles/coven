@@ -588,13 +588,16 @@ def test_a_command_the_guard_refuses_a_pm_cannot_be_approved(text: str, named: s
     assert "ask the PM for a form the guard can read" in message
     assert approval_files(shared) == []
     assert head(shared) == start
-    assert git(shared, "status", "--porcelain", "--untracked-files=all") == step_only(shared, "step-pm")
+    assert git(shared, "status", "--porcelain", "--untracked-files=all") == step_only(
+        shared, "step-pm"
+    )
 
 
 def test_a_refusal_for_a_pm_names_the_rule_the_guard_gave() -> None:
     shared = make_store(home() / "any-memory", ANY_ORDERS_HOST)
     message = refused(shared, "step-rule", f"{HOST_UNREAD}\n", "a PM cannot run this")
-    assert "host" in message and "not written out" in message
+    assert "host" in message
+    assert "not written out" in message
 
 
 def test_an_approved_command_is_allowed_for_a_pm_by_the_real_guard(
