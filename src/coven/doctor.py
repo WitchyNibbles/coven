@@ -325,7 +325,7 @@ def _guard_targets(hook: ModuleType, store_path: Path) -> tuple[bool, list[str]]
 
 def _live_approvals(hook: ModuleType, store_path: Path, now: datetime) -> list[str]:
     live = sorted(
-        (a for a in hook.approvals(store_path) if hook._live(a, now)),  # the hook's own rule
+        (a for a in hook.approvals(store_path) if hook.is_live(a, now)),
         key=lambda approval: approval.expires,
     )
     if not live:

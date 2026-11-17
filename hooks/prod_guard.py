@@ -710,7 +710,7 @@ def approvals(store: Path) -> list[Approval]:
     return list(_approval_records(store))
 
 
-def _live(approval: Approval, now: datetime) -> bool:
+def is_live(approval: Approval, now: datetime) -> bool:
     """Whether an approval is in force: not expired, and ending at most MAX_APPROVAL from now."""
     return now < approval.expires <= now + MAX_APPROVAL
 
@@ -2716,7 +2716,7 @@ def _triggers(call: Call, target: Target) -> Iterator[tuple[Literal["command", "
 
 def _grants(approval: Approval, hit_system: str, via: str, call: Call, now: datetime) -> bool:
     """Whether a live approval of `hit_system` names the exact command (stripped) or tool."""
-    if approval.system != hit_system or not _live(approval, now):
+    if approval.system != hit_system or not is_live(approval, now):
         return False
     if via == "tool":
         return call.tool in approval.tools
