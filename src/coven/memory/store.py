@@ -210,7 +210,7 @@ def _installed_hook(path: Path) -> Path:
     return path / where
 
 
-def _pin_hooks_path(path: Path) -> None:
+def pin_hooks_path(path: Path) -> None:
     """Make git run the store's own hooks folder, whatever a global `core.hooksPath` says, and
     check that it does. The setting is relative, which git resolves against the top folder of the
     work tree, so a moved store keeps working."""
@@ -253,7 +253,7 @@ def init_store(path: Path, remote: str | None) -> None:
         git(path, "add", "-A")
         _commit(path, "init memory store")
     install_hook(path)
-    _pin_hooks_path(path)
+    pin_hooks_path(path)
     if remote:
         _set_origin(path, remote)
 
