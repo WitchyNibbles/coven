@@ -25,6 +25,20 @@ GUARD_FILE = "systems/guard.json"
 NOT_PUSHED_GUARDED = "not pushed: guarded store"
 BRANCH = "main"
 RELATIVE_HOOKS = ".git/hooks"
+# Variables that move git to another repository; a caller's value must not redirect `git -C <store>`.
+REPO_VARIABLES = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    }
+)
 GIT_TIMEOUT = 60  # seconds per git command
 GH_TIMEOUT = 30  # seconds for the gh call that checks a remote's visibility
 LOCK_RETRY_DELAY = 0.5  # seconds before the one retry of a command that met `index.lock`
@@ -99,7 +113,8 @@ def pause() -> None:
 
 
 def _run(path: Path, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env = {k: v for k, v in os.environ.items() if k not in REPO_VARIABLES}
+    env["GIT_TERMINAL_PROMPT"] = "0"
     env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
     try:
         return subprocess.run(

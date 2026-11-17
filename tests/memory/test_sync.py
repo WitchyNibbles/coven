@@ -338,6 +338,32 @@ def test_sync_on_a_store_git_cannot_read_pushes_nothing(lab: Lab, bare_remote: P
     assert heads(lab, bare_remote) == ""
 
 
+def point_git_at(monkeypatch: pytest.MonkeyPatch, other: Path) -> None:
+    """What a caller exporting GIT_DIR and GIT_WORK_TREE does to every git command it starts."""
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+
+
+def test_is_guarded_ignores_an_exported_git_dir(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = lab.store("a")
+    commit_guard(lab, root)
+    point_git_at(monkeypatch, lab.store("other"))
+    assert store.is_guarded(root)
+
+
+def test_sync_on_a_guarded_store_pushes_nothing_under_an_exported_git_dir(
+    lab: Lab, bare_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = lab.store("a", bare_remote)
+    commit_guard(lab, root)
+    point_git_at(monkeypatch, lab.store("other"))
+    report = store.sync_store(root)
+    monkeypatch.delenv("GIT_DIR")  # the test's own git calls must see the real repos again
+    monkeypatch.delenv("GIT_WORK_TREE")
+    assert report[-1] == "not pushed: guarded store"
+    assert heads(lab, bare_remote) == ""
+
+
 def test_sync_on_a_guarded_store_commits_but_never_pushes(lab: Lab, bare_remote: Path) -> None:
     root = lab.store("a", bare_remote)
     store.sync_store(root)
