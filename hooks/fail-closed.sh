@@ -71,21 +71,24 @@ fallback_deny_secrets() {
 # Without a new enough python3 the prod guard cannot read its store, and skipping it would switch it
 # off on exactly the machines where nobody sees it. So it refuses Bash and MCP tool calls, the ones
 # that reach outside, while the guard is on, and lets every call through while it is off. "On" is
-# the Python hook's own rule, read with sed and grep from the same config: a config file, a store
-# folder (`memory_path`, `~/coven-memory` by default) and either `"guard": "required"` or a
+# the Python hook's own rule, read with sed and grep from the same config: a store folder
+# (`memory_path`, `~/coven-memory` with no config file or key) and either `"guard": "required"` or a
 # systems/guard.json in its working tree. Whatever the config says beyond that is left to python.
 guard_is_on() {
     config="${HOME}/.config/coven/config.json"
-    [ -f "$config" ] || return 1
-    store=$(sed -n 's/.*"memory_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | sed 1q)
+    store=
+    [ -f "$config" ] && store=$(sed -n 's/.*"memory_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | sed 1q)
     [ -n "$store" ] || store="${HOME}/coven-memory"
     case $store in
     \~) store=$HOME ;;
     \~/*) store="${HOME}/${store#\~/}" ;;
     esac
     [ -d "$store" ] || return 1
-    grep -q '"guard"[[:space:]]*:[[:space:]]*"required"' "$config"
-    found=$?
+    found=1
+    if [ -f "$config" ]; then
+        grep -q '"guard"[[:space:]]*:[[:space:]]*"required"' "$config"
+        found=$?
+    fi
     [ "$found" -eq 1 ] || return 0 # on, or grep failed: not knowing is not "off"
     [ -e "$store/systems/guard.json" ] || [ -L "$store/systems/guard.json" ]
 }

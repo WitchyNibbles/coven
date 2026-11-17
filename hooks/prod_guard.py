@@ -9,9 +9,10 @@ or prints the reason and exits 1; it never reads stdin.
 
 When it acts. The hook reads coven's config (`~/.config/coven/config.json`, as plain JSON, the way
 memory-context does) for `memory_path` (default `~/coven-memory`) and `guard`, whose only valid value
-is `"required"`. It is off, and exits 0 at once with no git call and no subprocess, when there is no
-config file, no store folder, or neither `"guard": "required"` nor a `systems/guard.json` in the
-store's working tree. It is on otherwise. A config that exists but cannot be read or is invalid
+is `"required"`. It is off, and exits 0 at once with no git call and no subprocess, when the store folder is
+missing, or when there is neither `"guard": "required"` nor a `systems/guard.json` in the store's
+working tree. With no config file the store is the default one, so deleting the file does not
+switch off a store that holds a guard.json. It is on otherwise. A config that exists but cannot be read or is invalid
 refuses Bash and MCP tools in a restricted session (the message points to `coven doctor`) and
 leaves any other session as if the guard were off.
 
@@ -220,14 +221,15 @@ def config_file() -> Path:
     return Path.home() / ".config" / "coven" / "config.json"
 
 
-def read_config() -> GuardConfig | None:
-    """The store and latch of coven's config; None when there is no config file (the guard is
-    off). ConfigError when the file cannot be read or holds something else than expected."""
+def read_config() -> GuardConfig:
+    """The store and latch of coven's config. With no config file that is the default store and no
+    latch, so deleting the file cannot switch off a store that holds a guard.json. ConfigError
+    when the file cannot be read or holds something else than expected."""
     file = config_file()
     try:
         text = file.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return None
+        return GuardConfig(Path.home() / "coven-memory", latch=False)
     except (OSError, UnicodeDecodeError) as exc:
         raise ConfigError(f"{file}: cannot be read ({exc})") from None
     try:
@@ -245,10 +247,8 @@ def read_config() -> GuardConfig | None:
     return GuardConfig(store, guard == LATCH_VALUE)
 
 
-def off_reason(config: GuardConfig | None) -> str | None:
+def off_reason(config: GuardConfig) -> str | None:
     """Why the guard is off for this config, or None when it is on. One stat or two, no git."""
-    if config is None:
-        return f"no coven config file at {config_file()}"
     if not config.store.is_dir():
         return f"no memory store folder at {config.store}"
     if config.latch or os.path.lexists(config.store / GUARD_FILE):
@@ -748,7 +748,7 @@ def run(argv: Sequence[str], stdin: TextIO, environ: Mapping[str, str]) -> int:
         config = read_config()
     except ConfigError as exc:
         return _unreadable_config(exc, role, stdin)
-    if config is None or off_reason(config) is not None:
+    if off_reason(config) is not None:
         return 0
     return _guard(config.store, role, stdin)
 

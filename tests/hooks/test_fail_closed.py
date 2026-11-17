@@ -447,8 +447,28 @@ def test_old_python_lets_everything_through_while_the_guard_is_off(
     request: pytest.FixtureRequest, run_hook: Run, python: str
 ) -> None:
     env: dict[str, str] = request.getfixturevalue(python)
-    proc = run_hook(WRAPPER, bash_payload(), env, args=(str(PROD_GUARD),))  # no config file
+    proc = run_hook(WRAPPER, bash_payload(), env, args=(str(PROD_GUARD),))  # no store at all
     assert (proc.returncode, proc.stderr) == (0, NEED_PYTHON + "\n")
+
+
+@pytest.mark.parametrize("python", ["old_python", "no_python"])
+def test_old_python_without_a_config_file_still_guards_the_default_store(
+    request: pytest.FixtureRequest, run_hook: Run, python: str
+) -> None:
+    store = Path(os.environ["HOME"]) / "coven-memory"
+    (store / "systems").mkdir(parents=True)
+    (store / "systems" / "guard.json").write_text('{"targets": []}')
+    env: dict[str, str] = request.getfixturevalue(python)
+    proc = run_hook(WRAPPER, bash_payload(), env, args=(str(PROD_GUARD),))
+    assert proc.returncode == 2
+    assert OLD_PYTHON_GUARD in proc.stderr
+
+
+def test_old_python_without_a_config_file_and_a_default_store_without_a_guard_file_is_off(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    (Path(os.environ["HOME"]) / "coven-memory" / "systems").mkdir(parents=True)
+    assert run_hook(WRAPPER, bash_payload(), old_python, args=(str(PROD_GUARD),)).returncode == 0
 
 
 def test_old_python_with_no_latch_and_no_guard_file_is_off(

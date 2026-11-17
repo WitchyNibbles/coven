@@ -203,7 +203,7 @@ def no_git(tmp_path: Path) -> dict[str, str]:
     return {"PATH": str(empty)}
 
 
-def test_no_config_file_is_off(run: Run, no_git: dict[str, str]) -> None:
+def test_no_config_file_and_no_default_store_is_off(run: Run, no_git: dict[str, str]) -> None:
     proc = run(bash(PROD_COMMAND), env=no_git)
     assert (proc.returncode, proc.stderr) == (0, "")
 
@@ -219,10 +219,20 @@ def test_no_latch_and_no_guard_file_is_off(
         assert (proc.returncode, proc.stderr) == (0, "")
 
 
-def test_a_store_in_the_default_place_without_a_config_file_is_off(
+@pytest.mark.parametrize("role", [None, "pm"], ids=["unrestricted", "restricted"])
+def test_no_config_file_uses_the_default_store_and_enforces_it(run: Run, role: str | None) -> None:
+    """Deleting the config file must not switch off a store that holds a guard.json."""
+    make_store(Path(os.environ["HOME"]) / "coven-memory")
+    assert not config_file().exists()
+    proc = run(bash(PROD_COMMAND), role=role)
+    assert proc.returncode == 2
+    assert PROD_MESSAGE in proc.stderr
+
+
+def test_no_config_file_and_a_default_store_without_a_guard_file_is_off(
     run: Run, no_git: dict[str, str]
 ) -> None:
-    make_store(Path(os.environ["HOME"]) / "coven-memory")
+    (Path(os.environ["HOME"]) / "coven-memory" / "systems").mkdir(parents=True)
     proc = run(bash(PROD_COMMAND), role="pm", env=no_git)
     assert (proc.returncode, proc.stderr) == (0, "")
 
@@ -268,11 +278,10 @@ def test_the_latch_with_a_committed_guard_enforces_it(run: Run, tmp_path: Path) 
 
 def test_the_config_and_memory_context_name_the_same_store(tmp_path: Path) -> None:
     sibling = load_module("memory_context")
+    assert pg.read_config() == pg.GuardConfig(sibling.store_path(), latch=False)  # no file
     for text in ("{}", json.dumps({"memory_path": str(tmp_path / "elsewhere")})):
         write_config(text)
-        config = pg.read_config()
-        assert config is not None
-        assert config.store == sibling.store_path()
+        assert pg.read_config().store == sibling.store_path()
 
 
 def test_the_config_file_is_the_one_coven_reads() -> None:
