@@ -96,8 +96,9 @@ under `fail-closed.sh` like deny-secrets, stdlib only.
 `memory_path` and a new key `guard`.
 - **Off** (exit 0, no git call, no subprocess) when config has no `"guard": "required"` and
   `<store>/systems/guard.json` does not exist in the working tree. This is one JSON read and one
-  `stat`, so users without a guard pay only the Python start-up every hook already pays. No config
-  file, or no store at the path, is off too.
+  `stat`, so users without a guard pay only the Python start-up every hook already pays. With no
+  config file the store is the default `~/coven-memory`, so deleting the config never switches
+  off a store that holds `guard.json`. No store folder at the path is off.
 - **On** otherwise. `coven memory adopt` and `coven setup` set `"guard": "required"` (an owned,
   undoable change) when the store has a committed `guard.json`; the systems-map skill runs
   `coven setup` after the first `guard.json` commit, and doctor warns while a committed
@@ -115,9 +116,9 @@ permission hook keeps its `== pm` test; the guard is the stricter of the two on 
 edit, deletion or approval has no effect.
 - `guard.json` valid at HEAD: enforced.
 - Invalid at HEAD: the newest valid version among the last 50 commits is enforced, and every
-  refusal says so, so the GM can still commit a fix. None valid: every session may only read until
-  the user fixes or reverts it; the commit that repairs `guard.json` is let through for an
-  unrestricted session.
+  refusal says so, so the GM can still commit a fix. None valid: every session may only read, and
+  an unrestricted session may also edit files with Write and Edit; the user commits the fix or
+  reverts it in their own terminal (the refusal says so).
 - Absent at HEAD (latch set): restricted sessions lose Bash and MCP tools; unrestricted ones go on.
 - git cannot read the store (no commits, a broken repo, a timeout): any call that reaches outside
   (Bash, MCP) is refused for every session, naming the git error.
