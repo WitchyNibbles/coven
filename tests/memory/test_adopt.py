@@ -612,14 +612,23 @@ def test_the_report_names_backup_checksum_renames_hook_and_the_way_back(
     assert f"tar -xzf {archive}" in out
 
 
-def test_it_never_pushes_or_touches_a_remote(lab: Lab, bare_remote: Path) -> None:
+def test_it_never_pushes_fetches_or_touches_a_remote(lab: Lab, bare_remote: Path) -> None:
+    other = lab.root / "someone-else"
+    other.mkdir()
+    lab.git(other, "init", "-q")
+    (other / "note.md").write_text("elsewhere\n", encoding="utf-8")
+    lab.git(other, "add", "-A")
+    lab.git(other, "commit", "-q", "-m", "elsewhere")
+    lab.git(other, "push", "-q", str(bare_remote), "HEAD:refs/heads/theirs")
+    remote_refs = lab.git(bare_remote, "for-each-ref")
     root = seed(lab)
     lab.git(root, "remote", "add", "origin", str(bare_remote))
     lab.git(root, "remote", "add", "elsewhere", "/home/user/nowhere.git")
     assert run_adopt(root, "--yes") == 0
-    assert lab.git(bare_remote, "for-each-ref") == ""
+    assert lab.git(bare_remote, "for-each-ref") == remote_refs  # nothing pushed
+    assert lab.git(root, "for-each-ref", "refs/remotes") == ""  # nothing fetched
+    assert not (root / ".git" / "FETCH_HEAD").exists()
     assert lab.git(root, "remote", "get-url", "elsewhere").strip() == "/home/user/nowhere.git"
-    assert lab.git(root, "branch", "-r") == ""
 
 
 def test_the_command_runs_on_a_store_coven_already_made(lab: Lab) -> None:
