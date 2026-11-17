@@ -2,6 +2,7 @@
 the user approved the exact command. Every system, host and command here is invented, and no test
 runs a remote CLI: a command is only a string the guard reads."""
 
+import argparse
 import importlib.util
 import io
 import json
@@ -18,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from coven import paths
+from coven import cli, paths
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 SCRIPT = HOOKS / "prod_guard.py"
@@ -4359,16 +4360,57 @@ def test_decide_is_the_message_of_explain_for_the_restricted_rules(
     assert decide(payload, store, role) == explained(payload, role).message
 
 
-def test_the_hook_names_the_subcommands_that_write_the_store_or_the_config() -> None:
-    """The hook's list is what `coven approve`, `coven setup` and `coven memory adopt|init|sync`
-    are: a command added to coven's CLI that writes either must be added here."""
-    assert pg.STORE_WRITING_SUBCOMMANDS == {
-        "approve",
-        "setup",
-        "memory adopt",
-        "memory init",
-        "memory sync",
+# Every coven subcommand, classified by reading what it does. A writer changes the memory store or
+# coven's config; the hook must refuse it to a restricted session. A new subcommand fails
+# `test_every_coven_subcommand_is_classified` until it is put in one of the two sets.
+WRITERS = frozenset({"approve", "setup", "memory adopt", "memory init", "memory sync"})
+NON_WRITERS = frozenset(
+    {
+        "doctor",  # read-only
+        "guard check",  # reads the file it is given
+        "guard explain",  # runs the guard's decision on a command, writes nothing
+        "pm status",  # reads sessions
+        "pm launch",  # prints the command to run
+        "pm resume",  # writes a prompt file under the cache folder, never the store or config
+        "pm health",  # reads state records
+        "project",  # writes the standard into the repo it is pointed at; see the next test
     }
+)
+
+
+def subcommand_paths(parser: argparse.ArgumentParser, prefix: str = "") -> set[str]:
+    """The words the user types for every command that is not only a group of commands."""
+    found: set[str] = set()
+    for action in parser._actions:  # argparse has no public way to list subcommands
+        if isinstance(action, argparse._SubParsersAction):
+            for name, child in action.choices.items():
+                found |= subcommand_paths(child, f"{prefix}{name} ")
+            return found
+    return {prefix.strip()}
+
+
+def test_every_coven_subcommand_is_classified_as_a_writer_or_not() -> None:
+    commands = subcommand_paths(cli.build_parser())
+    assert WRITERS.isdisjoint(NON_WRITERS)
+    assert commands == WRITERS | NON_WRITERS, "classify the new or removed coven subcommand"
+
+
+def test_the_hook_refuses_exactly_the_subcommands_that_write_the_store_or_the_config() -> None:
+    """A subcommand added to coven's CLI that writes either must be added to the hook's list."""
+    assert pg.STORE_WRITING_SUBCOMMANDS == WRITERS
+
+
+@pytest.mark.parametrize("command", sorted(WRITERS))
+def test_a_pm_is_refused_every_writing_subcommand(store: Path, command: str) -> None:
+    assert decide(bash(f"coven {command}"), store, "pm") is not None
+
+
+@pytest.mark.parametrize("command", ["coven project ~/coven-memory", "coven project ."])
+def test_a_pm_cannot_point_the_project_command_at_the_store(store: Path, command: str) -> None:
+    """`coven project` writes into any repo it is given; a PM that names the store (or runs in it)
+    meets the store rule, so it is not a writer of the hook's list."""
+    named = command.replace("~", str(home()))
+    assert decide(bash(named, cwd=str(store)), store, "pm") is not None
 
 
 # --- explain gives the verdict the hook gives, in every state of the store ---
