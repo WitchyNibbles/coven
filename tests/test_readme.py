@@ -211,3 +211,86 @@ def test_the_readme_says_what_installing_changes_and_how_to_switch_it_off() -> N
         "coven setup --undo",
     ):
         assert needle in section, needle
+
+
+def section(text: str, heading: str) -> str:
+    return text.split(f"\n## {heading}")[1].split("\n## ")[0]
+
+
+def test_the_readme_has_a_short_production_guard_section() -> None:
+    body = section(readme(), "Production guard")
+    for needle in (
+        "systems-map",
+        "coven setup",
+        "coven approve",
+        "--revoke",
+        "coven guard explain",
+        "coven guard check",
+        "coven doctor",
+        "known gaps",
+    ):
+        assert needle in body, needle
+    assert len(body.splitlines()) <= 30
+
+
+def test_the_memory_section_mentions_adopt() -> None:
+    assert "coven memory adopt" in section(readme(), "Memory store")
+
+
+def known_gaps() -> str:
+    return (REPO / "docs/known-gaps.md").read_text(encoding="utf-8")
+
+
+def test_known_gaps_lists_the_production_guards_limits() -> None:
+    body = section(known_gaps(), "Production guard")
+    for needle in (
+        "best effort",
+        "`*` matcher",
+        "from the docs, not live",
+        "a loop",
+        "a variable assignment",
+        "xargs",
+        "$(...)",
+        "backticks",
+        "python3 -c",
+        "perl -e",
+        "later one",
+        "--plugin-dir",
+        "git clean",
+        "git mv",
+        ".cla*",
+        "HOME, CLAUDE_CONFIG_DIR, CLAUDE_PLUGIN_ROOT and XDG_CONFIG_HOME",
+        "127",
+        "cd ~/.config/git && ls co*",
+        "cat",
+        ".claude/settings.json",
+        "symlink",
+        "explain",
+        "exits 1",
+        "verdict line",
+        "terminal",
+    ):
+        assert needle in body, needle
+
+
+def test_known_gaps_lists_what_adopt_does_not_cover() -> None:
+    body = section(known_gaps(), "coven memory adopt")
+    for needle in ("INDEX.md", "rebuilt", "backup", "mid-commit", "dirty", "case-insensitive"):
+        assert needle in body, needle
+
+
+def test_the_changelog_lists_the_guard_work_as_unreleased() -> None:
+    text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = text.split("## Unreleased")[1].split("\n## ")[0]
+    for needle in (
+        "production guard",
+        "coven guard check",
+        "coven guard explain",
+        "coven approve",
+        "doctor",
+        "coven memory adopt",
+        "systems-map",
+        "hook",
+        "coven memory init",
+    ):
+        assert needle in entry, needle

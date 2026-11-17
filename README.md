@@ -21,7 +21,7 @@
 
 [Install](#install) ⋆ [Setup](#setup) ⋆ [Walkthrough](#walkthrough-the-toy-project) ⋆
 [Hierarchy](#the-hierarchy-and-what-it-costs) ⋆ [Code standard](#the-code-standard) ⋆
-[Known gaps](#known-gaps)
+[Production guard](#production-guard) ⋆ [Known gaps](#known-gaps)
 
 </div>
 
@@ -181,7 +181,8 @@ nothing itself:
   role. The real wall is branch protection on the default branch in GitHub, so turn it on (see
   [known gaps](docs/known-gaps.md)). A production step (anything that
   changes a live system, a first push to a public repo, a release) goes to the GM, which shows it to
-  you and runs it in your own session, where you see each permission prompt.
+  you. With no guard it runs the step in your own session, where you see each permission prompt;
+  with a [production guard](#production-guard) the PM runs only the commands you approved.
 - Each PM runs with its own permission mode, so your own sessions keep whatever mode you use. The
   pm-permissions hook decides each `git push` and `gh` command the PM tries, and denies the rest.
 - Each repo needs one interactive trust prompt the first time a PM starts there: run `claude` in
@@ -218,6 +219,32 @@ and `coven memory sync` fetches, rebases and pushes.
 
 **The remote must be private.** The store holds personal notes. Setup asks `gh repo view` whether the
 remote is private when it can, and warns when it cannot check. A remote is optional.
+
+Already have a store in coven's format, at another path or from another machine?
+`coven memory adopt <path>` makes it coven's store in place: a backup first, every entry kept and
+counted, and the way back printed. Without `--yes` it prints the plan and changes nothing.
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
+## Production guard
+
+✧ Optional. Name your live systems once, and no Claude Code session can reach them without an
+approval for the exact command. With no guard set up, nothing changes for you.
+
+- **Turn it on.** Ask the GM to map a system (`coven:systems-map`). It writes
+  `systems/<system>.md` and `systems/guard.json` in the memory store, checks the targets with
+  `coven guard check <file>`, commits them, then runs `coven setup --yes` to switch the guard on.
+  A store with a guard never pushes: `coven memory sync` keeps it on your machine.
+- **Approve.** A PM sends a production step, the GM shows it to you, and on a yes
+  `coven approve <id> --expires-in 2h` commits an approval for those exact commands (at most 12
+  hours). The PM runs them, the guard refuses anything else, and the GM takes the approval back
+  with `coven approve --revoke <id>` when the task is done.
+- **Explain.** `coven guard explain "<command>"` shows which targets a command hits, which
+  approval covers it, and whether a PM or every session would be refused. It writes nothing.
+- **Doctor.** `coven doctor` shows whether the guard is on and the last five refusals.
+
+The guard is best effort against a PM that follows its role, and it never covers your own terminal
+outside Claude Code. See [known gaps](docs/known-gaps.md).
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 

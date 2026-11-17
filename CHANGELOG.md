@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- A production guard: name your live systems in the memory store (`systems/guard.json`), and a
+  PreToolUse hook refuses any tool call that reaches one unless a live approval names the exact
+  command. It also holds project manager sessions off the store, coven's config, Claude Code's
+  settings and `plugins/`.
+- `coven guard check <file>` validates a `guard.json`; `coven guard explain` shows what the guard
+  decides for one command or tool, and writes nothing.
+- `coven approve <id> --expires-in <time>` turns a step file into committed approvals (at most 12
+  hours); `coven approve --revoke <id>` removes them.
+- `coven doctor` and `coven setup` report the guard, its `guard.json`, live approvals and the last
+  five refusals.
+- `coven memory adopt <path>` takes over an existing store in place, with a backup, a count check
+  and the way back.
+- New skill `systems-map`, plus the manager and project manager rules for approvals.
+- The store's pre-commit hook is version 4: after you upgrade, run `coven memory init` so
+  `coven memory sync` can push again.
+
 ## 0.1.0 (unreleased)
 
 First version.

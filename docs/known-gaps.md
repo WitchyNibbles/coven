@@ -83,6 +83,40 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   secret, and it does not stop a PM that commits with the hook removed. A PM is told to send facts
   to the GM instead of writing them.
 
+## Production guard
+
+The production guard (`hooks/prod_guard.py`) is best effort against a PM that follows its role.
+Its rules are public. Its boundary is the committed store and the approvals in it.
+
+- The hook is registered with a PreToolUse `*` matcher that covers every tool, MCP tools and a
+  subagent's calls included. That was checked from the docs, not live: no session refused a call
+  through it in the build. Check one refused call and one approved call after you turn the guard
+  on (`coven doctor` shows the refusals).
+- Known limits. The guard reads a command's text; it does not run it, so it cannot see:
+  - a path built by a loop, a variable assignment, a pipe into `xargs`, a `$(...)` or backticks,
+    or interpreter code (`python3 -c`, `perl -e`) with a literal path to a folder that holds a
+    guarded zone (`~`, `~/.config`, `~/.claude`, the store's parents);
+  - a script written in one call and run in a later one;
+  - plugins loaded with `--plugin-dir`;
+  - `git clean` or `git mv` in `~`, when `~` is a git repo;
+  - glob forms such as `.cla*` inside a project;
+  - variables other than HOME, CLAUDE_CONFIG_DIR, CLAUDE_PLUGIN_ROOT and XDG_CONFIG_HOME.
+- If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
+  block the call.
+- False positives, which fail closed (the call is refused, and the PM asks the GM):
+  `cd ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read
+  tool), and a symlink in `~/projects` that points at `~`.
+- `coven guard explain` exits 1 on an unreadable store even when the call would be allowed. The
+  verdict line still prints.
+- The user's own terminal, outside Claude Code, is never guarded.
+
+## coven memory adopt
+
+- A hand-written `INDEX.md` is rebuilt; the store's history and the backup keep the old one.
+- A kill mid-commit leaves a dirty tree, and a re-run refuses until you reset it
+  (`git -C <store> status` shows what).
+- Adopt was not tested on case-insensitive filesystems.
+
 ## Checks and platforms
 
 - The install smoke job (`.github/workflows/install-smoke.yml`, run by `ci/install-smoke/run.sh`)
