@@ -87,7 +87,7 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
 
 ## Production guard
 
-The production guard (`hooks/prod_guard.py`) is best effort against a PM that follows its role.
+The production guard (`hooks/prod_guard.py`, entered through `hooks/prod_guard_gate.py`) is best effort against a PM that follows its role.
 Its rules are public. Its boundary is the committed store and the approvals in it.
 
 - The hook is registered with a PreToolUse `*` matcher that covers every tool, MCP tools and a
@@ -116,6 +116,13 @@ Its rules are public. Its boundary is the committed store and the approvals in i
 - On Python older than 3.12 the production guard runs in a degraded mode (see the git-push limits
   above): it refuses every Bash and MCP tool call while the guard is on, reads no targets or
   approvals, and so only ever refuses more than the real guard.
+- The hooks cache their bytecode: the first call writes `__pycache__` into the plugin's `hooks/`
+  folder (`launch.py` runs a hook through the import system), so a call no longer recompiles
+  3000 lines. This leans on the PM zone rules that already refuse a PM's writes under
+  `~/.claude/plugins/`, and it gives nobody a new power: whoever can write the cache can write the
+  hooks. Python checks a cached file against its source's mtime and size, so an edited hook is
+  recompiled. A plugin folder that cannot be written (a read-only install) still works, at the old
+  cost per call.
 - The user's own terminal, outside Claude Code, is never guarded.
 
 ## coven memory adopt
