@@ -239,8 +239,10 @@ approval for the exact command. With no guard set up, nothing changes for you.
   `coven approve <id> --expires-in 2h` commits an approval for those exact commands (at most 12
   hours). The PM runs them, the guard refuses anything else, and the GM takes the approval back
   with `coven approve --revoke <id>` when the task is done.
-- **Explain.** `coven guard explain "<command>"` shows which targets a command hits, which
-  approval covers it, and whether a PM or every session would be refused. It writes nothing.
+- **Explain.** `coven guard explain "<command>"` in your own terminal shows which targets a
+  command hits, which approval covers it, and whether a PM or every session would be refused. It
+  writes nothing. Inside a Claude Code session, write the command to a file and use
+  `coven guard explain --file <path>`: an inline command that names a target is refused there.
 - **Doctor.** `coven doctor` shows whether the guard is on and the last five refusals.
 
 The guard is best effort against a PM that follows its role, and it never covers your own terminal

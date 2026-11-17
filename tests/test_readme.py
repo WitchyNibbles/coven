@@ -228,6 +228,8 @@ def test_the_readme_has_a_short_production_guard_section() -> None:
         "coven guard check",
         "coven doctor",
         "known gaps",
+        "your own terminal",
+        "--file",
     ):
         assert needle in body, needle
     assert len(body.splitlines()) <= 30
@@ -269,6 +271,8 @@ def test_known_gaps_lists_the_production_guards_limits() -> None:
         "exits 1",
         "verdict line",
         "terminal",
+        "inline `coven guard explain <command>`",
+        "use `--file`",
     ):
         assert needle in body, needle
 

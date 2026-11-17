@@ -392,10 +392,46 @@ def test_manager_reads_the_doctor_refusals_and_the_hook_note() -> None:
         "guard refusals",
         "has no `BLOCKED`",
         "coven memory init",
-        "hook",
-        "revoke",
+        "coven approve --revoke <id>",
+        "pre-commit hook is older than coven's",
     ):
         assert needle in text, needle
+
+
+def section_of(text: str, start: str, end: str) -> str:
+    return text.split(start)[1].split(end)[0]
+
+
+def test_explain_goes_through_a_file_written_with_the_write_tool() -> None:
+    # An inline command naming a target is itself refused, for the GM and for a PM.
+    for text in (body("manager"), PM.read_text(encoding="utf-8")):
+        flat = " ".join(text.split()).lower()
+        assert "every command to explain goes through `--file`" in flat
+        assert "written with the write tool, never from bash" in flat
+
+
+def test_a_pm_does_not_explain_a_refused_edit_of_a_protected_path() -> None:
+    pm = " ".join(PM.read_text(encoding="utf-8").split())
+    assert "do not explain it" in pm
+    assert "the store, coven's config, Claude Code's settings or `plugins/`" in pm
+    manager = " ".join(body("manager").split())
+    assert "you run `coven guard explain --tool Write --path <file>`" in manager
+
+
+def test_learning_and_standing_answers_are_scoped_to_a_guard() -> None:
+    text = body("manager")
+    assert "**Learning.** With a guard on," in text
+    intro = section_of(text, "## Production steps", "### No guard")
+    assert "With a guard on," in intro
+    assert "unless" not in intro.split("With a guard on,")[0]
+
+
+def test_the_no_guard_section_keeps_d2() -> None:
+    flow = section_of(body("manager"), "### No guard", "### Guard on")
+    assert "you run the step yourself" in flow
+    assert "APPROVED <project>/<task>: ran, <result>" in flow
+    for reached in ("Learning", "20 answers", "standing answer"):
+        assert reached not in flow
 
 
 def test_pm_role_has_the_guard_on_flow_and_keeps_the_no_guard_rule() -> None:
@@ -441,8 +477,7 @@ def test_systems_map_skill_walks_the_map_and_the_guard_targets() -> None:
     assert "systems/" in frontmatter("systems-map")["description"]
 
 
-# Ticket and chat tools, and the private toolkit, stay out of the guard's texts. The local
-# pre-commit scan holds the longer list; naming more here would leak it.
+# Tool names the guard's texts must not mention.
 NOT_NAMED = ("slack", "zendesk", "servicenow", "grafana", "private toolkit")
 
 

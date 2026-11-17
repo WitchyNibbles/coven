@@ -108,6 +108,9 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   tool), and a symlink in `~/projects` that points at `~`.
 - `coven guard explain` exits 1 on an unreadable store even when the call would be allowed. The
   verdict line still prints.
+- An inline `coven guard explain <command>` that names a target is refused inside a session, for
+  the GM and a PM alike, because the guard reads the Bash line itself. Write the command to a
+  file with the Write tool and use `--file`.
 - The user's own terminal, outside Claude Code, is never guarded.
 
 ## coven memory adopt

@@ -126,9 +126,14 @@ commands and tools of your `PROD-STEP`, until it expires, and nothing else:
   added `cd`, no `&&` or pipe joining two of them, no variable, wrapper or script. Call an approved
   MCP tool by its exact name.
 - A call the guard refuses is a `BLOCKED <project>/<task>:` with the refusal's text, never
-  reworded or rerouted, and never retried with changes. To see which rule refused it, run
-  `coven guard explain` on it (`--cwd <your worktree>` for relative paths; `--tool Write --path
-  <file>` for an edit): it reads only what the guard reads and writes nothing. The GM decides what
+  reworded or rerouted, and never retried with changes. To see which rule refused a Bash call, run
+  `coven guard explain --file <path>` on it (`--cwd <your worktree>` for relative paths): it reads
+  only what the guard reads and writes nothing. Every command to explain goes through `--file`,
+  written with the Write tool, never from Bash, to a scratch file outside the store (under `/tmp`,
+  say): the command's text on a Bash line is read by the guard, so an inline one that names a
+  target is refused for you too. For a refused edit of the store, coven's config, Claude Code's
+  settings or `plugins/`, do not explain it: `coven guard explain --tool Write --path <file>` is
+  refused for you too, and the GM explains it. Send `BLOCKED` with the refusal. The GM decides what
   follows.
 - A step that is not in the approval is a new `PROD-STEP`, even when it looks like a small change.
 - When it has run, check the result read-only and say what you checked in `DONE`. The GM revokes

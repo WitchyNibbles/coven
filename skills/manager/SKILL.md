@@ -248,8 +248,8 @@ your own judgment.
 
 A `PROD-STEP` is anything that changes a live system, a public repo's first push or a release. It
 goes to the user every time, even when the facts point one way and even when the user approved a
-similar step before, unless "Learning" below lets you decide that kind: you never approve one on
-your own judgment. Show the system, each exact command as the PM sent it (a fenced block for a
+similar step before: you never approve one on your own judgment. With a guard on, "Learning" below
+can let you decide a kind; with no guard, it never does. Show the system, each exact command as the PM sent it (a fenced block for a
 multi-line command) or MCP tool, what each changes, and your recommendation.
 
 Which flow applies depends on the store. **A guard is on** when `systems/guard.json` is committed
@@ -271,10 +271,12 @@ in the store (`coven doctor` shows `guard`). **No guard** otherwise.
 The PM runs the approved commands itself, and the guard refuses anything else. Before you show the
 step, run `coven guard explain` on each command: it prints the targets that hit, whether a live
 approval names the command or `needs approval`, and a verdict line. That tells you which systems
-the step touches, so which approval files `coven approve` will write. Put a multi-line command in a
-scratch file outside the store, written with the Write tool, and pass `--file <path>`: the
-command's text on a Bash line is read by the guard too. Add `--cwd <PM worktree>` when the command
-has relative paths, so they are judged from the PM's folder.
+the step touches, so which approval files `coven approve` will write. Every command to explain goes
+through `--file`: write it to a scratch file outside the store (under `/tmp`, say), written with the
+Write tool, never from Bash, and run `coven guard explain --file <path>`. This holds for a one-line
+command too: the command's text on a Bash line is read by the guard, so an inline command that
+names a target is refused for you as for a PM, and so is a heredoc that writes the file. Add
+`--cwd <PM worktree>` when the command has relative paths, so they are judged from the PM's folder.
 
 1. On a yes, write the commands to `<store>/approvals/<id>.step` with the Write tool, never from
    Bash: copied character for character from the `PROD-STEP`, one command per line, a multi-line
@@ -293,10 +295,11 @@ has relative paths, so they are judged from the PM's folder.
    matches, reply `APPROVED <project>/<task> <id>:` plus anything the user added. If it does not,
    run `coven approve --revoke <id>` (it removes the files in one commit) and tell the user.
 5. The PM runs each approved command as its own Bash call. A call the guard refuses comes back as
-   a `BLOCKED` with the refusal. Run `coven guard explain` on that call (`--tool Write --path <file>`
-   for a refused edit) to see which rule refused it. Compare it with the approval, and
-   approve a corrected step under a new id, only with the user's yes. Never tell the PM to reword
-   or reroute a refused call.
+   a `BLOCKED` with the refusal. Run `coven guard explain --file <path>` on that call to see which rule
+   refused it (for a refused edit, you run `coven guard explain --tool Write --path <file>`; a PM
+   cannot explain an edit of the store, coven's config, Claude Code's settings or `plugins/`, so
+   you do it). Compare it with the approval, and approve a corrected step under a new id, only with
+   the user's yes. Never tell the PM to reword or reroute a refused call.
 6. When that task's `DONE` or `BLOCKED` arrives, revoke its approval: `coven approve --revoke <id>`.
    An approval otherwise covers its exact commands, any number of times, until it expires, because
    the guard reads only committed state and cannot count runs. `coven approve` also deletes expired
@@ -308,7 +311,7 @@ has relative paths, so they are judged from the PM's folder.
 A change to `<store>/systems/guard.json`: run `coven guard check <store>/systems/guard.json` before
 its commit, and commit only when it prints `ok`. Then follow `coven:systems-map` for the rest.
 
-**Learning.** Record every answer in `<store>/user/prod-<kind>.md` (`type: feedback`): the kind of
+**Learning.** With a guard on, record every answer in `<store>/user/prod-<kind>.md` (`type: feedback`): the kind of
 case (for example "reprocess failed rows of a load"), then one dated line per answer: project and
 task, yes or no, the user's reason. You choose the kind: reuse one that fits, else name a new one
 and record the choice as a ruling. Never ask the user which kind a step is.
@@ -344,9 +347,9 @@ and record the choice as a ruling. Never ask the user which kind a step is.
 
 ## Results
 
-- `DONE <project>/<task>`: with a guard on, revoke the task's approval first. Then tell the user at once, short and human, in their language: what was
-  done, the PR link and/or the answer, the rulings worth their review, production steps run, and
-  what was not checked. A quick answer never waits behind another task.
+- `DONE <project>/<task>`: with a guard on, revoke the task's approval first. Then tell the user at
+  once, short and human, in their language: what was done, the PR link and/or the answer, the
+  rulings worth their review, production steps run, and what was not checked. A quick answer never waits behind another task.
 - A `DONE` without a "not checked" part, or with a success claim that has no receipt, goes back to
   the PM as `ANSWER <project>/<task>: DONE needs <what is missing>` before it reaches the user; the
   user gets the complete one.
