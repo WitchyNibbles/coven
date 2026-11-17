@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# coven-hook-version: 3
+# coven-hook-version: 4
 """Pre-commit hook of the coven memory store: refuse token patterns, regenerate INDEX.md files.
 
 `coven memory init` copies this file to `<store>/.git/hooks/pre-commit`; git runs it in the store's
@@ -278,6 +278,8 @@ def update_indexes(paths: list[str]) -> list[str]:
             origin_line(staged_blob(index).decode("utf-8", "replace")) if index in paths else None
         )
         target = Path(index)
+        if target.is_symlink():
+            continue  # writing would go through the link, to wherever it leads
         if not entries and origin is None:
             if index in paths:
                 git("rm", "--cached", "--quiet", "--", index)

@@ -227,7 +227,7 @@ def plan_renames(root: Path) -> list[Rename]:
             if names[0] == key:
                 continue
             rename = Rename(
-                scope, names[0], key, _lexists(base / names[0] / f"{names[0]}{STATE_SUFFIX}")
+                scope, names[0], key, os.path.lexists(base / names[0] / f"{names[0]}{STATE_SUFFIX}")
             )
             clash = _state_clash(root, rename)
             if clash:
@@ -241,34 +241,34 @@ def plan_renames(root: Path) -> list[Rename]:
     return renames
 
 
-def _lexists(file: Path) -> bool:
-    return os.path.lexists(file)
-
-
 def _state_clash(root: Path, rename: Rename) -> str | None:
     folder = root / rename.source
     old, new = folder / rename.old_state, folder / rename.new_state
-    if not rename.has_state_record or not _lexists(new) or os.path.samefile(old, new):
+    if not rename.has_state_record or not os.path.lexists(new) or os.path.samefile(old, new):
         return None
     return f"{rename.source}/{rename.old_state} and {rename.source}/{rename.new_state} both exist"
 
 
-def _git_mv(root: Path, source: str, target: str) -> None:
+Journal = list[tuple[str, str]]  # (from, to) of every move done, in order
+
+
+def _git_mv(root: Path, source: str, target: str, journal: Journal) -> None:
     """`git mv`; a rename that only changes case goes through a temporary name, so it also works
-    on a case-insensitive file system."""
+    on a case-insensitive file system. Each move done is added to `journal`."""
     if source != target and source.lower() == target.lower():
-        temporary = f"{source}{TEMP_SUFFIX}"
-        store.git(root, "mv", "--", source, temporary)
-        store.git(root, "mv", "--", temporary, target)
+        steps = [(source, f"{source}{TEMP_SUFFIX}"), (f"{source}{TEMP_SUFFIX}", target)]
     else:
-        store.git(root, "mv", "--", source, target)
+        steps = [(source, target)]
+    for step in steps:
+        store.git(root, "mv", "--", *step)
+        journal.append(step)
 
 
-def _apply_rename(root: Path, rename: Rename) -> None:
-    _git_mv(root, rename.source, rename.target)
+def _apply_rename(root: Path, rename: Rename, journal: Journal) -> None:
+    _git_mv(root, rename.source, rename.target, journal)
     if rename.has_state_record:
         folder = rename.target
-        _git_mv(root, f"{folder}/{rename.old_state}", f"{folder}/{rename.new_state}")
+        _git_mv(root, f"{folder}/{rename.old_state}", f"{folder}/{rename.new_state}", journal)
 
 
 def _index_changes(root: Path, renames: list[Rename]) -> list[str]:
@@ -299,7 +299,7 @@ def _hooks_folder(root: Path) -> Path:
 def _foreign_hook(root: Path) -> Path | None:
     """The store's pre-commit file when coven did not install it (no coven marker in it)."""
     hook = _hooks_folder(root) / HOOK_NAME
-    if not _lexists(hook):
+    if not os.path.lexists(hook):
         return None
     try:
         text = hook.read_text(encoding="utf-8", errors="replace")
@@ -329,7 +329,7 @@ def _local_hooks_path(root: Path) -> str | None:
 def _free_name(folder: Path, base: str, suffix: str = "") -> str:
     """`base`, or `base-2`, `base-3`... when a file of that name (plus `suffix`) already exists."""
     candidate, number = base, 2
-    while _lexists(folder / f"{candidate}{suffix}"):
+    while os.path.lexists(folder / f"{candidate}{suffix}"):
         candidate, number = f"{base}-{number}", number + 1
     return candidate
 
@@ -397,8 +397,16 @@ def _private_backups_folder() -> Path:
     return folder
 
 
-def _create_private(file: Path) -> int:
-    return os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE)
+def _create_private(file: Path, created: list[Path]) -> int:
+    """Open a new file with the private mode; one that exists already is never touched."""
+    try:
+        handle = os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE)
+    except FileExistsError as error:
+        raise CovenError(
+            f"a backup named {file.name} already exists; run again in a second"
+        ) from error
+    created.append(file)
+    return handle
 
 
 def _read_back(archive: Path, expected_members: int) -> None:
@@ -419,22 +427,30 @@ def _read_back(archive: Path, expected_members: int) -> None:
         )
 
 
+def _sha256(file: Path) -> str:
+    with file.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
 def make_backup(root: Path, archive_name: str) -> Backup:
-    """A gzip tar of the whole folder (`.git` included), its checksum file and a read-back."""
+    """A gzip tar of the whole folder (`.git` included), its checksum file and a read-back.
+
+    A failure removes the files this call made, and only those."""
     folder = _private_backups_folder()
     archive = folder / f"{archive_name}.tar.gz"
     checksum = folder / f"{archive_name}.tar.gz.sha256"
+    created: list[Path] = []
     try:
-        with os.fdopen(_create_private(archive), "wb") as raw:
+        with os.fdopen(_create_private(archive, created), "wb") as raw:
             with tarfile.open(fileobj=raw, mode="w:gz") as tar:
                 tar.add(root, arcname=root.name)
         _read_back(archive, folder_member_count(root))
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        with os.fdopen(_create_private(checksum), "w", encoding="utf-8") as out:
+        digest = _sha256(archive)
+        with os.fdopen(_create_private(checksum, created), "w", encoding="utf-8") as out:
             out.write(f"{digest}  {archive.name}\n")
     except (CovenError, OSError, tarfile.TarError):
-        archive.unlink(missing_ok=True)
-        checksum.unlink(missing_ok=True)
+        for file in created:
+            file.unlink(missing_ok=True)
         raise
     return Backup(archive, checksum, digest)
 
@@ -483,8 +499,20 @@ def _git_ok(root: Path, *args: str) -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def check_fit(root: Path) -> None:
-    """Raise `CovenError` naming why `root` cannot be adopted; reads only."""
+def symlinked_paths(root: Path) -> list[str]:
+    """Scope folders, their keyed children and `.gitattributes` that are symlinks: adopt writes
+    in or beside them, and a link may lead outside the store."""
+    found = [scope for scope in SCOPES if (root / scope).is_symlink()]
+    for scope in KEYED_SCOPES:
+        base = root / scope
+        if base.is_dir() and not base.is_symlink():
+            found += [f"{scope}/{p.name}" for p in sorted(base.iterdir()) if p.is_symlink()]
+    if (root / store.ATTRIBUTES).is_symlink():
+        found.append(store.ATTRIBUTES)
+    return sorted(found)
+
+
+def _check_work_tree(root: Path) -> None:
     if not root.is_dir():
         raise CovenError(f"{root} is not a folder")
     if _git_ok(root, "rev-parse", "--is-bare-repository") == "true":
@@ -498,6 +526,9 @@ def check_fit(root: Path) -> None:
         raise CovenError(f"{root}/.git is not a folder (a linked work tree or submodule)")
     if _git_ok(root, "rev-parse", "--verify", "--quiet", "HEAD") is None:
         raise CovenError(f"{root} has no commits; make one first")
+
+
+def _check_clean_and_sound(root: Path) -> None:
     status = store.git(
         root, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all", check=False
     )
@@ -510,6 +541,18 @@ def check_fit(root: Path) -> None:
     if fsck.returncode != 0:
         detail = (fsck.stderr or fsck.stdout).strip().splitlines()
         raise CovenError(f"git fsck failed in {root}: {detail[-1] if detail else 'no output'}")
+
+
+def check_fit(root: Path) -> None:
+    """Raise `CovenError` naming why `root` cannot be adopted; reads only."""
+    _check_work_tree(root)
+    links = symlinked_paths(root)
+    if links:
+        raise CovenError(
+            f"{root} holds symlinks adopt will not follow or write through: {', '.join(links)}; "
+            "replace each with the real folder (or remove it), commit, then adopt again"
+        )
+    _check_clean_and_sound(root)
 
 
 def _same_folder(first: Path, second: Path) -> bool:
@@ -617,15 +660,41 @@ class Outcome:
         return self.commit or (self.earlier.commit if self.earlier else None)
 
 
-def _install_hook(plan: Plan) -> None:
+@dataclass(frozen=True)
+class HookUndo:
+    """How to put the pre-commit hook file back as it was before `_install_hook`."""
+
+    hook: Path
+    moved: Path | None  # a foreign hook moved aside
+    previous: bytes | None  # an older coven hook, replaced
+    mode: int
+
+    def restore(self) -> None:
+        with contextlib.suppress(OSError):
+            self.hook.unlink(missing_ok=True)
+            if self.moved is not None:
+                os.rename(self.moved, self.hook)
+            elif self.previous is not None:
+                self.hook.write_bytes(self.previous)
+                self.hook.chmod(self.mode)
+
+
+def _install_hook(plan: Plan) -> HookUndo:
     """Move a foreign hook aside and put coven's hook file in place. The store is still pinned to
     its old hooks folder; `_pin_hooks_path` follows the commit, so a stop before it keeps that
     value for the next run."""
+    hook = _hooks_folder(plan.root) / HOOK_NAME
+    moved: Path | None = None
+    previous: bytes | None = None
+    mode = 0o755
     if plan.foreign_hook:
         moved = plan.foreign_hook.with_name(plan.moved_hook_name)
         os.rename(plan.foreign_hook, moved)
         _say(f"  old hook moved to {moved}")
+    elif hook.is_file():
+        previous, mode = hook.read_bytes(), stat.S_IMODE(hook.stat().st_mode)
     store.install_hook(plan.root)
+    return HookUndo(hook, moved, previous, mode)
 
 
 def _pin_hooks_path(plan: Plan) -> None:
@@ -661,13 +730,22 @@ def _commit_message(old_hooks_path: str | None, moved: list[str], backup: Backup
 
 
 def _earlier_record(root: Path) -> Record | None:
-    """The newest adopt commit's record, None when the store has none."""
-    done = store.git(
-        root, "log", "-1", f"--grep=^{COMMIT_MESSAGE}$", "--format=%h%x00%B", check=False
-    )
-    commit, _, message = done.stdout.partition("\0")
-    if done.returncode != 0 or not message:
-        return None
+    """The newest adopt commit's record, None when the store has none.
+
+    `--grep` also matches a commit body, so the subject is compared again: a later commit that
+    only quotes the subject in its body cannot stand in for the adopt commit."""
+    listed = store.git(
+        root, "log", f"--grep=^{COMMIT_MESSAGE}$", "--format=%h%x00%s", check=False
+    ).stdout
+    for line in listed.splitlines():
+        commit, _, subject = line.partition("\0")
+        if subject == COMMIT_MESSAGE:
+            return _record(root, commit)
+    return None
+
+
+def _record(root: Path, commit: str) -> Record:
+    message = store.git(root, "log", "-1", "--format=%B", commit).stdout
     fields = {
         label: line.removeprefix(label)
         for line in message.splitlines()
@@ -676,7 +754,7 @@ def _earlier_record(root: Path) -> Record | None:
     }
     old = fields.get(HOOKS_PATH_LABEL, NOT_SET)
     return Record(
-        commit.strip(),
+        commit,
         None if old == NOT_SET else old,
         fields.get(OLD_HOOK_LABEL, "none"),
         fields.get(BACKUP_LABEL, "unknown"),
@@ -691,24 +769,38 @@ def _old_hooks_path(plan: Plan, earlier: Record | None) -> str | None:
     return earlier.old_hooks_path if earlier else None
 
 
-def _roll_back(root: Path, created: list[str], renames: list[Rename]) -> None:
-    """The tree was clean at the start, so the last commit is exactly what to return to."""
-    store.git(root, "reset", "-q", "--hard", "HEAD", check=False)
-    store.git(root, "--literal-pathspecs", "clean", "-fdq", "--", *created, check=False)
-    for rename in renames:
-        # A folder a rename made and an index filled stays behind empty; it would clash on a rerun.
+def _before_moves(relative: str, journal: Journal) -> str:
+    """`relative` as it was named before the moves in `journal`."""
+    for source, target in reversed(journal):
+        if relative == target or relative.startswith(f"{target}/"):
+            relative = source + relative.removeprefix(target)
+    return relative
+
+
+def _roll_back(root: Path, created: list[str], journal: Journal, undo: HookUndo) -> None:
+    """Put the work tree and the hook back as they were: the tree was clean at the start, so the
+    last commit is exactly what to return to. Folders move back first, so files git does not
+    track (ignored ones) go with them instead of staying in the new folder.
+
+    The store's `core.hooksPath` needs no undo: `_pin_hooks_path` runs after the commit."""
+    for source, target in reversed(journal):
         with contextlib.suppress(OSError):
-            (root / rename.target).rmdir()
+            os.rename(root / target, root / source)
+    store.git(root, "reset", "-q", "--hard", "HEAD", check=False)
+    wrote = [_before_moves(path, journal) for path in created]
+    store.git(root, "--literal-pathspecs", "clean", "-fdq", "--", *wrote, check=False)
+    undo.restore()
 
 
-def _commit_changes(plan: Plan, message: str) -> str | None:
+def _commit_changes(plan: Plan, message: str, undo: HookUndo) -> str | None:
     """Renames, `.gitattributes` and the indexes in one commit; the short hash, None when the
     store needed no change. On a failure the work tree goes back to HEAD."""
     root = plan.root
     created = [store.ATTRIBUTES, *plan.index_changes]
+    journal: Journal = []
     try:
         for rename in plan.renames:
-            _apply_rename(root, rename)
+            _apply_rename(root, rename, journal)
         _ensure_attributes(root)
         changed = entries.rebuild_indexes(root)
         store.git(root, "--literal-pathspecs", "add", "-A", "--", store.ATTRIBUTES, *changed)
@@ -729,17 +821,13 @@ def _commit_changes(plan: Plan, message: str) -> str | None:
         if done.returncode != 0:
             detail = (done.stderr or done.stdout).strip() or "no output"
             raise CovenError(
-                f"the commit was refused, so the store is as it was: {detail} "
+                f"the commit was refused; the work tree and the hook are as they were: {detail} "
                 "(a commit needs user.name and user.email set)"
             )
     except BaseException:
-        _roll_back(root, created, plan.renames)
+        _roll_back(root, created, journal, undo)
         raise
     return store.git(root, "rev-parse", "--short", "HEAD").stdout.strip()
-
-
-def _set_config(plan: Plan) -> None:
-    settings.apply(plan.config_changes)
 
 
 def _way_back(plan: Plan, outcome: Outcome, *, config_changed: bool) -> list[str]:
@@ -809,13 +897,13 @@ def adopt_store(plan: Plan) -> list[str]:
     _say(f"  backup {backup.archive} read back, sha256 {backup.digest}")
     earlier = _earlier_record(plan.root)
     old_hooks_path = _old_hooks_path(plan, earlier)
-    _install_hook(plan)
+    undo = _install_hook(plan)
     message = _commit_message(old_hooks_path, _moved_hooks(plan.root), backup)
-    commit = _commit_changes(plan, message)
+    commit = _commit_changes(plan, message, undo)
     _pin_hooks_path(plan)
     outcome = Outcome(backup, commit, old_hooks_path, None if commit else earlier)
     _check_counts(plan, outcome)  # before the config write: a mismatch leaves the config alone
-    _set_config(plan)
+    settings.apply(plan.config_changes)
     return _report(plan, outcome)
 
 
@@ -823,13 +911,14 @@ def adopt_store(plan: Plan) -> list[str]:
 
 
 def _resolve(argument: str) -> Path:
-    path = Path(os.path.abspath(Path(argument).expanduser()))
-    if path.is_symlink():
+    absolute = os.path.abspath(Path(argument).expanduser())
+    real = os.path.realpath(absolute)
+    if real != absolute:
         raise CovenError(
-            f"{path} is a symlink to {path.resolve()}; run adopt on the real folder, "
+            f"{absolute} goes through a symlink to {real}; pass the real path, "
             "so the config and the backup name the store itself"
         )
-    return path
+    return Path(absolute)
 
 
 def run(args: argparse.Namespace) -> int:

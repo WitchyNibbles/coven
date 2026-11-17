@@ -92,6 +92,27 @@ def snapshot(root: Path) -> dict[str, bytes | None]:
     return found
 
 
+def worktree_snapshot(root: Path) -> dict[str, bytes | None]:
+    """The snapshot without the `.git` folder (`.gitattributes` and `.gitignore` stay in)."""
+    return {
+        key: data
+        for key, data in snapshot(root).items()
+        if key != ".git" and not key.startswith(".git/")
+    }
+
+
+def refusing_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Make coven's hook source a hook that refuses every commit; the good source is returned."""
+    good = store.HOOK_SOURCE
+    refusing = tmp_path / "refusing-hook"
+    refusing.write_text(
+        "#!/bin/sh\n# coven-hook-version: 99\necho 'refused for the test' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(store, "HOOK_SOURCE", refusing)
+    return good
+
+
 def run_adopt(path: Path, *flags: str) -> int:
     return cli.main(["memory", "adopt", str(path), *flags])
 
@@ -349,6 +370,36 @@ def test_a_second_run_in_the_same_second_makes_its_own_backup(
     assert first.read_bytes() != b""
 
 
+def test_a_backup_name_taken_stops_and_the_first_backup_survives(
+    lab: Lab, state_home: Path
+) -> None:
+    root = seed(lab)
+    first = adopt.make_backup(root, "same-name")
+    archive_bytes = first.archive.read_bytes()
+    checksum_text = first.checksum.read_text(encoding="utf-8")
+
+    with pytest.raises(CovenError, match="already exists; run again in a second"):
+        adopt.make_backup(root, "same-name")
+
+    assert first.archive.read_bytes() == archive_bytes
+    assert first.checksum.read_text(encoding="utf-8") == checksum_text
+
+
+def test_a_checksum_name_taken_removes_only_what_this_backup_made(
+    lab: Lab, state_home: Path
+) -> None:
+    root = seed(lab)
+    adopt.make_backup(root, "first")  # makes the private backups folder
+    stale = adopt.backups_folder() / "taken.tar.gz.sha256"
+    stale.write_text("not mine\n", encoding="utf-8")
+
+    with pytest.raises(CovenError, match="already exists"):
+        adopt.make_backup(root, "taken")
+
+    assert stale.read_text(encoding="utf-8") == "not mine\n"
+    assert not (adopt.backups_folder() / "taken.tar.gz").exists()
+
+
 # ---- the old hook -----------------------------------------------------------------------
 
 
@@ -390,6 +441,55 @@ def test_without_a_hooks_path_the_way_back_unsets_it(
 ) -> None:
     _, out = adopted(lab, capsys)
     assert "config --local --unset core.hooksPath" in out
+
+
+# ---- symlinks --------------------------------------------------------------------------
+
+
+def outside_folder(lab: Lab) -> Path:
+    """A folder beside the store that holds an entry and a hand-written index."""
+    outside = lab.root / "outside"
+    outside.mkdir()
+    lab.write(outside, "ext.md", "Ext", "outside the store")
+    (outside / "INDEX.md").write_text("hand-written\n", encoding="utf-8")
+    return outside
+
+
+@pytest.mark.parametrize("flag", [[], ["--yes"]], ids=["dry-run", "yes"])
+def test_a_symlinked_project_folder_is_refused_and_what_it_points_to_is_not_written(
+    lab: Lab, capsys: pytest.CaptureFixture[str], flag: list[str]
+) -> None:
+    root = seed(lab)
+    outside = outside_folder(lab)
+    (root / "projects" / "shared").symlink_to(outside)
+    lab.git(root, "add", "-A")
+    lab.git(root, "commit", "-q", "-m", "link a shared folder")
+    store_before, outside_before = snapshot(root), snapshot(outside)
+
+    assert run_adopt(root, *flag) == 1
+
+    assert "projects/shared" in capsys.readouterr().err
+    assert snapshot(outside) == outside_before
+    assert snapshot(root) == store_before
+
+
+@pytest.mark.parametrize("link", ["handoffs", "systems", "user", ".gitattributes"])
+def test_a_symlinked_scope_folder_or_attributes_file_is_refused_by_name(
+    lab: Lab, capsys: pytest.CaptureFixture[str], link: str
+) -> None:
+    root = seed(lab)
+    outside = outside_folder(lab)
+    if (root / link).exists():
+        lab.git(root, "rm", "-rq", "--", link)
+    (root / link).symlink_to(outside / "INDEX.md" if link == ".gitattributes" else outside)
+    lab.git(root, "add", "-A")
+    lab.git(root, "commit", "-q", "-m", f"link {link}")
+    outside_before = snapshot(outside)
+
+    assert run_adopt(root, "--yes") == 1
+
+    assert link in capsys.readouterr().err
+    assert snapshot(outside) == outside_before
 
 
 # ---- keys -------------------------------------------------------------------------------
@@ -492,30 +592,63 @@ def test_an_existing_attributes_file_keeps_its_lines(lab: Lab) -> None:
     assert lines == ["*.png binary", "INDEX.md merge=union"]
 
 
+@pytest.mark.parametrize(
+    "old_hook", [FOREIGN_HOOK, OLD_COVEN_HOOK, None], ids=["foreign", "old-coven", "none"]
+)
 def test_a_hook_that_refuses_the_commit_puts_the_store_back_and_is_not_bypassed(
-    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    lab: Lab,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    old_hook: str | None,
 ) -> None:
-    refusing = tmp_path / "refusing-hook"
-    refusing.write_text(
-        "#!/bin/sh\n# coven-hook-version: 99\necho 'refused for the test' >&2\nexit 1\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(store, "HOOK_SOURCE", refusing)
+    refusing_hook(tmp_path, monkeypatch)
     root = seed(lab)
+    if old_hook is not None:
+        put_foreign_hook(root, old_hook)
+    lab.git(root, "config", "--local", "core.hooksPath", OLD_HOOKS_PATH)
     before = head(lab, root)
-    tree = {k: v for k, v in snapshot(root).items() if not k.startswith(".git")}
+    tree = worktree_snapshot(root)
+    hooks = snapshot(root / ".git" / "hooks")
+    git_config = (root / ".git" / "config").read_bytes()
+
     assert run_adopt(root, "--yes") == 1
+
     assert "refused for the test" in capsys.readouterr().err
     assert head(lab, root) == before
     assert lab.git(root, "status", "--porcelain") == ""
-    assert {k: v for k, v in snapshot(root).items() if not k.startswith(".git")} == tree
+    assert worktree_snapshot(root) == tree
+    assert snapshot(root / ".git" / "hooks") == hooks  # a foreign hook is back, none left over
+    assert (root / ".git" / "config").read_bytes() == git_config  # core.hooksPath as it was
+
+
+def test_files_git_ignores_go_back_with_their_folder_and_a_rerun_succeeds(
+    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    (root / ".gitignore").write_text("*.local\n", encoding="utf-8")
+    lab.git(root, "add", "-A")
+    lab.git(root, "commit", "-q", "-m", "ignore local files")
+    secret = root / "projects" / "Orders App" / "keys.local"
+    secret.write_text("local only\n", encoding="utf-8")
+    good = refusing_hook(tmp_path, monkeypatch)
+
+    assert run_adopt(root, "--yes") == 1
+
+    capsys.readouterr()
+    assert secret.read_text(encoding="utf-8") == "local only\n"
+    assert not (root / "projects" / "orders-app").exists()
+    monkeypatch.setattr(store, "HOOK_SOURCE", good)
+    assert run_adopt(root, "--yes") == 0
+    moved = root / "projects" / "orders-app" / "keys.local"
+    assert moved.read_text(encoding="utf-8") == "local only\n"
 
 
 def test_an_index_written_before_a_failure_is_removed_again(
     lab: Lab, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = seed(lab)
-    tree = {k: v for k, v in snapshot(root).items() if not k.startswith(".git")}
+    tree = worktree_snapshot(root)
     real = adopt.entries.rebuild_indexes
 
     def write_then_fail(path: Path) -> list[str]:
@@ -527,7 +660,7 @@ def test_an_index_written_before_a_failure_is_removed_again(
     monkeypatch.setattr(adopt.entries, "rebuild_indexes", write_then_fail)
     assert run_adopt(root, "--yes") == 1
     assert lab.git(root, "status", "--porcelain") == ""
-    assert {k: v for k, v in snapshot(root).items() if not k.startswith(".git")} == tree
+    assert worktree_snapshot(root) == tree
 
 
 # ---- config -----------------------------------------------------------------------------
@@ -640,6 +773,49 @@ def test_the_command_runs_on_a_store_coven_already_made(lab: Lab) -> None:
     assert config.load_config().memory_path == root
 
 
+def test_a_later_commit_that_quotes_the_subject_in_its_body_cannot_redirect_the_way_back(
+    lab: Lab, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    lab.git(root, "config", "--local", "core.hooksPath", OLD_HOOKS_PATH)
+
+    def refuse(_changes: object) -> None:
+        raise CovenError("injected stop")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(adopt.settings, "apply", refuse)
+        assert run_adopt(root, "--yes") == 1
+    capsys.readouterr()
+    lab.write(root, "user/later.md", "Later", "a note made after the adopt")
+    lab.commit(
+        root,
+        "later note\n\nadopt: coven store\ncore.hooksPath was: /home/user/forged\n"
+        "old hook: forged\nbackup: /home/user/forged.tar.gz",
+    )
+
+    assert run_adopt(root, "--yes") == 0
+
+    out = capsys.readouterr().out
+    assert "forged" not in out
+    assert f"core.hooksPath {OLD_HOOKS_PATH}" in out
+
+
+def test_a_path_through_a_symlinked_parent_is_refused_with_the_real_path(
+    lab: Lab, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    alias = lab.root / "alias"
+    alias.symlink_to(lab.root)
+    before = snapshot(root)
+
+    assert run_adopt(alias / root.name, "--yes") == 1
+
+    err = capsys.readouterr().err
+    assert "symlink" in err
+    assert str(root) in err
+    assert snapshot(root) == before
+
+
 # ---- re-run after a stop ----------------------------------------------------------------
 
 
@@ -660,7 +836,7 @@ def failing_nth_move(nth: int, monkeypatch: pytest.MonkeyPatch) -> Iterator[None
         yield
 
 
-def test_a_stop_after_the_hook_move_leaves_the_tree_clean_and_a_rerun_finishes(
+def test_a_stop_before_the_commit_puts_the_hook_back_and_a_rerun_finishes(
     lab: Lab,
     state_home: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -675,7 +851,9 @@ def test_a_stop_after_the_hook_move_leaves_the_tree_clean_and_a_rerun_finishes(
     assert head(lab, root) == before
     assert lab.git(root, "status", "--porcelain") == ""
     assert (root / "projects" / "Orders App").is_dir()
-    assert len(list((root / ".git" / "hooks").glob("pre-commit.pre-adopt-*"))) == 1
+    hooks = root / ".git" / "hooks"
+    assert (hooks / "pre-commit").read_text(encoding="utf-8") == FOREIGN_HOOK  # moved back
+    assert list(hooks.glob("pre-commit.pre-adopt-*")) == []
     assert not config.config_file().exists()
 
     assert run_adopt(root, "--yes") == 0

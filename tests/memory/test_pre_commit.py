@@ -370,3 +370,14 @@ def test_installed_hook_writes_the_index_into_the_commit(lab: Lab) -> None:
     lab.commit(store)
     assert "- [A](a.md) — first fact" in lab.git(store, "show", "HEAD:user/INDEX.md")
     assert lab.git(store, "status", "--porcelain") == ""
+
+
+def test_index_that_is_a_symlink_is_not_written_through(hook, repo, tmp_path: Path) -> None:
+    outside = tmp_path / "outside-index.md"
+    outside.write_text("hand-written\n")
+    (repo.path / "user").mkdir()
+    (repo.path / "user" / "INDEX.md").symlink_to(outside)
+    repo.git("add", "user/INDEX.md")
+    repo.stage("user/a.md", "---\nname: Alpha\ndescription: first\n---\n")
+    assert hook.main() == 0
+    assert outside.read_text() == "hand-written\n"
