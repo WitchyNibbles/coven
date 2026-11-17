@@ -167,7 +167,8 @@ def _commit(path: Path, message: str) -> None:
 
 
 def install_hook(path: Path) -> None:
-    """Copy the pre-commit hook into the store, replacing an older copy of it, never a foreign one."""
+    """Copy the pre-commit hook into the store, replacing an older copy of it (a link to one is
+    replaced by a regular file, its target untouched), never a foreign one."""
     hooks = path / ".git" / "hooks"
     hook = hooks / "pre-commit"
     if hook.exists() and hook_version(hook.read_text(encoding="utf-8", errors="replace")) is None:
@@ -176,6 +177,8 @@ def install_hook(path: Path) -> None:
             f"coven memory init --path {shlex.quote(str(path))} again"
         )
     hooks.mkdir(parents=True, exist_ok=True)
+    if hook.is_symlink():
+        hook.unlink()  # copyfile would write through the link, into a file outside `.git`
     shutil.copyfile(HOOK_SOURCE, hook)
     hook.chmod(0o755)
 

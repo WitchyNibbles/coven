@@ -10,7 +10,6 @@ finished by running the command again.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import importlib.util
 import os
@@ -30,7 +29,7 @@ from pathlib import Path
 
 from coven import paths, settings
 from coven.config import GUARD_REQUIRED, load_config
-from coven.errors import CovenError
+from coven.errors import CovenError, warn
 from coven.memory import entries, store
 
 COMMIT_MESSAGE = "adopt: coven store"
@@ -465,6 +464,7 @@ class Plan:
     counts: Counts
     unframed_files: list[str]
     unknown_folders: list[str]
+    symlinked_indexes: list[str]
     renames: list[Rename]
     backup_name: str
     foreign_hook: Path | None
@@ -543,9 +543,28 @@ def _check_clean_and_sound(root: Path) -> None:
         raise CovenError(f"git fsck failed in {root}: {detail[-1] if detail else 'no output'}")
 
 
+def symlinked_indexes(root: Path) -> list[str]:
+    """INDEX.md files that are symlinks: kept as they are, never rebuilt or written through."""
+    scopes = [root / scope for scope in ("user", "systems")]
+    projects = root / "projects"
+    if projects.is_dir() and not projects.is_symlink():
+        scopes += sorted(p for p in projects.iterdir() if p.is_dir() and not p.is_symlink())
+    return [
+        index.relative_to(root).as_posix()
+        for index in (scope / entries.INDEX for scope in scopes if scope.is_dir())
+        if index.is_symlink()
+    ]
+
+
 def check_fit(root: Path) -> None:
     """Raise `CovenError` naming why `root` cannot be adopted; reads only."""
     _check_work_tree(root)
+    hook = _hooks_folder(root) / HOOK_NAME
+    if hook.is_symlink():
+        raise CovenError(
+            f"{hook} is a symlink to {hook.resolve()}; replace the link with the file it points "
+            "to (a copy in its place), then adopt again"
+        )
     links = symlinked_paths(root)
     if links:
         raise CovenError(
@@ -582,6 +601,7 @@ def plan_adoption(root: Path, when: str) -> Plan:
         counts=count_entries(root),
         unframed_files=[f.relative for f in _markdown_files(root) if not f.is_entry],
         unknown_folders=_unknown_folders(root),
+        symlinked_indexes=symlinked_indexes(root),
         renames=renames,
         backup_name=_free_name(backups_folder(), f"{root.name}-{when}", ".tar.gz"),
         foreign_hook=_foreign_hook(root),
@@ -613,6 +633,8 @@ def describe(plan: Plan) -> list[str]:
         lines.append(f"  kept as is, without frontmatter: {', '.join(plan.unframed_files)}")
     if plan.unknown_folders:
         lines.append(f"  kept as is, outside coven's scopes: {', '.join(plan.unknown_folders)}")
+    if plan.symlinked_indexes:
+        lines.append(f"  kept as they are (symlinks): {', '.join(plan.symlinked_indexes)}")
     backups = backups_folder()
     lines.append(f"  backup: {backups / plan.backup_name}.tar.gz, with a .sha256 file beside it")
     if plan.foreign_hook:
@@ -669,14 +691,28 @@ class HookUndo:
     previous: bytes | None  # an older coven hook, replaced
     mode: int
 
-    def restore(self) -> None:
-        with contextlib.suppress(OSError):
+    def restore(self) -> list[str]:
+        """Each step on its own; what could not be done, with the command to finish by hand."""
+        problems: list[str] = []
+        try:
             self.hook.unlink(missing_ok=True)
-            if self.moved is not None:
+        except OSError as error:
+            problems.append(f"cannot remove {self.hook}: {error}")
+        if self.moved is not None:
+            try:
                 os.rename(self.moved, self.hook)
-            elif self.previous is not None:
+            except OSError as error:
+                problems.append(
+                    f"the old hook is still at {self.moved} ({error}); "
+                    f"finish with: mv -f {shlex.quote(str(self.moved))} {shlex.quote(str(self.hook))}"
+                )
+        elif self.previous is not None:
+            try:
                 self.hook.write_bytes(self.previous)
                 self.hook.chmod(self.mode)
+            except OSError as error:
+                problems.append(f"cannot put the earlier hook back at {self.hook}: {error}")
+        return problems
 
 
 def _install_hook(plan: Plan) -> HookUndo:
@@ -777,19 +813,40 @@ def _before_moves(relative: str, journal: Journal) -> str:
     return relative
 
 
-def _roll_back(root: Path, created: list[str], journal: Journal, undo: HookUndo) -> None:
+def _stranded(root: Path, source: str, target: str) -> list[str]:
+    """Why a folder is not back at `source`, and the commands that finish the move by hand."""
+    where, here = root / source, root / target
+    lines = [f"{source} is still at {target}"]
+    if not where.exists():
+        return [*lines, f"finish with: mv -- {shlex.quote(str(here))} {shlex.quote(str(where))}"]
+    if here.is_dir():
+        for child in sorted(here.iterdir()):
+            lines.append(
+                f"finish with: mv -n -- {shlex.quote(str(child))} "
+                f"{shlex.quote(str(where / child.name))}"
+            )
+    return lines
+
+
+def _roll_back(root: Path, created: list[str], journal: Journal, undo: HookUndo) -> list[str]:
     """Put the work tree and the hook back as they were: the tree was clean at the start, so the
     last commit is exactly what to return to. Folders move back first, so files git does not
     track (ignored ones) go with them instead of staying in the new folder.
 
-    The store's `core.hooksPath` needs no undo: `_pin_hooks_path` runs after the commit."""
+    Every step runs whatever the others did. The result lists what could not be put back (empty
+    when all is as it was). The store's `core.hooksPath` needs no undo: `_pin_hooks_path` runs
+    after the commit."""
+    failed: list[tuple[str, str, OSError]] = []
     for source, target in reversed(journal):
-        with contextlib.suppress(OSError):
+        try:
             os.rename(root / target, root / source)
+        except OSError as error:
+            failed.append((source, target, error))
     store.git(root, "reset", "-q", "--hard", "HEAD", check=False)
     wrote = [_before_moves(path, journal) for path in created]
     store.git(root, "--literal-pathspecs", "clean", "-fdq", "--", *wrote, check=False)
-    undo.restore()
+    problems = [line for source, target, _ in failed for line in _stranded(root, source, target)]
+    return [*problems, *undo.restore()]
 
 
 def _commit_changes(plan: Plan, message: str, undo: HookUndo) -> str | None:
@@ -821,11 +878,19 @@ def _commit_changes(plan: Plan, message: str, undo: HookUndo) -> str | None:
         if done.returncode != 0:
             detail = (done.stderr or done.stdout).strip() or "no output"
             raise CovenError(
-                f"the commit was refused; the work tree and the hook are as they were: {detail} "
-                "(a commit needs user.name and user.email set)"
+                f"the commit was refused: {detail} (a commit needs user.name and user.email set)"
             )
-    except BaseException:
-        _roll_back(root, created, journal, undo)
+    except BaseException as error:
+        problems = _roll_back(root, created, journal, undo)
+        if problems and isinstance(error, Exception):
+            raise CovenError(
+                f"{error}\nthe rollback could not finish, so the store is NOT as it was:\n  "
+                + "\n  ".join(problems)
+            ) from error
+        for line in problems:
+            warn(line)
+        if isinstance(error, CovenError):
+            raise CovenError(f"{error}\nthe work tree and the hook are as they were") from error
         raise
     return store.git(root, "rev-parse", "--short", "HEAD").stdout.strip()
 

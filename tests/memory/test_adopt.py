@@ -4,6 +4,7 @@ import dataclasses
 import hashlib
 import os
 import re
+import shlex
 import stat
 import subprocess
 import tarfile
@@ -490,6 +491,112 @@ def test_a_symlinked_scope_folder_or_attributes_file_is_refused_by_name(
 
     assert link in capsys.readouterr().err
     assert snapshot(outside) == outside_before
+
+
+def link_hook_to_dotfiles(lab: Lab, root: Path, text: str) -> Path:
+    """`.git/hooks/pre-commit` as a link to a file outside `.git`; returns that file."""
+    target = lab.root / "dotfiles" / "pre-commit"
+    target.parent.mkdir()
+    target.write_text(text, encoding="utf-8")
+    target.chmod(0o755)
+    (root / ".git" / "hooks" / "pre-commit").symlink_to(target)
+    return target
+
+
+@pytest.mark.parametrize("flag", [[], ["--yes"]], ids=["dry-run", "yes"])
+def test_a_symlinked_pre_commit_hook_is_refused_and_its_target_is_not_written(
+    lab: Lab, capsys: pytest.CaptureFixture[str], flag: list[str]
+) -> None:
+    root = seed(lab)
+    target = link_hook_to_dotfiles(lab, root, OLD_COVEN_HOOK)
+
+    assert run_adopt(root, *flag) == 1
+
+    err = capsys.readouterr().err
+    assert str(root / ".git" / "hooks" / "pre-commit") in err
+    assert "replace the link with the file it points to" in err
+    assert target.read_text(encoding="utf-8") == OLD_COVEN_HOOK
+
+
+def test_a_symlinked_index_is_listed_as_kept_and_never_written(
+    lab: Lab, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    kept = lab.root / "shared-index.md"
+    kept.write_text("hand-written\n", encoding="utf-8")
+    (root / "user" / "INDEX.md").symlink_to(kept)
+    lab.git(root, "add", "-A")
+    lab.git(root, "commit", "-q", "-m", "link an index")
+
+    assert run_adopt(root) == 0
+    plan = capsys.readouterr().out
+    assert "kept as they are (symlinks): user/INDEX.md" in plan
+
+    assert run_adopt(root, "--yes") == 0
+    assert kept.read_text(encoding="utf-8") == "hand-written\n"
+    assert (root / "user" / "INDEX.md").is_symlink()
+
+
+# ---- a rollback that cannot finish says so ----------------------------------------------
+
+
+def write_script(file: Path, body: str) -> None:
+    file.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    file.chmod(0o755)
+
+
+def test_a_rollback_that_cannot_move_a_folder_back_says_where_it_is_and_how_to_finish(
+    lab: Lab, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    (root / ".gitignore").write_text("*.local\n", encoding="utf-8")
+    lab.git(root, "add", "-A")
+    lab.git(root, "commit", "-q", "-m", "ignore local files")
+    (root / "projects" / "Orders App" / "keys.local").write_text("local only\n", encoding="utf-8")
+    # A hook that refuses the commit after recreating the old folder, so moving back cannot work.
+    write_script(
+        root / ".git" / "hooks" / "commit-msg",
+        'mkdir -p "projects/Orders App" && echo x > "projects/Orders App/recreated.md"\n'
+        "echo 'refused for the test' >&2\nexit 1",
+    )
+
+    assert run_adopt(root, "--yes") == 1
+
+    err = capsys.readouterr().err
+    assert "refused for the test" in err
+    assert "are as they were" not in err  # never claimed when it is not so
+    assert "projects/Orders App is still at projects/orders-app" in err
+    stranded = root / "projects" / "orders-app" / "keys.local"
+    assert stranded.read_text(encoding="utf-8") == "local only\n"
+    back = root / "projects" / "Orders App" / "keys.local"
+    assert f"mv -n -- {shlex.quote(str(stranded))} {shlex.quote(str(back))}" in err
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_each_hook_step_of_a_rollback_is_tried_and_each_failure_reported(
+    lab: Lab, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    put_foreign_hook(root)
+    hooks = root / ".git" / "hooks"
+    good = store.HOOK_SOURCE
+    refusing = tmp_path / "locking-hook"
+    # The hook locks the hooks folder, so removing it and moving the old hook back both fail.
+    refusing.write_text(
+        "#!/bin/sh\n# coven-hook-version: 99\nchmod 555 .git/hooks\nexit 1\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(store, "HOOK_SOURCE", refusing)
+    try:
+        assert run_adopt(root, "--yes") == 1
+        err = capsys.readouterr().err
+        [moved] = hooks.glob("pre-commit.pre-adopt-*")
+        assert "are as they were" not in err
+        assert f"cannot remove {hooks / 'pre-commit'}" in err
+        assert f"the old hook is still at {moved}" in err
+        assert f"mv -f {moved} {hooks / 'pre-commit'}" in err
+    finally:
+        hooks.chmod(0o755)
+    monkeypatch.setattr(store, "HOOK_SOURCE", good)
 
 
 # ---- keys -------------------------------------------------------------------------------
