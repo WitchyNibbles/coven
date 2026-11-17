@@ -897,6 +897,49 @@ def test_it_never_pushes_fetches_or_touches_a_remote(lab: Lab, bare_remote: Path
     assert lab.git(root, "remote", "get-url", "elsewhere").strip() == "/home/user/nowhere.git"
 
 
+REMOTE_URL = "https://git.example.internal/user/notes.git"
+REMOTE_WARNING = "sync never pushes a guarded store"
+
+
+def guard_and_remote(lab: Lab, root: Path, *, guard: bool, remote: bool) -> None:
+    if guard:
+        (root / "systems" / "guard.json").write_text(
+            '{"targets": [{"system": "orders-db", "kind": "production", "match": ["psql"]}]}\n',
+            encoding="utf-8",
+        )
+        lab.git(root, "add", "-A")
+        lab.git(root, "commit", "-q", "-m", "guard")
+    if remote:
+        lab.git(root, "remote", "add", "origin", REMOTE_URL)
+
+
+def test_the_report_warns_once_when_a_guarded_store_has_a_remote_and_never_shows_the_url(
+    lab: Lab, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = seed(lab)
+    guard_and_remote(lab, root, guard=True, remote=True)
+    assert run_adopt(root, "--yes") == 0
+    out = capsys.readouterr().out
+    assert out.count(REMOTE_WARNING) == 1
+    [line] = [line for line in out.splitlines() if REMOTE_WARNING in line]
+    assert "warning" in line
+    assert "remove the remote, or keep it private" in line
+    assert REMOTE_URL not in out
+    assert "git.example.internal" not in out
+
+
+@pytest.mark.parametrize(
+    ("guard", "remote"), [(True, False), (False, True)], ids=["no-remote", "not-guarded"]
+)
+def test_the_report_has_no_remote_warning_without_both(
+    lab: Lab, capsys: pytest.CaptureFixture[str], guard: bool, remote: bool
+) -> None:
+    root = seed(lab)
+    guard_and_remote(lab, root, guard=guard, remote=remote)
+    assert run_adopt(root, "--yes") == 0
+    assert REMOTE_WARNING not in capsys.readouterr().out
+
+
 def test_the_command_runs_on_a_store_coven_already_made(lab: Lab) -> None:
     root = lab.root / "made-by-init"
     store.init_store(root, None)

@@ -23,6 +23,7 @@ UNION_LINE = "INDEX.md merge=union"
 LAYOUT = ("user", "projects", "handoffs")
 GUARD_FILE = "systems/guard.json"
 NOT_PUSHED_GUARDED = "not pushed: guarded store"
+GUARDED_REMOTE_ADVICE = "sync never pushes a guarded store: remove the remote, or keep it private"
 BRANCH = "main"
 RELATIVE_HOOKS = ".git/hooks"
 # Variables that move git to another repository; a caller's value must not redirect `git -C <store>`.

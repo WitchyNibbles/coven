@@ -349,8 +349,7 @@ def _remote_warning(store_path: Path) -> list[str]:
         return []
     return [
         _warning(
-            f"a guarded store has a remote ({', '.join(where)}); sync never pushes a guarded "
-            "store: remove the remote, or keep it private"
+            f"a guarded store has a remote ({', '.join(where)}); {store.GUARDED_REMOTE_ADVICE}"
         )
     ]
 
