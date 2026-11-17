@@ -243,6 +243,18 @@ def known_gaps() -> str:
     return (REPO / "docs/known-gaps.md").read_text(encoding="utf-8")
 
 
+def test_known_gaps_says_what_the_shell_fallback_does_on_an_old_python() -> None:
+    text = " ".join(known_gaps().split())
+    assert "only deny-secrets still runs there" not in text
+    assert "degraded mode" in text
+    fallback = " ".join(section(known_gaps(), "Production guard").split())
+    assert "degraded mode" in fallback  # also said once in the Production guard section
+    assert fallback.count("degraded mode") == 1
+    older = text.split("on Python older than 3.12", 1)[1].split("Install Python 3.12", 1)[0]
+    for needle in ("fail-closed.sh", "refuses Bash and MCP", "while the guard is on", "role"):
+        assert needle in older, needle
+
+
 def test_known_gaps_lists_the_production_guards_limits() -> None:
     body = section(known_gaps(), "Production guard")
     for needle in (

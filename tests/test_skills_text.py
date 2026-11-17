@@ -386,6 +386,14 @@ def test_manager_learns_by_kind_and_never_delegates_gated_or_deletions() -> None
         assert needle in text, needle
 
 
+def test_manager_commits_the_learning_line_before_writing_the_step_file() -> None:
+    """`coven approve` refuses unless the step file is the only change in the store."""
+    learning = " ".join(body("manager").split("**Learning.**")[1].split())
+    assert "commit the learning line" in learning
+    assert "before" in learning and "step file" in learning
+    assert "only change in the store" in learning
+
+
 def test_manager_reads_the_doctor_refusals_and_the_hook_note() -> None:
     text = body("manager")
     for needle in (

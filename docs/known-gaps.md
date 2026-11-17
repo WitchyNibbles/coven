@@ -66,8 +66,10 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   - git aliases (`git config alias.p push`, or `-c alias.p=push`, then `git p`), and any shell
     function or script that pushes;
   - a push built at run time by a variable or command substitution that the guard cannot see;
-  - on Python older than 3.12 the guard fails open: the shell fallback in `fail-closed.sh` cannot
-    see the session role, so only deny-secrets still runs there. Install Python 3.12 or later.
+  - on Python older than 3.12 the git-push guard fails open: the shell fallback in `fail-closed.sh`
+    cannot see the session role, so only deny-secrets still runs for that guard. The production
+    guard has a degraded mode there: the fallback refuses Bash and MCP tool calls while the guard
+    is on, ignoring role and config validity. Install Python 3.12 or later.
 
   The guards are best effort against an agent that follows its role.
   GitHub branch protection on the default branch (and any release branch) is the real wall: turn
@@ -111,6 +113,9 @@ Its rules are public. Its boundary is the committed store and the approvals in i
 - An inline `coven guard explain <command>` that names a target is refused inside a session, for
   the GM and a PM alike, because the guard reads the Bash line itself. Write the command to a
   file with the Write tool and use `--file`.
+- On Python older than 3.12 the production guard runs in a degraded mode (see the git-push limits
+  above): it refuses every Bash and MCP tool call while the guard is on, reads no targets or
+  approvals, and so only ever refuses more than the real guard.
 - The user's own terminal, outside Claude Code, is never guarded.
 
 ## coven memory adopt

@@ -290,7 +290,9 @@ names a target is refused for you as for a PM, and so is a heredoc that writes t
    writes one approval file per system (`<id>.json`, or `<id>-<system>.json` for several), commits
    them, deletes the step file and prints every command and tool per file. A command or tool no
    target matches is an error, never skipped: you decide whether it needs no approval or the map
-   lacks a target (then `coven:systems-map`). On any failure it approves nothing; read its message.
+   lacks a target (then `coven:systems-map`). It also refuses a command or tool the guard refuses a
+   PM whatever is approved (a host not written out, an unquoted heredoc): ask the PM for a form the
+   guard can read. On any failure it approves nothing; read its message.
 4. Compare the printed list with the `PROD-STEP`: it must be exactly its commands and tools. If it
    matches, reply `APPROVED <project>/<task> <id>:` plus anything the user added. If it does not,
    run `coven approve --revoke <id>` (it removes the files in one commit) and tell the user.
@@ -315,6 +317,9 @@ its commit, and commit only when it prints `ok`. Then follow `coven:systems-map`
 case (for example "reprocess failed rows of a load"), then one dated line per answer: project and
 task, yes or no, the user's reason. You choose the kind: reuse one that fits, else name a new one
 and record the choice as a ruling. Never ask the user which kind a step is.
+
+Order matters: commit the learning line before you write the step file. `coven approve` refuses
+unless the step file is the only change in the store, so an uncommitted learning line stops it.
 
 - After 20 answers of one kind since its last reset, you may approve that kind yourself: cite the
   answers in the ruling, write the approval, and tell the user in one line what you did.
