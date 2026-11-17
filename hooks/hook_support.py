@@ -1,7 +1,7 @@
 """What the hooks share: a loader for the modules next to them, a depth-limited JSON reader and a
 never-failing failure log.
 
-Hooks run as `python3 -I <hook>`, which leaves this folder off sys.path, and they are not a
+Hooks run as `python3 -I <hook>` (through launch.py), which leaves this folder off sys.path, and they are not a
 package. Each hook therefore puts this folder on sys.path itself and imports this module by name
 at the top, and loads its other siblings (`sibling`) by path, on first use. A missing or broken
 sibling then fails only the check that needs it: deny-secrets and pm-permissions deny, and the
@@ -33,18 +33,15 @@ _STEP = {"[": 1, "{": 1, "]": -1, "}": -1}
 @functools.cache
 def sibling(name: str) -> ModuleType:
     """The module `<name>.py` next to this file, loaded by path and registered as
-    `coven_hook_<name>`. Bytecode is not written: the plugin folder stays as it was installed."""
+    `coven_hook_<name>`. Its bytecode is cached in the folder's `__pycache__` like every other
+    module of the hooks."""
     path = Path(__file__).resolve().with_name(f"{name}.py")
     spec = importlib.util.spec_from_file_location(f"coven_hook_{name}", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
+    spec.loader.exec_module(module)
     return module
 
 

@@ -5,13 +5,23 @@
 # Claude Code blocks a call only on exit code 2: any other non-zero exit is a non-blocking error
 # and the call goes ahead. A hook that fails before its own error handling runs (a syntax error, a
 # missing module, a missing interpreter) would therefore fail open. The hook runs as
-# `python3 -I <hook> [args]` with stdin, stdout and stderr untouched; exit 0 (allow) and exit 2
-# (block) pass through, any other exit becomes 2. With no command at all, it blocks.
+# `python3 -I launch.py <hook> [args]`, one interpreter per call, with stdin, stdout and stderr
+# untouched; exit 0 (allow) and exit 2 (block) pass through, any other exit becomes 2. With no
+# command at all, it blocks.
+#
+# launch.py (next to this file) checks the Python version first, before it reads stdin, and then
+# runs the hook through the import system so that its bytecode is cached in the hooks folder: a
+# second interpreter just to ask the version, and recompiling a script on every call, are what a
+# call used to pay. It exits 86 for "too old" and turns a hook's own exit of 86 into 2.
 #
 # Hooks need Python 3.12 or later, and some systems ship an older python3 (macOS has 3.9) or none.
-# Then deny_secrets.py falls back to a plain text check of the raw payload (below), prod_guard.py to
-# a plain check of whether the guard is on (further below), and every other hook exits 0 (allowed,
-# skipped). Either way the script prints, once per session, how to fix it.
+# On 86 (or with no python3 at all) deny_secrets.py falls back to a plain text check of the raw
+# payload (below), prod_guard.py to a plain check of whether the guard is on (further below), and
+# every other hook exits 0 (allowed, skipped). Either way the script prints, once per session, how
+# to fix it. The payload is read only then: an old Python never touched stdin.
+#
+# prod_guard_gate.py, the entry hooks.json runs for the production guard, is the prod guard for
+# this script: the same fallback and the same log name.
 #
 # Once-per-session marker: a file in ${XDG_CACHE_HOME:-$HOME/.cache}/coven/ named after the
 # payload's session_id, read from the raw payload with sed (no JSON parser is available here).
@@ -22,11 +32,6 @@ NEED_PYTHON='coven: hooks need Python 3.12+; see README "Requirements"'
 
 cache_root() {
     printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/coven"
-}
-
-python_is_new_enough() {
-    command -v python3 >/dev/null 2>&1 &&
-        python3 -I -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1
 }
 
 # Print NEED_PYTHON to stderr unless it was already printed for this session.
@@ -134,8 +139,14 @@ fi
 hook=$1
 name=${hook##*/}
 name=$(printf '%s' "${name%.py}" | tr _ -)
+[ "$name" = "prod-guard-gate" ] && name=prod-guard
+case $0 in
+*/*) here=${0%/*} ;;
+*) here=. ;;
+esac
 
-if ! python_is_new_enough; then
+# Old (launch.py exits 86 before reading stdin) or no python3: the fallbacks.
+old_python_fallback() {
     payload=
     [ -t 0 ] || payload=$(cat)
     if [ "$name" = "deny-secrets" ]; then
@@ -148,12 +159,17 @@ if ! python_is_new_enough; then
     fi
     tell_once "$payload"
     exit 0
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+    old_python_fallback
 fi
 
-python3 -I "$@"
+python3 -I "$here/launch.py" "$@"
 code=$?
 case $code in
 0 | 2) exit "$code" ;;
+86) old_python_fallback ;;
 esac
 printf '%s\n' "coven: $name failed (exit $code); blocking" >&2
 log_failure "$name" "$code"

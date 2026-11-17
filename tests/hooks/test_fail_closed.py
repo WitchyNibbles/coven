@@ -2,6 +2,7 @@
 python3 must not let a secret through."""
 
 import json
+import marshal
 import os
 import shutil
 import stat
@@ -15,6 +16,8 @@ import pytest
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 WRAPPER = HOOKS / "fail-closed.sh"
 DENY_SECRETS = HOOKS / "deny_secrets.py"
+SECRET_NAME = ".env"
+SECRET_FILE = "/p/" + SECRET_NAME
 NEED_PYTHON = 'coven: hooks need Python 3.12+; see README "Requirements"'
 # What the wrapper's fallback needs besides python3.
 POSIX_TOOLS = ("sed", "grep", "cat", "date", "mkdir", "tr", "wc")
@@ -39,11 +42,24 @@ def modern_python(tmp_path: Path) -> dict[str, str]:
 
 @pytest.fixture
 def old_python(tmp_path: Path) -> dict[str, str]:
-    """PATH whose python3 is too old: it refuses the version check, as a 3.9 would."""
+    """PATH whose python3 is too old: launch.py exits 86 at once, as it does on a 3.9, without
+    reading stdin."""
     shim = tmp_path / "old-bin"
     shim.mkdir()
-    executable(shim / "python3", '#!/bin/sh\necho "Python 3.9.6"\nexit 1\n')
+    executable(shim / "python3", "#!/bin/sh\nexit 86\n")
     return {"PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
+
+
+@pytest.fixture
+def counted_python(tmp_path: Path) -> dict[str, str]:
+    """PATH whose python3 is this interpreter and notes each start in the file STARTS names."""
+    shim = tmp_path / "counting-bin"
+    shim.mkdir()
+    executable(
+        shim / "python3",
+        f'#!/bin/sh\necho "$*" >>"$STARTS"\nexec "{sys.executable}" "$@"\n',
+    )
+    return {"PATH": f"{shim}{os.pathsep}{os.environ['PATH']}", "STARTS": str(tmp_path / "starts")}
 
 
 @pytest.fixture
@@ -353,6 +369,56 @@ def test_missing_python_skips_other_hooks_and_says_so(
     proc = run_hook(WRAPPER, '{"session_id": "abc"}', no_python, args=(str(other),))
     assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", NEED_PYTHON + "\n")
     assert [path.name for path in marker_files()] == ["old-python-abc"]
+
+
+def test_a_call_starts_one_interpreter(
+    run_hook: Run, tmp_path: Path, counted_python: dict[str, str]
+) -> None:
+    hook = hook_script(tmp_path, "import sys\nsys.exit(0)\n")
+    assert run_hook(WRAPPER, "", counted_python, args=(str(hook), "--arg")).returncode == 0
+    starts = Path(counted_python["STARTS"]).read_text().splitlines()
+    assert starts == [f"-I {HOOKS / 'launch.py'} {hook} --arg"]
+
+
+def test_a_call_that_finds_python_too_old_has_started_one_interpreter_too(
+    run_hook: Run, old_python: dict[str, str], tmp_path: Path
+) -> None:
+    shim = Path(old_python["PATH"].split(os.pathsep)[0])
+    executable(shim / "python3", '#!/bin/sh\necho "$*" >>"$STARTS"\nexit 86\n')
+    env = {**old_python, "STARTS": str(tmp_path / "starts")}
+    proc = run_hook(WRAPPER, read_payload(SECRET_FILE), env, args=(str(DENY_SECRETS),))
+    assert proc.returncode == 2
+    assert len(Path(env["STARTS"]).read_text().splitlines()) == 1
+
+
+def test_the_old_python_fallback_still_sees_stdin(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    # The wrapper reads stdin only after the launcher has said "too old" (it never read it).
+    proc = run_hook(WRAPPER, read_payload(SECRET_FILE), old_python, args=(str(DENY_SECRETS),))
+    assert proc.returncode == 2
+    assert f"access to '{SECRET_NAME}' is blocked" in proc.stderr
+
+
+def test_a_hook_that_exits_86_is_a_block_and_not_an_old_python(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str]
+) -> None:
+    hook = hook_script(tmp_path, "import sys\nsys.exit(86)\n", name="deny_secrets.py")
+    proc = run_hook(WRAPPER, read_payload("/p/notes.txt"), modern_python, args=(str(hook),))
+    assert (proc.returncode, proc.stdout, proc.stderr) == (2, "", "")
+    assert marker_files() == []
+
+
+def test_the_second_run_of_a_hook_reads_its_cached_bytecode(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str]
+) -> None:
+    hook = hook_script(tmp_path, "import sys\nsys.stderr.write('from source\\n')\n")
+    first = run_hook(WRAPPER, "", modern_python, args=(str(hook),))
+    assert first.stderr == "from source\n"
+    (cached,) = (tmp_path / "__pycache__").glob("boom.*.pyc")
+    swapped = compile("import sys\nsys.stderr.write('from cache\\n')\n", "boom", "exec")
+    cached.write_bytes(cached.read_bytes()[:16] + marshal.dumps(swapped))
+    assert run_hook(WRAPPER, "", modern_python, args=(str(hook),)).stderr == "from cache\n"
 
 
 def test_a_python_of_3_12_is_new_enough(
