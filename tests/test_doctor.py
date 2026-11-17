@@ -7,7 +7,7 @@ import stat
 import sys
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -630,6 +630,24 @@ def test_live_approvals_show_id_system_and_expiry_one_line_each(world):
     assert len(lines) == 2
     assert any("step-a" in line and "orders-db" in line and first in line for line in lines)
     assert any("step-b" in line and "billing-api" in line and second in line for line in lines)
+
+
+def test_approval_lines_keep_their_indent_like_the_other_guard_lines(world):
+    commit_guard(world)
+    write_config(guard="required")
+    approval(world, "step-a", timedelta(hours=2))
+    [line] = [line for line in guard_result().more if "approval step-a" in line]
+    assert line.startswith("  approval step-a")
+
+
+def test_approval_expiry_is_shown_in_utc_whatever_zone_the_file_uses(world):
+    commit_guard(world)
+    write_config(guard="required")
+    local = timezone(timedelta(hours=2))
+    expires = (NOW + timedelta(hours=2)).astimezone(local).isoformat()
+    approval(world, "step-a", timedelta(hours=2), expires=expires)
+    [line] = [line for line in guard_result().more if "approval step-a" in line]
+    assert line.endswith("until 2026-11-13T14:00:00+00:00")
 
 
 def test_expired_and_too_long_approvals_are_not_live(world):

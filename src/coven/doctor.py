@@ -328,7 +328,12 @@ def _live_approvals(hook: ModuleType, store_path: Path, now: datetime) -> list[s
     if not live:
         return ["  no live approvals"]
     return [
-        _one_line(f"  approval {a.id} ({a.system}) until {a.expires.isoformat()}", 2 * DETAIL_LIMIT)
+        "  "
+        + _one_line(
+            f"approval {a.id} ({a.system}) until "
+            f"{a.expires.astimezone(UTC).isoformat(timespec='seconds')}",
+            2 * DETAIL_LIMIT,
+        )
         for a in live
     ]
 
