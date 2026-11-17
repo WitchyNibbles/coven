@@ -311,12 +311,13 @@ Without `--yes` it prints the plan and changes nothing (like `coven setup --dry-
    any change, listing both.
 5. **Store setup.** The same steps as `coven memory init` on an existing store: `.gitattributes`,
    hook, `core.hooksPath`, indexes rebuilt, one commit for renames and indexes.
-6. **Config.** `memory_path` points to `<path>` through setup's owned-key machinery, so
+6. **Check.** Entry counts per scope must equal the preflight's; on a difference the command stops
+   before touching the config, says what differs and prints the restore commands.
+7. **Config.** `memory_path` points to `<path>` through setup's owned-key machinery, so
    `coven setup --undo` restores the previous value. A committed `guard.json` also sets
    `"guard": "required"`.
-7. **Check.** Entry counts per scope must equal the preflight's; on a difference the command stops,
-   says what differs and prints the restore commands.
-8. **Report.** The backup path and checksum, the renames, the hook's new name, and the way back:
+8. **Report.** The backup path and checksum, the renames, the hook's new name, and the way back
+   (also written in the adopt commit's message, so a re-run can print it again):
    `git revert <commit>`, restore the old hook, `git config --local core.hooksPath <old>` (or
    unset), `coven setup --undo`, and as a last resort the tar.
 
