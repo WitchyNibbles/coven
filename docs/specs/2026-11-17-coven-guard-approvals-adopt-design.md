@@ -1,6 +1,6 @@
 # coven addendum: production guard, approvals, systems map, memory adopt
 
-Date: 2026-11-17. Status: draft, for the owner's review. Extends
+Date: 2026-11-17. Status: approved by the owner 2026-11-17, with both expansions in. Extends
 [2026-11-13-coven-v1-design.md](2026-11-13-coven-v1-design.md) ("v1" below); where they disagree,
 this addendum wins for the parts it names.
 
@@ -134,6 +134,22 @@ edit, deletion or approval has no effect.
 time, such as a send to an outside party). `match` are Python regexes over a Bash command's code
 text; `tools` are exact MCP tool names. `coven guard check <file>` validates a file with the
 hook's own rules (prints `ok: N targets` or the reason, exit 0 or 1; never reads stdin).
+
+**`coven guard explain`.** `coven guard explain [--tool <name>] [--file <path>] [<command>]` runs the
+hook's own decision, read-only, on one Bash command (the argument, or the whole text of `--file`
+for a multi-line one) or one MCP tool, against the store's HEAD. It prints:
+
+- each target whose `match` or `tools` hit, with its system, kind and the first pattern that hit;
+- for each such system, the live approval that names the exact command or tool (id, expiry), or
+  `needs approval` when none does;
+- the restricted rule a PM would hit, if any;
+- one verdict line: `allowed`, `refused for a PM`, or `refused for every session`.
+
+With the guard off it prints `guard off: <why>` and exits 0. Exit 0 when it explained, 1 on bad
+input or an unreadable store (with the reason). It writes nothing and logs nothing. The GM runs it
+on a `BLOCKED` to see which rule refused, and on a `PROD-STEP` before approving, to see which
+systems the step touches and so which approval files `coven approve` will write. A PM may run it
+too: it reads only what the guard reads.
 
 **Target rule (every session).** A Bash command whose code text matches a target's `match`, or an
 MCP tool a target lists, is refused unless a live approval at HEAD for **that target's system**
@@ -300,6 +316,12 @@ It never pushes, never deletes an entry, never edits an entry's text and never t
   `guard.json`.
 - `coven doctor` reports: guard on or off and why; `guard.json` valid at HEAD (via the check); live
   approvals and their expiry; a guarded store with a remote (warning).
+- `coven doctor` shows the guard's last 5 refusals from `prod-guard.jsonl`, newest first, one line
+  each: time, role (`pm`, another value, or `unset`), the target system or rule, and the command or
+  tool cut to 80 characters as one printable line. It is an info line, not a warning: refusals are
+  the guard working. With none logged it says `no guard refusals logged`. The manager already runs
+  `coven doctor` at session start, so the GM sees it there; the manager skill says to read it and
+  to ask the PM about a refusal it has no `BLOCKED` for.
 
 ## Privacy and porting
 
@@ -319,7 +341,8 @@ It never pushes, never deletes an entry, never edits an entry's text and never t
   guard off, on, `required` without `guard.json`, invalid `guard.json` with a valid older one,
   uncommitted edits ignored, approvals live, expired and too long, role unset, `pm`, empty and
   unknown, timeout and crash under `fail-closed.sh`.
-- `coven approve` and `coven guard check` against temporary stores.
+- `coven approve`, `coven guard check` and `coven guard explain` against temporary stores; the
+  doctor refusals line against a hand-written log.
 - Adopt against temporary stores: a coven store, a store in the private toolkit's layout with a
   foreign hook, mixed-case keys, a colliding pair, a dirty tree, entries without frontmatter; counts
   equal, backup readable, undo restores config.
@@ -338,6 +361,8 @@ Not part of the build; listed so the build leaves room for it.
    adopt`), remove the private toolkit's Claude-side install, install coven, check `coven doctor`
    and one guarded call refused without an approval and let through with one.
 3. Keep the private toolkit's repo and its data tools; they no longer touch Claude Code's config.
+
+The shadow run in step 1 is not part of the coven build; it happens on that machine before step 2.
 
 ## Data tools later
 
@@ -381,8 +406,8 @@ run any CLI the user installs.
 
 From the study (judgement, not measured): guard core 14-18 h; approvals and CLI 8-10 h; memory
 scopes 4-6 h; systems-map skill 4-6 h; manager and PM rules 3-4 h; cleaning the carried tests
-6-10 h; adopt 4-6 h; setup, doctor, docs 3-5 h. About 45-65 h, plus 30-40 h if the scanner question
-needs most of the private scanner.
+6-10 h; adopt 4-6 h; setup, doctor, docs 3-5 h. About 45-65 h, plus 2-3 h for the two
+expansions, plus 30-40 h if the scanner question needs most of the private scanner.
 
 ## CEO review (2026-11-17)
 
@@ -403,7 +428,6 @@ only where the ladder found no answer (one: D2 without a guard, answered).
   record rename, the `guard.json` states (valid, invalid, absent, unreadable) spelled out, a
   visible `not pushed` line for guarded stores.
 - **Risk kept open:** the scanner question; it may add 30-40 h. It is the plan's first task.
-- **Expansions for the owner to opt into (not in this scope):** `coven guard explain <command>`
-  (which target a command hits, for building the systems map); a doctor line with the last five
-  refusals.
+- **Expansions:** `coven guard explain` and a doctor line with the last five refusals. The owner
+  opted into both on 2026-11-17 ("si a los dos"); they are in the sections above.
 - **Not in scope:** data tools, a second store, named outside systems, other agent tools.
