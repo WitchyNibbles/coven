@@ -594,3 +594,56 @@ def test_a_folder_git_cannot_read_is_a_clean_error_before_any_write(
     assert not settings_file().exists()
     assert not config.config_file().exists()
     assert not (paths.config_dir() / "owned.json").exists()
+
+
+GUARDED_REMOTE_WARNING = "sync never pushes a guarded store"
+
+
+def test_a_guarded_store_with_a_remote_given_warns_and_setup_still_applies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    fake_gh(tmp_path, monkeypatch, '{"visibility": "PRIVATE"}')
+    root = guarded_store(tmp_path / "guarded")
+
+    code = run_setup("--yes", "--memory-path", str(root), "--memory-remote", "owner/repo")
+
+    err = capsys.readouterr().err
+    assert code == 0
+    assert GUARDED_REMOTE_WARNING in err
+    assert "remove the remote" in err
+    assert config.load_config().memory_remote == "owner/repo"
+    assert config.load_config().guard == "required"
+
+
+def test_a_guarded_store_with_a_remote_already_in_the_config_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    root = guarded_store(tmp_path / "guarded")
+    config.config_file().parent.mkdir(parents=True)
+    config.config_file().write_text('{"memory_remote": "owner/repo"}')
+
+    code = run_setup("--dry-run", "--memory-path", str(root))
+
+    assert code == 0
+    assert GUARDED_REMOTE_WARNING in capsys.readouterr().err
+
+
+def test_a_guarded_store_without_a_remote_gets_no_remote_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    root = guarded_store(tmp_path / "guarded")
+
+    assert run_setup("--yes", "--memory-path", str(root)) == 0
+
+    assert GUARDED_REMOTE_WARNING not in capsys.readouterr().err
+
+
+def test_a_store_without_a_guard_and_a_remote_gets_no_guard_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store: Path, capsys: pytest.CaptureFixture[str]
+):
+    fake_gh(tmp_path, monkeypatch, '{"visibility": "PRIVATE"}')
+
+    code = run_setup("--yes", "--memory-path", str(store), "--memory-remote", "owner/repo")
+
+    assert code == 0
+    assert GUARDED_REMOTE_WARNING not in capsys.readouterr().err

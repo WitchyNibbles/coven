@@ -99,6 +99,11 @@ def run(args: argparse.Namespace) -> int:
         print("coven setup: nothing to change in settings or config")
     if args.memory_remote and (warning := store.remote_warning(args.memory_remote)):
         warn(warning)
+    if choices.guard and (args.memory_remote or load_config().memory_remote):
+        warn(
+            f"{choices.memory_path} holds a guard.json and will have a remote; sync never pushes "
+            "a guarded store: remove the remote, or keep it private"
+        )
     if _needs_store(choices.memory_path):
         print(f"  memory store: will be created at {choices.memory_path}")
     if not _confirm(args, "apply these changes"):
