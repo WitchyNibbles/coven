@@ -445,7 +445,7 @@ class Explanation:
     note: str  # said after a target refusal: an older guard.json is enforced
     message: str | None  # why this session's call is refused; None: allowed
     verdict: Verdict
-    unreadable: str | None = None  # why the store or the config could not be read, when it could not
+    unreadable: str | None = None  # why the store or config could not be read
 
 
 # --- config ---
