@@ -92,6 +92,22 @@ def test_a_config_that_is_not_what_is_expected_is_a_config_error(
     assert reason in str(error.value)
 
 
+def test_a_memory_path_of_an_unknown_user_is_the_error_path_home_raises(gc: ModuleType) -> None:
+    write_config('{"memory_path": "~coven-no-such-user/notes"}')
+    with pytest.raises(RuntimeError, match="Could not determine home directory."):
+        gc.read_settings()
+
+
+def test_without_a_home_folder_the_config_path_is_the_error_path_home_raises(
+    gc: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(os.path, "expanduser", lambda path: path)  # `~` stays `~`: no home
+    with pytest.raises(RuntimeError, match="Could not determine home directory."):
+        gc.config_path()
+    with pytest.raises(RuntimeError, match="Could not determine home directory."):
+        gc.guard_is_off()
+
+
 def test_a_config_that_cannot_be_read_is_a_config_error(gc: ModuleType) -> None:
     file = write_config("")
     file.unlink()
@@ -115,6 +131,22 @@ def test_a_config_nested_deeper_than_the_limit_is_not_valid_json(gc: ModuleType)
     write_config('{"x": ' + "[" * depth + "]" * depth + "}")
     with pytest.raises(gc.ConfigError, match=f"JSON nested deeper than {gc.MAX_DEPTH} levels"):
         gc.read_settings()
+
+
+def test_the_depth_check_finds_hook_support_when_the_hooks_folder_is_not_on_the_path(
+    gc: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `python3 -I` leaves the script's folder off sys.path: the module adds it itself, once.
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if Path(p).resolve() != HOOKS])
+    # Restores whatever was loaded as hook_support (or nothing) when the test ends.
+    monkeypatch.setitem(sys.modules, "hook_support", ModuleType("placeholder"))
+    del sys.modules["hook_support"]
+    depth = gc.MAX_DEPTH + 1
+    write_config('{"x": ' + "[" * depth + "]" * depth + "}")
+    for _ in range(2):
+        with pytest.raises(gc.ConfigError, match=f"JSON nested deeper than {gc.MAX_DEPTH} levels"):
+            gc.read_settings()
+    assert [Path(p).resolve() for p in sys.path].count(HOOKS) == 1
 
 
 def test_a_config_at_the_depth_limit_is_read(gc: ModuleType) -> None:
