@@ -89,8 +89,10 @@ coven fails, even if it works, when:
 
 ## The production guard
 
-A PreToolUse hook, `hooks/prod_guard.py`, registered for every tool (`*`), run with `python3 -I`
-under `fail-closed.sh` like deny-secrets, stdlib only.
+A PreToolUse hook, `hooks/prod_guard.py`, registered for every tool (`*`) through the thin entry
+`hooks/prod_guard_gate.py`, run with `python3 -I` under `fail-closed.sh` like deny-secrets, stdlib
+only. The gate reads the config and exits 0 when the guard is off, without importing the guard;
+in every other case it hands over to `prod_guard.py`.
 
 **When it acts.** The hook reads coven's config as plain JSON (as memory-context does) for
 `memory_path` and a new key `guard`.

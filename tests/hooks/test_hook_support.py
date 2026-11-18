@@ -22,8 +22,6 @@ HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 SUPPORT = "hook_support.py"
 ROLE = "COVEN_SESSION_ROLE"
 SECRET = "/p/" + ".env"
-# `python3 -I` still writes bytecode unless told not to; an empty value counts as unset.
-BYTECODE_ALLOWED = {"PYTHONDONTWRITEBYTECODE": ""}
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -227,26 +225,25 @@ def test_a_missing_sibling_raises_so_the_check_that_needs_it_fails(support: Modu
         support.sibling("no_such_hook_module")
 
 
-def test_running_the_hooks_writes_no_bytecode_into_the_hooks_folder(
-    run_hook: Run, tmp_path: Path
+def test_running_the_hooks_through_the_launcher_caches_bytecode_in_the_hooks_folder(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str]
 ) -> None:
     hooks = copy_hooks(tmp_path)
     repo = tmp_path / "repo"
     repo.mkdir()
-    run_hook(hooks / "deny_secrets.py", read_payload(SECRET), BYTECODE_ALLOWED)
-    run_hook(hooks / "deny_secrets.py", "not json", BYTECODE_ALLOWED)
-    run_hook(
-        hooks / "deny_secrets.py", bash_payload("cat notes.txt | head", repo), BYTECODE_ALLOWED
-    )
-    run_hook(
-        hooks / "pm_permissions.py",
-        bash_payload("git push origin main", repo),
-        {**BYTECODE_ALLOWED, ROLE: "pm"},
-    )
-    run_hook(hooks / "session_context.py", {}, BYTECODE_ALLOWED)
-    run_hook(hooks / "memory_context.py", {"cwd": str(repo)}, BYTECODE_ALLOWED)
-    assert list(hooks.rglob("__pycache__")) == []
-    assert list(hooks.rglob("*.pyc")) == []
+    wrapper = hooks / "fail-closed.sh"
+
+    def run(script: str, payload: dict[str, object], *argv: str, env: dict[str, str]) -> None:
+        run_hook(wrapper, payload, env, args=(str(hooks / script), *argv))
+
+    run("deny_secrets.py", bash_payload("cat notes.txt | head", repo), env=modern_python)
+    run("pm_permissions.py", bash_payload("git push origin main", repo), env=modern_python)
+    run("session_context.py", {}, env=modern_python)
+    run("memory_context.py", {"cwd": str(repo)}, env=modern_python)
+    cached = {path.name.split(".")[0] for path in hooks.rglob("*.pyc")}
+    # Each hook, hook_support and the siblings they load by path (shell_words, hooklog, ...).
+    assert {"deny_secrets", "pm_permissions", "hook_support", "shell_words", "hooklog"} <= cached
+    assert {path.parent.name for path in hooks.rglob("*.pyc")} == {"__pycache__"}
 
 
 def test_log_failure_survives_a_failing_sibling_loader(

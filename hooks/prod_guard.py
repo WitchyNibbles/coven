@@ -96,10 +96,12 @@ from pathlib import Path
 from types import ModuleType
 from typing import Literal, NamedTuple, NoReturn, Protocol, TextIO, TypedDict, TypeGuard
 
-# Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
-sys.dont_write_bytecode = True
-# `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
+# `-I` leaves this folder off sys.path, so put it there for the modules found so.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The config reads live in guard_config.py: the gate (prod_guard_gate.py) needs them without this
+# module's imports. The names are the same objects here.
+from guard_config import GUARD_FILE_NAME, ConfigError, config_path, off_reason_for, read_settings
+
 # By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
 hook_support = importlib.import_module("hook_support")
 
@@ -108,9 +110,8 @@ PREFIX = "coven prod-guard:"
 USAGE = "usage: prod_guard.py | prod_guard.py --check <guard.json>"
 CHECK_FLAG = "--check"
 ROLE_VAR = "COVEN_SESSION_ROLE"
-GUARD_FILE = Path("systems/guard.json")
+GUARD_FILE = Path(GUARD_FILE_NAME)
 APPROVALS_DIR = "approvals"
-LATCH_VALUE = "required"
 # A hook still running at Claude's hook timeout lets the call through, so the whole check has a
 # deadline below it (a backtracking guard.json pattern, hanging git calls), and each git call has
 # its own timeout.
@@ -360,10 +361,6 @@ class PayloadError(ValueError):
     """The hook payload does not have the shape of a tool call."""
 
 
-class ConfigError(Exception):
-    """coven's config file cannot be read or is invalid."""
-
-
 class StoreError(Exception):
     """git cannot read the memory store's committed files (no commits, failing, too slow, odd
     output)."""
@@ -454,49 +451,21 @@ class Explanation:
 
 def config_file() -> Path:
     """`~/.config/coven/config.json`: where `coven.paths.config_dir()` and memory-context look."""
-    return Path.home() / ".config" / "coven" / "config.json"
+    return Path(config_path())
 
 
 def read_config() -> GuardConfig:
-    """The store and latch of coven's config. With no config file that is the default store and no
-    latch, so deleting the file cannot switch off a store that holds a guard.json. ConfigError
-    when the file cannot be read or holds something else than expected."""
-    file = config_file()
-    try:
-        text = file.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return GuardConfig(Path.home() / "coven-memory", latch=False)
-    except (OSError, UnicodeDecodeError) as exc:
-        raise ConfigError(f"{file}: cannot be read ({exc})") from None
-    try:
-        data = hook_support.loads(text)
-    except ValueError as exc:
-        raise ConfigError(f"{file}: not valid JSON ({exc})") from None
-    if not isinstance(data, dict):
-        raise ConfigError(f"{file}: must hold a JSON object")
-    configured, guard = data.get("memory_path"), data.get("guard")
-    if configured is not None and not isinstance(configured, str):
-        raise ConfigError(f"{file}: memory_path must be a string")
-    if guard is not None and guard != LATCH_VALUE:
-        raise ConfigError(f'{file}: guard must be "{LATCH_VALUE}" or null')
-    store = Path.home() / "coven-memory" if configured is None else Path(configured).expanduser()
-    if not store.is_absolute():
-        raise ConfigError(f"{file}: memory_path must be an absolute path")
-    return GuardConfig(store, guard == LATCH_VALUE)
+    """The store and latch of coven's config (guard_config.read_settings, which the gate reads
+    too). With no config file that is the default store and no latch, so deleting the file cannot
+    switch off a store that holds a guard.json. ConfigError when the file cannot be read or holds
+    something else than expected."""
+    store, latch = read_settings()
+    return GuardConfig(Path(store), latch)
 
 
 def off_reason(config: GuardConfig) -> str | None:
-    """Why the guard is off for this config, or None when it is on. One stat or two, no git.
-
-    With the latch a missing store folder is not off: the store held a guard.json once, and a
-    deleted or moved folder must not unguard it. The git reads then refuse, naming the folder."""
-    if config.latch:
-        return None
-    if not config.store.is_dir():
-        return f"no memory store folder at {config.store}"
-    if os.path.lexists(config.store / GUARD_FILE):
-        return None
-    return f'no "guard": "{LATCH_VALUE}" in the config and no {GUARD_FILE} in {config.store}'
+    """Why the guard is off for this config, or None when it is on. One stat or two, no git."""
+    return off_reason_for(str(config.store), config.latch)
 
 
 # --- guard.json ---

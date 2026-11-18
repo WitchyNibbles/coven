@@ -110,7 +110,7 @@ def test_hooks_json_uses_plugin_root_paths() -> None:
         "memory_context.py",
         "pm_permissions.py",
         "pm_permissions.py",
-        "prod_guard.py",
+        "prod_guard_gate.py",
         "session_context.py",
     ]
 
@@ -130,9 +130,10 @@ def test_pre_tool_use_guards_a_pm_session_on_bash() -> None:
 
 def test_pre_tool_use_runs_the_prod_guard_on_every_tool() -> None:
     # It sees MCP tools, Task and tools that do not exist yet: only a catch-all matcher covers them.
+    # The entry is the gate, which hands over to prod_guard.py unless the guard is off.
     *_, (matcher, command) = hook_commands("PreToolUse")
     assert matcher == "*"
-    assert command == f'sh "{ROOT}/hooks/fail-closed.sh" "{ROOT}/hooks/prod_guard.py"'
+    assert command == f'sh "{ROOT}/hooks/fail-closed.sh" "{ROOT}/hooks/prod_guard_gate.py"'
 
 
 def test_permission_request_runs_pm_permissions_for_every_tool() -> None:

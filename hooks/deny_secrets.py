@@ -83,8 +83,6 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
-# Hooks run as `python3 -I`: write no bytecode into the installed plugin folder.
-sys.dont_write_bytecode = True
 # `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
