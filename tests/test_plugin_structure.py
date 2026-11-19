@@ -268,6 +268,19 @@ def test_agent_frontmatter_models(name: str) -> None:
     assert body.strip()
 
 
+TASK_TOOLS = ("TaskCreate", "TaskUpdate", "TaskList")
+
+
+def test_project_manager_may_use_the_task_tools() -> None:
+    """The pane shows the PM's plan from its task files, so the role must be able to write them."""
+    fields, _ = split_agent("project-manager")
+    blocked = {tool.strip() for tool in fields.get("disallowedTools", "").split(",")}
+    assert not blocked & set(TASK_TOOLS)
+    if "tools" in fields:  # an allow-list that leaves them out would block them too
+        allowed = {tool.strip() for tool in fields["tools"].split(",")}
+        assert set(TASK_TOOLS) <= allowed
+
+
 def test_final_reviewer_has_the_reviewers_body() -> None:
     assert split_agent("final-reviewer")[1] == split_agent("reviewer")[1]
 
