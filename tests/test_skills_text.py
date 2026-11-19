@@ -469,6 +469,7 @@ def test_a_pm_rebuilds_its_task_list_when_resumed() -> None:
         "your task list starts new and empty",
         "rebuild it from the brief and the resume note before you go on:",
         "mark the tasks under `Done:` `completed` and the rest `pending` or `in_progress`",
+        "Run `TaskList` first; if it still holds your steps, update them instead of adding them again",
     ):
         assert needle in pm, needle
 
@@ -476,7 +477,7 @@ def test_a_pm_rebuilds_its_task_list_when_resumed() -> None:
 def test_a_pm_keeps_task_subjects_short_for_the_pane() -> None:
     pm = pm_flat()
     assert "A subject is imperative, at most 50 characters and with no project prefix," in pm
-    assert "because the pane that shows it is about 60 columns wide" in pm
+    assert "because a status pane may show it in about 60 columns" in pm
 
 
 def test_a_pm_loads_the_task_tools_with_toolsearch_when_they_are_deferred() -> None:
