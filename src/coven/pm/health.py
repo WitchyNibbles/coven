@@ -14,7 +14,7 @@ from coven.config import load_config
 from coven.pm import report
 from coven.pm.report import STALE, PmView, Scene
 from coven.pm.rows import PM_NAME_PREFIX, PmError, Row, pm_groups
-from coven.pm.text import clean_line, is_valid_code, is_valid_row_id
+from coven.pm.text import clean_line, code_for_key, is_valid_code, is_valid_row_id
 
 PROJECTS_DIR = "projects"
 STATE_SUFFIX = "-state.md"
@@ -35,8 +35,12 @@ NO_STORE = "no memory store: run `coven memory init`"
 
 @dataclass(frozen=True)
 class Record:
-    """What `health` reads from one project's state record."""
+    """What `health` reads from one project's state record.
 
+    `key` is the project's folder name in the store; `code` is the PM code derived from it.
+    """
+
+    key: str
     code: str
     status: str | None
     session_id: str | None
@@ -49,10 +53,11 @@ def _last(pattern: re.Pattern[str], text: str) -> str | None:
     return found[-1] if found else None
 
 
-def _parse(code: str, text: str) -> Record:
+def _parse(key: str, text: str) -> Record:
     status = _last(STATUS_LINE, text)
     return Record(
-        code=code,
+        key=key,
+        code=code_for_key(key),
         status=status,
         session_id=_last(SESSION_LINE, text),
         problem=None if status else NO_STATUS,
@@ -74,22 +79,40 @@ def _read_text(file: Path, shown: str) -> str:
         raise ValueError(f"'{shown}': {error.strerror or 'cannot be read'}") from None
 
 
-def _read_record(projects: Path, code: str) -> Record | None:
-    """The record of project `code`, or `None` when its folder holds no state file."""
-    name = f"{code}{STATE_SUFFIX}"
-    file = projects / code / name
+def _read_record(projects: Path, key: str) -> Record | None:
+    """The record of the project in folder `key`, or `None` when the folder holds no state file."""
+    name = f"{key}{STATE_SUFFIX}"
+    file = projects / key / name
     if not (file.exists() or file.is_symlink()):
         return None
+    code = code_for_key(key)
     if not is_valid_code(code):  # its name would end up in a command
-        return Record(code, None, None, INVALID_CODE)
+        return Record(key, code, None, None, INVALID_CODE)
     try:
-        return _parse(code, _read_text(file, f"{PROJECTS_DIR}/{code}/{name}"))
+        return _parse(key, _read_text(file, f"{PROJECTS_DIR}/{key}/{name}"))
     except ValueError as error:
-        return Record(code, None, None, str(error))
+        return Record(key, code, None, None, str(error))
+
+
+def _clash_problem(record: Record, records: list[Record]) -> str | None:
+    """The problem of `record` when other records derive the same PM code; they are sorted."""
+    others = [other.key for other in records if other.code == record.code and other is not record]
+    if not others or not is_valid_code(record.code):
+        return None
+    return f"same PM code '{record.code}' as {', '.join(others)}"
+
+
+def _without_clashes(records: list[Record]) -> list[Record]:
+    """`records`, those whose key shares a PM code with another key turned into problems."""
+    clashes = [_clash_problem(record, records) for record in records]
+    return [
+        record if clash is None else Record(record.key, record.code, None, None, clash)
+        for record, clash in zip(records, clashes, strict=True)
+    ]
 
 
 def read_records(memory_path: Path) -> list[Record]:
-    """Every `projects/<code>/<code>-state.md` of the store; no store is a `PmError`."""
+    """Every `projects/<key>/<key>-state.md` of the store; no store is a `PmError`."""
     if not memory_path.is_dir():
         raise PmError(NO_STORE)
     projects = memory_path / PROJECTS_DIR
@@ -99,8 +122,8 @@ def read_records(memory_path: Path) -> list[Record]:
         return []
     except OSError as error:
         raise PmError(f"cannot read the memory store: {error.strerror}") from error
-    found = (_read_record(projects, code) for code in folders)
-    return [record for record in found if record is not None]
+    found = (_read_record(projects, key) for key in folders)
+    return _without_clashes([record for record in found if record is not None])
 
 
 # --- the lines ------------------------------------------------------------------------------
@@ -204,17 +227,23 @@ def health_lines(views: list[PmView], records: list[Record], gm: str) -> list[st
     """The lines for `views` and `records`, PM by PM; a record with no view has no PM row."""
     gm = clean_line(gm)
     by_name = {view.name: view for view in views}
-    by_record = {_pm_name(record): record for record in records}
+    by_record: dict[str, list[Record]] = {}
+    for each in records:
+        by_record.setdefault(_pm_name(each), []).append(each)
     needed = {_pm_name(r) for r in records if r.status in EXPECTED_ALIVE or r.problem}
     lines: list[str] = []
     for name in sorted(set(by_name) | needed):
-        view, record = by_name.get(name), by_record.get(name)
+        view, matching = by_name.get(name), by_record.get(name, [])
+        record = matching[0] if len(matching) == 1 else None  # a shared code names no record
         if record is not None and record.status == RUNNING:
             lines += _record_line(record, view, gm)
         if view is not None:
             lines += _view_lines(view, record, gm)
-        if record is not None and record.problem:
-            lines.append(f"{clean_line(record.code)}: {clean_line(record.problem)}")
+        lines += [
+            f"{clean_line(found.key)}: {clean_line(found.problem)}"
+            for found in matching
+            if found.problem
+        ]
     return lines
 
 

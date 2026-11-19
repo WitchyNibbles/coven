@@ -9,6 +9,7 @@ from coven.pm.text import (
     Head,
     clean_block,
     clean_line,
+    code_for_key,
     is_valid_code,
     is_valid_gm_name,
     parse_head,
@@ -158,3 +159,24 @@ def test_a_gm_name_starts_with_a_letter_or_digit():
         assert is_valid_gm_name(good), good
     for bad in ("", "-gm", ".gm", "gm main", "gm;x", "gm\n", "gm'x"):
         assert not is_valid_gm_name(bad), bad
+
+
+@pytest.mark.parametrize(
+    ("key", "code"),
+    [
+        ("glm_locally", "glm-locally"),
+        ("Spellbound-Themes", "spellbound-themes"),
+        ("a;touch x", "a-touch-x"),
+        ("Café", "caf-"),  # ASCII only: a non-ASCII letter is not kept
+        ("coven", "coven"),
+        ("\u212aey", "-ey"),  # the Kelvin sign lower-cases to an ASCII k; it must not
+        ("\u0130x", "-x"),  # a dotted capital I lower-cases to two characters; it must not
+    ],
+)
+def test_a_project_key_becomes_a_code_in_lower_case_with_dashes(key, code):
+    assert code_for_key(key) == code
+
+
+@pytest.mark.parametrize("key", ["_x", ".x", "-x"])
+def test_a_key_may_derive_a_code_that_is_not_valid(key):
+    assert not is_valid_code(code_for_key(key))

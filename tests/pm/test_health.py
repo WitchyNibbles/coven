@@ -728,18 +728,106 @@ def test_the_manager_skill_pins_the_record_lines_and_runs_health_at_start() -> N
     assert "`since GM: ?` means unknown" in prose
 
 
+# --- a record is found by its folder name (the key), a PM by its code --------------------------
+
+
+def test_a_record_with_upper_case_in_its_key_names_the_pm_by_its_code(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record("Spellbound-Themes", record_text("running"))
+    code, lines, _ = health(env, capsys)
+    assert code == 1
+    assert lines == [
+        "pm-spellbound-themes: record says running, PM gone: "
+        f"coven pm resume spellbound-themes --gm {GM} --session {RECORD_ID}"
+    ]
+
+
+def test_a_record_with_an_underscore_in_its_key_matches_the_row_of_its_code(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record("jinx_firefox_theme", record_text("running"))
+    env.set_rows(agents_row("pm-jinx-firefox-theme", 1, "blocked"))
+    env.transcript(quiet())
+    code, lines, _ = health(env, capsys)
+    assert code == 1
+    assert lines == ["pm-jinx-firefox-theme: waits on a prompt: claude attach 00000001"]
+
+
+def test_two_keys_with_one_code_are_a_problem_each_and_get_no_command(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record("Foo", record_text("running"))
+    record("foo", record_text("running"))
+    code, lines, _ = health(env, capsys)
+    assert code == 1
+    assert lines == [
+        "Foo: same PM code 'foo' as foo",
+        "foo: same PM code 'foo' as Foo",
+    ]
+
+
+def test_three_keys_with_one_code_each_name_the_other_two(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for key in ("a_b", "a-b", "A.b"):
+        record(key, record_text("running"))
+    _, lines, _ = health(env, capsys)
+    assert lines == [
+        "A.b: same PM code 'a-b' as a-b, a_b",
+        "a-b: same PM code 'a-b' as A.b, a_b",
+        "a_b: same PM code 'a-b' as A.b, a-b",
+    ]
+
+
+def test_a_clash_does_not_hide_the_row_of_the_shared_code(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record("Foo", record_text("running"))
+    record("foo", record_text("running"))
+    env.set_rows(agents_row("pm-foo", 1, "blocked"))
+    env.transcript(quiet())
+    _, lines, _ = health(env, capsys)
+    assert lines == [
+        "pm-foo: waits on a prompt: claude attach 00000001",
+        "Foo: same PM code 'foo' as foo",
+        "foo: same PM code 'foo' as Foo",
+    ]
+
+
 # --- nothing unsafe in a suggested command ------------------------------------------------------
 
 BAD_CODE = "a;touch x"
+BAD_KEY = ";touch x"  # lower-cased and cleaned it is `-touch-x`, which no command may carry
 
 
-def test_a_record_folder_with_a_bad_code_gets_no_command(
+def test_a_record_folder_whose_code_is_invalid_gets_no_command(
     env: PmEnv, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    record(BAD_CODE, record_text("running").replace(CODE, BAD_CODE))
+    record(BAD_KEY, record_text("running"))
     code, lines, _ = health(env, capsys)
     assert code == 1
-    assert lines == [f"{BAD_CODE}: invalid project code"]
+    assert lines == [f"{BAD_KEY}: invalid project code"]
+
+
+def test_a_record_folder_with_a_name_that_cleans_to_a_code_gets_a_command(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record(BAD_CODE, record_text("running"))
+    _, lines, _ = health(env, capsys)
+    assert lines == [
+        "pm-a-touch-x: record says running, PM gone: "
+        f"coven pm resume a-touch-x --gm {GM} --session {RECORD_ID}"
+    ]
+
+
+def test_a_record_folder_that_starts_with_an_underscore_is_an_invalid_code(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record("_x", record_text("running"))
+    code, lines, _ = health(env, capsys)
+    assert code == 1
+    assert lines == ["_x: invalid project code"]
 
 
 def test_a_bad_code_folder_without_a_state_record_is_ignored(
