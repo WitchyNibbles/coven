@@ -192,6 +192,13 @@ def test_live_pid_keeps_the_row_state(env, capsys):
     assert "state=working" in out
 
 
+def test_a_live_pid_started_from_a_versioned_binary_keeps_the_row_state(env, capsys):
+    one_pm(env, brief().turn_end(at("11:46")), "working", pid=4242)
+    env.process(4242, "/home/user/.local/share/claude/versions/2.1.328\0--bg")
+    _, out, _ = status(env, capsys)
+    assert "state=working" in out
+
+
 def test_working_row_without_pid_and_old_transcript_is_stale(env, capsys):
     old = NOW - timedelta(hours=26)
     builder = TranscriptBuilder().prompt(f"Brief\nGM session: {GM}\n", old).turn_end(old)
