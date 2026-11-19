@@ -736,6 +736,15 @@ def test_the_manager_skill_says_health_finds_the_record_by_key_and_derives_the_c
     )
 
 
+def test_the_manager_skill_states_the_rule_code_for_key_applies() -> None:
+    skill = Path(__file__).resolve().parents[2] / "skills" / "manager" / "SKILL.md"
+    prose = " ".join(skill.read_text().split())
+    assert (
+        "every character other than A-Z, a-z, 0-9 and `-` turned into `-`, then lower-cased, "
+        "so a non-ASCII letter always becomes `-`" in prose
+    )
+
+
 # --- a record is found by its folder name (the key), a PM by its code --------------------------
 
 
