@@ -443,6 +443,50 @@ def test_the_no_guard_section_keeps_d2() -> None:
         assert reached not in flow
 
 
+def pm_flat() -> str:
+    """The PM role with every run of whitespace as one space, so line wrapping does not matter."""
+    return " ".join(PM.read_text(encoding="utf-8").split())
+
+
+def test_a_pm_keeps_a_task_list_with_one_entry_per_recognisable_step() -> None:
+    pm = pm_flat()
+    for needle in (
+        "Keep a Claude Code task list: one entry per step a person would recognise",
+        '("Read X", "Write the failing test", "Review", "Open the PR", "Send DONE")',
+        "made with `TaskCreate`, never one per role-agent call",
+        "Keep it current with `TaskUpdate`: `in_progress` when a step starts,",
+        "`completed` only when it is really done, so the task files always show your plan",
+        "A step blocked on a `QUESTION` or a `PROD-STEP` stays `in_progress`",
+        "A `TASK` from the GM adds its steps",
+    ):
+        assert needle in pm, needle
+
+
+def test_a_pm_rebuilds_its_task_list_when_resumed() -> None:
+    pm = pm_flat()
+    for needle in (
+        "A prompt that starts `RESUMED by <gm>` is a resume:",
+        "your task list starts new and empty",
+        "rebuild it from the brief and the resume note before you go on:",
+        "mark the tasks under `Done:` `completed` and the rest `pending` or `in_progress`",
+        "Run `TaskList` first; if it still holds your steps, update them instead of adding them again",
+    ):
+        assert needle in pm, needle
+
+
+def test_a_pm_keeps_task_subjects_short_for_the_pane() -> None:
+    pm = pm_flat()
+    assert "A subject is imperative, at most 50 characters and with no project prefix," in pm
+    assert "because a status pane may show it in about 60 columns" in pm
+
+
+def test_a_pm_loads_the_task_tools_with_toolsearch_when_they_are_deferred() -> None:
+    assert (
+        "If `TaskCreate` and `TaskUpdate` are deferred tools, load them first with `ToolSearch` "
+        "(`select:TaskCreate,TaskUpdate,TaskList`)"
+    ) in pm_flat()
+
+
 def test_pm_role_has_the_guard_on_flow_and_keeps_the_no_guard_rule() -> None:
     text = PM.read_text(encoding="utf-8")
     for needle in (
