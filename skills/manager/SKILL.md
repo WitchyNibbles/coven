@@ -23,8 +23,9 @@ any tool that has no background sessions.
   send you facts. Commit every write and sync per the `coven:shared-memory` skill.
 - **One state record per project:** `<store>/projects/<key>/<key>-state.md`, in the memory entry
   format (`name: <key>-state`, `type: project`). `<key>` is the folder name of the repo's main
-  checkout. The PM code `<code>` is the key in lower case, with every character other than a-z, 0-9
-  and `-` turned into `-`. The record holds:
+  checkout. The PM code `<code>` is the key with every character other than A-Z, a-z, 0-9 and
+  `-` turned into `-`, then lower-cased, so a non-ASCII letter always becomes `-`. `coven pm health`
+  finds the record by `<key>` and derives `<code>` this same way. The record holds:
   - the hand-over, verbatim, and the main repo's path;
   - the PM session name `pm-<code>`, its `id` and `sessionId`, and the project status
     (`running`, `idle`, `waiting for a slot`, `done`). Write them first in the PM paragraph as two

@@ -22,6 +22,7 @@ SPACES = re.compile(r" {2,}")
 DROPPED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 # Names that are printed and may end up inside a command the GM is told to run.
 PROJECT_CODE = re.compile(r"[a-z0-9][a-z0-9-]*")
+NOT_ASCII_WORD_CHARS = re.compile(r"[^A-Za-z0-9-]")
 ROW_ID = re.compile(r"[0-9a-f]{8}")
 GM_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
@@ -102,8 +103,21 @@ def _task_key(name: str, project: str) -> str | None:
 
 
 def is_valid_code(code: str) -> bool:
-    """Whether `code` is a project code that is safe to put in a command."""
-    return PROJECT_CODE.fullmatch(code) is not None
+    """Whether `code` is a project code that is safe to put in a command.
+
+    A code longer than `LINE_LIMIT` is not: `clean_line` would cut it inside the command.
+    """
+    return len(code) <= LINE_LIMIT and PROJECT_CODE.fullmatch(code) is not None
+
+
+def code_for_key(key: str) -> str:
+    """The PM code of the project key `key`: lower case, every other character turned into `-`.
+
+    The rule is the manager skill's, with ASCII semantics: only a-z, 0-9 and `-` stay, so any
+    non-ASCII letter becomes `-` too (`Café` gives `caf-`; the Kelvin sign is no `k`). The result
+    may still not be a valid code (`_x` gives `-x`): check it with `is_valid_code`.
+    """
+    return NOT_ASCII_WORD_CHARS.sub("-", key).lower()  # lower() last: only ASCII is left
 
 
 def is_valid_row_id(row_id: str) -> bool:
