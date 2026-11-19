@@ -180,3 +180,8 @@ def test_a_project_key_becomes_a_code_in_lower_case_with_dashes(key, code):
 @pytest.mark.parametrize("key", ["_x", ".x", "-x"])
 def test_a_key_may_derive_a_code_that_is_not_valid(key):
     assert not is_valid_code(code_for_key(key))
+
+
+def test_a_project_code_is_at_most_as_long_as_a_printed_line():
+    assert is_valid_code("a" * LINE_LIMIT)
+    assert not is_valid_code("a" * (LINE_LIMIT + 1))

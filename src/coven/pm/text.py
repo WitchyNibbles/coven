@@ -103,8 +103,11 @@ def _task_key(name: str, project: str) -> str | None:
 
 
 def is_valid_code(code: str) -> bool:
-    """Whether `code` is a project code that is safe to put in a command."""
-    return PROJECT_CODE.fullmatch(code) is not None
+    """Whether `code` is a project code that is safe to put in a command.
+
+    A code longer than `LINE_LIMIT` is not: `clean_line` would cut it inside the command.
+    """
+    return len(code) <= LINE_LIMIT and PROJECT_CODE.fullmatch(code) is not None
 
 
 def code_for_key(key: str) -> str:

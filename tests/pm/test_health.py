@@ -19,6 +19,7 @@ from pm.fixtures import (
 )
 
 from coven.config import Config, load_config, save_config
+from coven.pm.text import LINE_LIMIT, clean_line
 
 HEALTH = "health"
 CODE = "acme-1"
@@ -809,6 +810,28 @@ def test_a_clash_does_not_hide_the_row_of_the_shared_code(
         "pm-foo: waits on a prompt: claude attach 00000001",
         "Foo: same PM code 'foo' as foo",
         "foo: same PM code 'foo' as Foo",
+    ]
+
+
+def test_a_code_too_long_to_print_whole_gets_no_command(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    key = "a" * (LINE_LIMIT + 1)  # the state file name must still fit the file system's limit
+    record(key, record_text("running"))
+    code, lines, _ = health(env, capsys)
+    assert code == 1
+    assert lines == [f"{clean_line(key)}: invalid project code"]
+
+
+def test_a_code_as_long_as_a_printed_line_keeps_its_command(
+    env: PmEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    key = "a" * LINE_LIMIT
+    record(key, record_text("running"))
+    _, lines, _ = health(env, capsys)
+    assert lines == [
+        f"{clean_line(f'pm-{key}')}: record says running, PM gone: "
+        f"coven pm resume {key} --gm {GM} --session {RECORD_ID}"
     ]
 
 
