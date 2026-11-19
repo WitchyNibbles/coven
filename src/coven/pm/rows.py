@@ -13,7 +13,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from coven import safe_json
 from coven.errors import CovenError
@@ -26,6 +26,7 @@ LIVE = frozenset({"working", "idle", "blocked"})
 STATUS_STATES = {"busy": "working", "idle": "idle"}
 UNKNOWN_STATE = "unknown"
 PROCESS_NAME = "claude"
+VERSIONS_FOLDER = "versions"  # a versioned install keeps each binary at claude/versions/<version>
 NOT_JSON = "agents output is not JSON"
 DOCTOR_HINT = "(see coven doctor)"
 JSON_STARTS = ("[", "{")
@@ -164,12 +165,20 @@ def row_state(row: Row) -> str:
 def pid_alive(pid: int, proc_root: Path = Path("/proc")) -> bool:
     """Whether `pid` is a running CLI process, from its command line under `proc_root`.
 
-    Only argv[0] counts (a live PM shows the CLI's name and `bg-spare` there), so a process that
-    merely names the CLI among its arguments, such as a grep for it, is not taken for one.
+    Only argv[0] counts, so a process that merely names the CLI among its arguments, such as a
+    grep for it, is not taken for one. A live PM shows the CLI's name there, with `bg-spare`, or,
+    when started from a versioned install, a file in a `claude/versions` folder, such as
+    `.../claude/versions/2.1.328`. That folder pair is matched by path component, never by
+    substring.
     """
     try:
         cmdline = (proc_root / str(pid) / "cmdline").read_bytes()
     except OSError:
         return False
     program = cmdline.decode(errors="replace").split("\0", 1)[0]
-    return PROCESS_NAME in os.path.basename(program)
+    return PROCESS_NAME in os.path.basename(program) or _in_versions_folder(PurePosixPath(program))
+
+
+def _in_versions_folder(program: PurePosixPath) -> bool:
+    """Whether `program` is a file directly in a `versions` folder that is directly in `claude`."""
+    return program.parent.name == VERSIONS_FOLDER and program.parent.parent.name == PROCESS_NAME

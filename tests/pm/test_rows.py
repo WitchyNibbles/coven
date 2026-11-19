@@ -229,8 +229,24 @@ def test_pid_alive_reads_cmdline(tmp_path):
         (b"grep\0claude\0", False),
         (b"node\0/opt/bin/claude\0--bg\0", False),
         (b"/opt/claude/bin/tool\0", False),
+        (b"/home/user/.local/share/claude/versions/2.1.328\0--bg\0", True),
+        (b"/home/user/.local/share/claude/versions/2.1.328\0", True),
+        (b"/tmp/versions/2.1.328\0", False),  # `versions`, but not under `claude`
+        (b"/opt/claude/versions\0", False),  # the versions folder itself, not a file in it
+        (b"grep\0/home/user/.local/share/claude/versions/2.1.328\0", False),
     ],
-    ids=["pm-title", "gm", "grep", "node-script", "claude-directory"],
+    ids=[
+        "pm-title",
+        "gm",
+        "grep",
+        "node-script",
+        "claude-directory",
+        "versioned",
+        "versioned-bare",
+        "versions-outside-claude",
+        "versions-folder-itself",
+        "versioned-path-as-argument",
+    ],
 )
 def test_pid_alive_reads_only_the_basename_of_argv0(tmp_path, cmdline, alive):
     (tmp_path / "44").mkdir()
