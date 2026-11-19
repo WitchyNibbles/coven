@@ -728,6 +728,14 @@ def test_the_manager_skill_pins_the_record_lines_and_runs_health_at_start() -> N
     assert "`since GM: ?` means unknown" in prose
 
 
+def test_the_manager_skill_says_health_finds_the_record_by_key_and_derives_the_code() -> None:
+    skill = Path(__file__).resolve().parents[2] / "skills" / "manager" / "SKILL.md"
+    prose = " ".join(skill.read_text().split())
+    assert (
+        "`coven pm health` finds the record by `<key>` and derives `<code>` this same way" in prose
+    )
+
+
 # --- a record is found by its folder name (the key), a PM by its code --------------------------
 
 

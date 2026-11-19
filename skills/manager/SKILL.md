@@ -24,7 +24,8 @@ any tool that has no background sessions.
 - **One state record per project:** `<store>/projects/<key>/<key>-state.md`, in the memory entry
   format (`name: <key>-state`, `type: project`). `<key>` is the folder name of the repo's main
   checkout. The PM code `<code>` is the key in lower case, with every character other than a-z, 0-9
-  and `-` turned into `-`. The record holds:
+  and `-` turned into `-`. `coven pm health` finds the record by `<key>` and derives `<code>` this
+  same way. The record holds:
   - the hand-over, verbatim, and the main repo's path;
   - the PM session name `pm-<code>`, its `id` and `sessionId`, and the project status
     (`running`, `idle`, `waiting for a slot`, `done`). Write them first in the PM paragraph as two
