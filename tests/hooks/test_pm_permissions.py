@@ -1832,3 +1832,105 @@ def test_the_guard_runs_as_a_script(repo):
     )
     assert (proc.returncode, proc.stdout) == (2, "")
     assert "force push" in proc.stderr
+
+
+# --- an empty word is a word, never an operator ---------------------------------------------------
+
+# Each pair is a command with empty quotes and the same command without them: the guard must give
+# the same answer for both (and not crash on the first).
+EMPTY_WORD_PAIRS = [
+    ("echo ''", "echo"),
+    ('echo ""', "echo"),
+    ("cat <<'EOF'\nfoo '' bar\nEOF", "cat <<'EOF'\nfoo bar\nEOF"),
+    ("echo $(printf '%s' '')", "echo $(printf '%s')"),
+    ("echo $(echo a | tr '\\n' '')", "echo $(echo a | tr '\\n')"),
+    ("echo $(echo a | tr '\\n' ' ')", "echo $(echo a | tr '\\n' ' ')"),
+    ("git push -f ''", "git push -f"),
+    ("echo '' && git push --force", "echo && git push --force"),
+    ("gh pr merge ''", "gh pr merge"),
+]
+
+
+def test_an_empty_git_subcommand_does_not_crash_the_guard(repo):
+    # `git '' push -f` is not the same command as `git push -f` (git rejects the empty name and
+    # pushes nothing), so only the absence of a crash is pinned.
+    assert isinstance(pm._is_guarded("git '' push -f"), bool)
+    assert "internal error" not in guard(request("git '' push -f", repo))[2]
+
+
+@pytest.mark.parametrize(("quoted", "bare"), EMPTY_WORD_PAIRS)
+def test_empty_quotes_do_not_change_whether_the_guard_looks_at_a_command(quoted, bare):
+    assert pm._is_guarded(quoted) == pm._is_guarded(bare)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo ''",
+        'echo ""',
+        "cat <<'EOF'\nfoo '' bar\nEOF",
+        "echo $(printf '%s' '')",
+        "echo $(echo a | tr '\\n' '')",
+        "echo $(echo a | tr '\\n' ' ')",
+    ],
+)
+def test_the_guard_says_nothing_about_a_harmless_command_with_empty_quotes(repo, command):
+    assert guard(request(command, repo)) == (0, "", "")
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git push -f ''", "echo '' && git push --force", "gh pr merge ''", 'bash -c ""; git push -f'],
+)
+def test_the_guard_still_denies_a_guarded_command_with_empty_quotes(repo, command):
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.startswith(PREFIX)
+    assert "internal error" not in err
+
+
+def test_the_permission_request_for_a_harmless_command_with_empty_quotes_is_still_denied(repo):
+    # The PermissionRequest hook approves only what it understands: quotes are refused, as before.
+    assert "not allowed" in denied("echo ''", repo)
+
+
+@pytest.mark.parametrize("lenient", [False, True])
+def test_an_empty_token_is_a_word_in_a_segment(lenient):
+    segments = pm._segments(["echo", "", "a"], lenient=lenient)
+    assert [segment.words for segment in segments] == [["echo", "", "a"]]
+
+
+@pytest.mark.parametrize("lenient", [False, True])
+def test_a_lone_empty_token_is_a_segment_of_its_own(lenient):
+    assert [segment.words for segment in pm._segments([""], lenient=lenient)] == [[""]]
+
+
+# A quoted word that merely starts with an operator character is a word, not an operator: the
+# guard used to drop it, so a wrapper's `-c` text was never looked at.
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -c "(git push -f)"',
+        'bash -c ";git push --force"',
+        'sh -c "&& git push -f"',
+        'bash -c "|git push -f"',
+        "sh -c '>x git push -f'",
+        "eval '(git push -f)'",
+        "env sh -c '<x git push -f'",
+    ],
+)
+def test_the_guard_reads_a_wrapper_text_that_starts_with_an_operator_character(repo, command):
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.startswith(PREFIX)
+
+
+def test_a_real_operator_still_splits_in_the_lenient_reading():
+    tokens = pm._tokens("echo a && git push -f ; ls | tail", lenient=True)
+    segments = pm._segments(tokens, lenient=True)
+    assert [segment.words for segment in segments] == [
+        ["echo", "a"],
+        ["git", "push", "-f"],
+        ["ls"],
+        ["tail"],
+    ]

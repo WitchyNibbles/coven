@@ -464,6 +464,13 @@ def _tokens(command: str, lenient: bool = False) -> list[str]:
     return words
 
 
+def _is_operator(token: str) -> bool:
+    """Whether the tokenizer meant `token` as a shell operator: a run of operator characters and
+    nothing else. The empty word (`''`) and a quoted word that only starts with one (`"(a b)"`)
+    are words."""
+    return bool(token) and all(char in OPERATOR_CHARS for char in token)
+
+
 def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
     """The non-empty command segments. Parentheses only split: whatever bash would run is one of
     the segments, and an unbalanced pair is a syntax error that runs nothing. Lenient (for the
@@ -474,10 +481,10 @@ def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
         if token in SEPARATORS or token in PARENS:
             breaks.append(token)
             parts.append([])
-        elif token[0] in OPERATOR_CHARS and lenient:
+        elif _is_operator(token) and lenient:
             breaks.append(token)
             parts.append([])
-        elif token[0] in OPERATOR_CHARS:
+        elif _is_operator(token):
             raise Unsupported(f"the operator {token} is not approved automatically")
         else:
             parts[-1].append(token)
