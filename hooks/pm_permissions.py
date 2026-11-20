@@ -35,8 +35,8 @@ to a file and pass `--body-file <path>` (words with no quote, `$` or other metac
 fine: `--title Add_login`, `--fill`). The one quoted thing approved is the whole value of the title
 option of `gh pr create` (`--title "..."`, `--title '...'`, `--title="..."`, `-t "..."`). Before
 anything else reads the text, each such value is checked (ASCII letters, digits, spaces and
-`-_.,:;()/#?!*&|<>[]{}+=@%^~` only: no `$`, backtick, backslash, other quote, control character or
-non-ASCII character, and not empty) and swapped for the control character TITLE_WORD, which the
+`-_.,:;()/#?!*&|<>[]{}+=@%^~` and the quote it is not wrapped in, so `"Don't"` and `'Say "hi"'`:
+no `$`, backtick, backslash, control character or non-ASCII character, and not empty) and swapped for the control character TITLE_WORD, which the
 original text may not hold. The quotes are then gone, the value is one word to the tokenizer, and a
 `|` or `;` inside it splits nothing. The option parser (`_check_gh`) accepts a TITLE_WORD only as
 the value of `--title` or `-t` of `gh pr create`; anywhere else (another option, `gh pr view`, a
@@ -52,10 +52,11 @@ value and any other spelling is refused. `--body-file` (`-F`), `--template` (`-T
 are approved for a relative path with no `..` that resolves inside the payload's cwd (from every
 directory a `cd` may lead to) and that deny-secrets' `target_hit` would not block, so a PM cannot
 post a key file or `/etc/passwd` to a pull request. `--body-file` and `-F` alone are also approved
-for an absolute path with no `..` whose realpath is inside the temp dir (`tempfile.gettempdir()`,
-`/tmp` and `$TMPDIR` of the hook's environment, each after realpath; `/` and the home directory do
-not count) and that, when the hook decides, is a regular file and not a symlink, owned by the user
-running the hook, not writable by its group or others, and not blocked by `target_hit`.
+for an absolute path with no `..` whose realpath is inside the temp dir (`/tmp` and `$TMPDIR` of
+the hook's environment, each after realpath; a `$TMPDIR` that is relative, `/`, the home directory
+or above it is ignored; `tempfile` is not asked) and that, when the hook decides, is a regular file
+and not a symlink, with one hard link, owned by the user running the hook, not writable by its
+group or others, and not blocked by `target_hit`.
 
 The read-only commands are merge-base, merge-tree, diff, log, show, status, rev-parse, rev-list,
 ls-files, cat-file and branch (listing forms only). Each has an allow-list of options
@@ -115,7 +116,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,10 +162,12 @@ GH_HINT = (
     f"{PREFIX} {DENIED} Why: {{reason}}. gh pr create, gh pr view and gh pr checks are approved"
     " automatically when run on their own or after a cd, with no $, backtick or redirect (only"
     " 2>&1 and a final | tail or | head are accepted). A quote is approved only around the whole"
-    " value of --title (or -t) of gh pr create, with no $, backtick or backslash inside it: put"
-    " the body in a file and pass --body-file <path>, a relative path inside the worktree or an"
-    " absolute path to a file you own under the temp directory. --repo (or -R) is approved only"
-    " for the repository of this directory's origin remote."
+    " value of --title (or -t) of gh pr create, which must be a double- or single-quoted --title of"
+    " ASCII letters, digits, spaces and plain punctuation, with no `$`, backtick, backslash or the"
+    " quote it is wrapped in. Put the body in a file and pass --body-file <path>, a relative path"
+    " inside the worktree or an absolute path to a file you own (one link, not writable by others)"
+    " under /tmp or $TMPDIR. --repo (or -R) is approved only for the repository of this"
+    " directory's origin remote."
 )
 UNCHECKED = (
     f"{PREFIX} could not check this request ({{why}}); refused. Send the step to the GM as a"
@@ -279,9 +281,10 @@ TITLE_WORD = "\x02"
 TITLE_OPTION = re.compile(
     r"""(?<![^ \t])(--title=|--title[ \t]+|-t[ \t]+)(?:'([^']*)'|"([^"]*)")(?![^ \t])"""
 )
-# What a title may hold: ASCII letters and digits, a space, and plain punctuation. Never `$`, a
-# backtick, a backslash, a quote, a control character or any non-ASCII character.
-TITLE_CHARACTERS = re.compile(r"[A-Za-z0-9 _.,:;()/#?!*&|<>\[\]{}+=@%^~-]*")
+# What a title may hold: ASCII letters and digits, a space, and plain punctuation, and the quote it
+# is not wrapped in (TITLE_OPTION ends the value at its own quote, so that one cannot occur). Never
+# `$`, a backtick, a backslash, a control character or any non-ASCII character.
+TITLE_CHARACTERS = re.compile(r"""[A-Za-z0-9 _.,:;()/#?!*&|<>\[\]{}+=@%^~'"-]*""")
 TRIMMERS = frozenset({"tail", "head"})
 TRIM_OPTIONS = re.compile(r"(?:-n [0-9]+|-[0-9]+)?")
 SEPARATORS = frozenset({"&&", "||", ";", "|"})
@@ -634,23 +637,27 @@ def _check_trim(words: Sequence[str], follows_source: bool, is_last: bool) -> No
 
 
 def _temp_roots() -> list[str]:
-    """The folders a body file may sit in: the temp dir Python uses, `/tmp` and `$TMPDIR` of the
-    hook's environment, each after realpath. A relative `$TMPDIR` has no fixed meaning, and `/` or
-    the home directory would make a temp dir of everything, so none of those counts."""
-    try:
-        candidates = [tempfile.gettempdir(), STANDARD_TEMP, os.environ.get("TMPDIR", "")]
-    except OSError:
-        candidates = [STANDARD_TEMP, os.environ.get("TMPDIR", "")]
-    refused = {os.sep, os.path.realpath(Path.home())}
-    roots = (os.path.realpath(name) for name in candidates if name and os.path.isabs(name))
-    return list(dict.fromkeys(root for root in roots if root not in refused))
+    """The folders a body file may sit in: `/tmp` and `$TMPDIR` of the hook's environment, each
+    after realpath. `tempfile.gettempdir()` is not asked: it writes a probe file and also reads
+    TEMP and TMP. A `$TMPDIR` that is relative has no fixed meaning, and one that is `/`, the home
+    directory or any folder above it (after realpath) would make a temp dir of the home, so it is
+    ignored."""
+    home = os.path.realpath(Path.home())
+    roots = [os.path.realpath(STANDARD_TEMP)]
+    configured = os.environ.get("TMPDIR", "")
+    if configured and os.path.isabs(configured):
+        root = os.path.realpath(configured)
+        if os.path.commonpath([root, home]) != root:  # root is not home or one of its ancestors
+            roots.append(root)
+    return list(dict.fromkeys(roots))
 
 
 def _temp_file_problem(value: str, cwd: str) -> str | None:
     """Why the absolute path `value` may not be a body file, or None. No `..`; its realpath is
-    inside a temp dir; and now, at decision time, it is a regular file (not a symlink) owned by the
-    user running the hook that neither its group nor anyone else can write, and not one
-    deny-secrets (`target_hit`) would block."""
+    inside a temp dir; and now, at decision time, it is a regular file (a symlink is not one) with
+    one hard link (a link to a file elsewhere would not be this file's own), owned by the user
+    running the hook, that neither its group nor anyone else can write, and not one deny-secrets
+    (`target_hit`) would block."""
     if ".." in value.split("/"):
         return "has a .. segment"
     real = os.path.realpath(value)
@@ -660,10 +667,10 @@ def _temp_file_problem(value: str, cwd: str) -> str | None:
         info = os.lstat(value)
     except OSError:
         return "is not a file that exists"
-    if stat.S_ISLNK(info.st_mode):
-        return "is a symlink"
     if not stat.S_ISREG(info.st_mode):
         return "is not a regular file"
+    if info.st_nlink != 1:
+        return "has more than one hard link"
     if info.st_uid != os.getuid():
         return "is not owned by the user running the hook"
     if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -703,9 +710,9 @@ def _check_file_option(name: str, value: str, cwd: str, directories: Sequence[st
     if problem:
         raise Escalate(
             f"gh pr {name} {value!r} {problem}: write the file inside the worktree and pass its"
-            " relative path, or for --body-file write it under the temp directory and pass its"
-            " absolute path (a regular file you own that no one else can write); a body is"
-            " --body-file <path>"
+            " relative path, or for --body-file write it under /tmp or $TMPDIR and pass its"
+            " absolute path (a regular file with one link that you own and no one else can write);"
+            " a body is --body-file <path>"
         )
 
 

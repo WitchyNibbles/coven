@@ -166,8 +166,9 @@ It prints one command and starts nothing. Run exactly what it prints in your Bas
   with their result), `Answers given:` (each `<project>/<task>`: answer), `Open questions:` (sent,
   not yet answered) and `Approved steps:` (commands and result, whether a `DONE` reported them run).
 - A PM's permission prompts (a `git push`, `git merge` or `gh` call) are answered by coven's
-  `pm-permissions` hook: it approves a plain push of a feature branch and read-only git, and
-  refuses everything else with a message that sends the step to you; a refused step comes back from
+  `pm-permissions` hook: it approves a plain push of a feature branch, read-only git and the PM's
+  own `gh pr create`, `gh pr view` and `gh pr checks`, and refuses everything else with a message
+  that sends the step to you; a refused step comes back from
   the PM as a `QUESTION` or `PROD-STEP`. A safety-check prompt skips hooks, so `state: blocked`
   with nothing new in the log means the user must `claude attach <id>` and answer it.
 - `Workspace not trusted`: ask the user to run `claude` in `<repo>` once and accept the trust

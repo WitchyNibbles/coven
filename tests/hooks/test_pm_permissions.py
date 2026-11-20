@@ -1970,6 +1970,11 @@ TITLE_APPROVED = [
     "gh pr create --title '(fix) [core] {x}: a, b. c? d! e* f#1 @g %h ^i ~j +k =l' --fill",
     'gh pr create --title "~root and ~-" --fill',
     'gh pr create --title "-x" --fill',
+    'gh pr create --title "Don\'t break" --fill',
+    "gh pr create --title 'Say \"hi\"' --fill",
+    'gh pr create --title="Don\'t break" --fill',
+    "gh pr create -t \"it's a 'quoted' word\" --fill",
+    'cd {repo} && gh pr create --title "Don\'t | break" --fill 2>&1 | tail -n 5',
     'gh pr create --title "Add login" --fill 2>&1',
     'gh pr create --title "Add login" --fill 2>&1 | tail -n 5',
     'cd {repo} && gh pr create --base main --head feature --title "a | b" --body-file b.md',
@@ -2024,8 +2029,6 @@ TITLE_REFUSED = [
     'gh pr create --title "a b" --fill',
     'gh pr create --title "a b" --fill',
     'gh pr create --title "café" --fill',
-    'gh pr create --title "it\'s" --fill',
-    "gh pr create --title 'say \"hi\"' --fill",
     'gh pr create --title "" --fill',
     "gh pr create --title '' --fill",
     'gh pr create --title "a" b" --fill',
@@ -2144,18 +2147,26 @@ def test_what_a_pm_may_never_do_stays_refused_next_to_a_quoted_title(repo, comma
     assert_refused(command, repo)
 
 
+@pytest.mark.parametrize(
+    "command",
+    ['git log -- -t "x"', 'git diff -- --title "x"', 'git status -- -t "a b"'],
+)
+def test_a_quoted_title_after_a_git_double_dash_is_refused(repo, command):
+    # Words after `--` are paths to git, so no option check would see the swapped title.
+    assert "--title" in assert_refused(command, repo)
+
+
 # b) a --body-file under the temp dir ---------------------------------------------------------------
 
 
 @pytest.fixture
 def temp_dir(tmp_path, monkeypatch):
-    """A private temp dir for body files. The real /tmp and $TMPDIR are out of play: the hook reads
-    the temp dir at decision time, so patching `tempfile.tempdir` and the fixed fallback is enough."""
+    """A private temp dir for body files. The real /tmp is out of play: the hook reads `$TMPDIR` and
+    the fixed fallback at decision time, so setting one and moving the other is enough."""
     directory = tmp_path / "tmp"
     directory.mkdir(mode=0o700)
-    monkeypatch.setattr(tempfile, "tempdir", str(directory))
+    monkeypatch.setenv("TMPDIR", str(directory))
     monkeypatch.setattr(pm, "STANDARD_TEMP", str(tmp_path / "no-standard-temp"))
-    monkeypatch.delenv("TMPDIR", raising=False)
     return directory
 
 
@@ -2238,6 +2249,53 @@ def test_tmpdir_in_the_hook_environment_is_a_temp_dir_too(repo, temp_dir, tmp_pa
     assert_allowed(f"gh pr create --fill --body-file {body}", repo)
 
 
+def test_tempfile_is_never_asked_for_the_temp_dir(repo, temp_dir, monkeypatch):
+    # tempfile.gettempdir() writes a probe file and reads TEMP and TMP as well as TMPDIR.
+    def refuse():
+        raise AssertionError("tempfile.gettempdir was called")
+
+    monkeypatch.setattr(tempfile, "gettempdir", refuse)
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    assert_allowed(f"gh pr create --fill --body-file {body_file(temp_dir)}", repo)
+
+
+def test_temp_and_tmp_are_not_temp_dirs(repo, temp_dir, tmp_path, monkeypatch):
+    other = tmp_path / "from-temp"
+    other.mkdir(mode=0o700)
+    monkeypatch.setenv("TEMP", str(other))
+    monkeypatch.setenv("TMP", str(other))
+    assert_refused(f"gh pr create --fill --body-file {body_file(other)}", repo)
+
+
+def test_a_tmpdir_below_the_home_directory_is_a_temp_dir(repo, temp_dir, monkeypatch):
+    scratch = Path(os.environ["HOME"]) / "scratch"
+    scratch.mkdir(mode=0o700)
+    monkeypatch.setenv("TMPDIR", str(scratch))
+    assert_allowed(f"gh pr create --fill --body-file {body_file(scratch)}", repo)
+
+
+@pytest.mark.parametrize("level", ["home", "parent", "grandparent", "root"])
+def test_a_tmpdir_that_is_the_home_directory_or_above_it_is_ignored(
+    repo, temp_dir, tmp_path, monkeypatch, level
+):
+    home = Path(os.environ["HOME"])
+    above = {"home": home, "parent": home.parent, "grandparent": home.parent.parent}
+    monkeypatch.setenv("TMPDIR", str(above.get(level, Path("/"))))
+    inside_home = body_file(home)
+    beside_home = outside_file(tmp_path)
+    assert_refused(f"gh pr create --fill --body-file {inside_home}", repo)
+    assert_refused(f"gh pr create --fill --body-file {beside_home}", repo)
+
+
+def test_a_tmpdir_that_is_a_symlink_to_the_home_directory_is_ignored(
+    repo, temp_dir, tmp_path, monkeypatch
+):
+    link = tmp_path / "home-link"
+    link.symlink_to(os.environ["HOME"])
+    monkeypatch.setenv("TMPDIR", str(link))
+    assert_refused(f"gh pr create --fill --body-file {body_file(Path(os.environ['HOME']))}", repo)
+
+
 @pytest.mark.parametrize("value", ["", "/", "relative/dir"])
 def test_a_tmpdir_that_is_not_a_usable_temp_dir_is_ignored(
     repo, temp_dir, tmp_path, monkeypatch, value
@@ -2252,7 +2310,7 @@ def test_a_temp_dir_that_is_a_symlink_is_followed_once_for_the_root(
 ):
     link = tmp_path / "temp-link"
     link.symlink_to(temp_dir)
-    monkeypatch.setattr(tempfile, "tempdir", str(link))
+    monkeypatch.setenv("TMPDIR", str(link))
     body_file(temp_dir)
     assert_allowed(f"gh pr create --fill --body-file {link}/body.md", repo)
 
@@ -2295,6 +2353,27 @@ def test_a_symlink_in_the_temp_dir_is_refused_even_when_it_points_inside(repo, t
     (temp_dir / "link.md").symlink_to(target)
     assert_allowed(f"gh pr create --fill --body-file {target}", repo)
     assert_refused(f"gh pr create --fill --body-file {temp_dir}/link.md", repo)
+
+
+def test_a_hardlink_in_the_temp_dir_to_a_file_outside_it_is_refused(repo, temp_dir, tmp_path):
+    target = outside_file(tmp_path, "profile")
+    os.link(target, temp_dir / "hl.md")
+    assert os.stat(target).st_nlink == 2
+    message = assert_refused(f"gh pr create --fill --body-file {temp_dir}/hl.md", repo)
+    assert "hard link" in message
+
+
+def test_a_hardlink_to_a_file_in_the_home_directory_is_refused(repo, temp_dir):
+    home = Path(os.environ["HOME"])
+    secret = body_file(home, ".profile")
+    os.link(secret, temp_dir / "hl.md")
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}/hl.md", repo)
+
+
+def test_a_file_with_one_link_is_approved(repo, temp_dir):
+    body = body_file(temp_dir)
+    assert os.stat(body).st_nlink == 1
+    assert_allowed(f"gh pr create --fill --body-file {body}", repo)
 
 
 def test_a_symlink_to_a_ssh_key_is_refused(repo, temp_dir):
@@ -2591,21 +2670,39 @@ def test_the_gh_hint_says_what_is_approved_now(repo):
     message = assert_refused("gh pr create --fill --body 'x'", repo)
     assert "--title" in message
     assert "--body-file" in message
-    assert "temp" in message
+    assert "/tmp or $TMPDIR" in message
     assert "--repo" in message
 
 
 def test_a_refused_body_file_says_the_worktree_and_the_temp_dir_are_the_choices(repo):
     message = assert_refused("gh pr create --fill --body-file /etc/passwd", repo)
     assert "inside the worktree" in message
-    assert "temp" in message
+    assert "/tmp or $TMPDIR" in message
+
+
+TITLE_RULE = (
+    "a double- or single-quoted --title of ASCII letters, digits, spaces and plain punctuation,"
+    " with no `$`, backtick, backslash or the quote it is wrapped in"
+)
 
 
 def test_the_role_text_says_what_the_hook_approves():
     assert "`--title`" in ROLE_TEXT
-    assert "quoted" in ROLE_TEXT
     assert "`--body-file`" in ROLE_TEXT
-    assert "temp" in ROLE_TEXT
+    assert "`/tmp`" in ROLE_TEXT
+    assert "`$TMPDIR`" in ROLE_TEXT
+
+
+def test_the_role_text_and_the_gh_hint_state_the_title_rule_exactly():
+    assert TITLE_RULE in " ".join(ROLE_TEXT.replace("`--title`", "--title").split())
+    assert TITLE_RULE in pm.GH_HINT.replace("`--title`", "--title")
+
+
+def test_the_manager_skill_names_the_pr_commands_the_hook_approves():
+    skill = (SCRIPT.parents[1] / "skills" / "manager" / "SKILL.md").read_text()
+    text = " ".join(skill.split())
+    assert "`gh pr create`, `gh pr view` and `gh pr checks`" in text
+    assert "refuses everything else" in text
 
 
 def test_the_role_text_no_longer_sends_the_body_to_a_file_in_the_repo():

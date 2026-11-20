@@ -116,9 +116,11 @@ plain `git push` of a feature branch, read-only git (`log`, `diff`, `status`, `m
 alone or with `cd`, `2>&1` and a final `| tail -n N`, and `gh pr create`, `gh pr view` and
 `gh pr checks` (not `git fetch`). Open a pull request with the normal command,
 `gh pr create --base <branch> --head <branch> --title "<words>" --body-file <path>`: the one quote
-it approves is a quoted `--title` value (no `$`, backtick or backslash inside), and the body is
-`--body-file` with a relative path inside the worktree, or an absolute path to a file you own under
-the temp directory that no one else can write. `--repo` is approved only for this repo's `origin`.
+it approves is a double- or single-quoted `--title` of ASCII letters, digits, spaces and plain
+punctuation, with no `$`, backtick, backslash or the quote it is wrapped in, and the body is
+`--body-file` with a relative path inside the worktree, or an absolute path to a file you own (one
+link, not writable by others) under `/tmp` or `$TMPDIR`. `--repo` is approved only for this repo's
+`origin`.
 
 Never use `AskUserQuestion`: no one watches your session, so the question would sit unseen.
 Never poll, never wait in a loop, never message to report status. After a `QUESTION`, `PROD-STEP`
