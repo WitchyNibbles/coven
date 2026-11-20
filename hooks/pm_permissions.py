@@ -563,6 +563,26 @@ def _is_operator(token: str) -> bool:
     return bool(token) and all(char in OPERATOR_CHARS for char in token)
 
 
+def _drop_redirects(tokens: Iterable[str]) -> list[str]:
+    """The tokens without the redirects: each operator of REDIRECTS, the word it targets (none
+    when an operator, or the end, comes next) and the descriptor word directly before it."""
+    kept: list[str] = []
+    after_word = False  # whether the last token read is the last one kept, and a word
+    skip_target = False
+    for token in tokens:
+        if skip_target and not _is_operator(token):
+            skip_target = after_word = False
+        elif token in REDIRECTS:
+            if after_word and DESCRIPTOR.fullmatch(kept[-1]):
+                kept.pop()
+            skip_target, after_word = True, False
+        else:
+            skip_target = False
+            after_word = not _is_operator(token)
+            kept.append(token)
+    return kept
+
+
 def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
     """The non-empty command segments. Parentheses only split: whatever bash would run is one of
     the segments, and an unbalanced pair is a syntax error that runs nothing. Lenient (for the
@@ -571,32 +591,17 @@ def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
     `&`, `|&`) splits, and empty parts are fine."""
     parts: list[list[str]] = [[]]
     breaks: list[str] = []
-    after_word = False  # whether the previous token went into the current part as a word
-    skip_target = False
-    for token in tokens:
-        if skip_target:
-            skip_target = False
-            if not _is_operator(token):
-                after_word = False
-                continue
+    for token in _drop_redirects(tokens) if lenient else tokens:
         if token in SEPARATORS or token in PARENS:
             breaks.append(token)
             parts.append([])
-            after_word = False
-        elif token in REDIRECTS and lenient:
-            if after_word and DESCRIPTOR.fullmatch(parts[-1][-1]):
-                parts[-1].pop()
-            skip_target = True
-            after_word = False
         elif _is_operator(token) and lenient:
             breaks.append(token)
             parts.append([])
-            after_word = False
         elif _is_operator(token):
             raise Unsupported(f"the operator {token} is not approved automatically")
         else:
             parts[-1].append(token)
-            after_word = True
     for index, part in enumerate(parts):
         opens_after = index < len(breaks) and breaks[index] == "("
         closes_before = index > 0 and breaks[index - 1] == ")"
