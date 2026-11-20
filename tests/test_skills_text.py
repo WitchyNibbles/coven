@@ -557,3 +557,71 @@ def test_no_text_names_a_ticket_or_chat_tool_or_the_private_toolkit() -> None:
 def test_skills_describe_no_work_queue_feature() -> None:
     for path in skill_files():
         assert "queue" not in path.read_text(encoding="utf-8").lower(), path.relative_to(REPO)
+
+
+# --- how the GM reports: only what is new, never the same status twice -------------------------
+
+
+def manager_results() -> str:
+    """The manager's Results section with every run of whitespace as one space."""
+    return " ".join(section_of(body("manager"), "## Results", "## Overrides").split())
+
+
+def test_the_gm_reports_only_what_is_new_one_short_line_per_event() -> None:
+    assert (
+        "Every message to the user carries only what is new since your last message to the user, "
+        "one short line per event (a `DONE` keeps the parts listed above): a PM's question, a "
+        "production step, a `DONE`, a PM that stopped or failed, a slot that freed up, a launch. "
+        "Then comes the `Waiting on you` line."
+    ) in manager_results()
+
+
+def test_the_gm_never_relists_unchanged_pms_and_does_not_paste_pm_status() -> None:
+    results = manager_results()
+    assert (
+        "Never re-list every PM's status, and never repeat a PM or a line whose state has not "
+        "changed since your last message."
+    ) in results
+    assert "`coven pm status` output is for you to read, not to paste." in results
+
+
+def test_the_gm_gives_the_full_picture_only_when_asked() -> None:
+    results = manager_results()
+    assert (
+        'When the user asks for the full picture ("status?", "where are we?"), give it once, '
+        "compactly. Asking is the only time a full listing is right."
+    ) in results
+    assert (
+        "A live board, when the user has one, carries the full picture; without one, nothing "
+        "here changes."
+    ) in results
+
+
+def test_waiting_on_you_keeps_its_items_and_shrinks_the_unchanged_ones_to_handles() -> None:
+    results = manager_results()
+    assert (
+        "Every message that follows PM traffic ends with `Waiting on you: <N>` and its items "
+        "(questions, production steps, drafts), from the state records, or "
+        "`Waiting on you: nothing`."
+    ) in results
+    assert (
+        "A new or changed item gets one full line. An item unchanged since your last message "
+        "shrinks to its handle, the project/task plus a few words (`coven/12 PR to open`), and "
+        "is not restated."
+    ) in results
+    assert (
+        "When no item changed, the line is `Waiting on you: <N> (unchanged): <handle>; <handle>`."
+    ) in results
+
+
+def test_the_always_rule_agrees_with_results_on_status() -> None:
+    always = " ".join(body("manager").split("## Always")[1].split())
+    assert "No status the user did not ask for" in always
+    assert "only what is new (Results)" in always
+    assert "No status updates the user did not ask for" not in always
+
+
+def test_no_board_or_pane_is_named_in_the_manager_reporting_rule() -> None:
+    results = manager_results().lower()
+    for name in ("pane", "tmux", "statusline", "artifact"):
+        assert name not in results, name
