@@ -240,7 +240,7 @@ FILE_OPTIONS = frozenset({"--body-file", "--template", "--recover"})
 SHORT_FILE_OPTIONS = frozenset("FT")
 # Only a body may come from the temp dir (an absolute path); a template or a recovery file may not.
 TEMP_FILE_OPTIONS = frozenset({"--body-file", "-F"})
-# The conventional temp dir, kept besides tempfile's and $TMPDIR's (a hook may run with neither set).
+# The conventional temp dir, always a root besides $TMPDIR (a hook may run without it set).
 STANDARD_TEMP = os.path.join(os.sep, "tmp")
 # Long options of gh pr create, view and checks that take a value (besides the file options and
 # `--repo`, which are checked). A title option word right after one is that option's value, not a

@@ -119,7 +119,8 @@ alone or with `cd`, `2>&1` and a final `| tail -n N`, and `gh pr create`, `gh pr
 it approves is a double- or single-quoted `--title` of ASCII letters, digits, spaces and plain
 punctuation, with no `$`, backtick, backslash or the quote it is wrapped in, and the body is
 `--body-file` with a relative path inside the worktree, or an absolute path to a file you own (one
-link, not writable by others) under `/tmp` or `$TMPDIR`. `--repo` is approved only for this repo's
+link, not writable by others, not a symlink) under `/tmp`, or under `$TMPDIR` when it is absolute
+and not `/` or your home. `--repo` is approved only for this repo's
 `origin`.
 
 Never use `AskUserQuestion`: no one watches your session, so the question would sit unseen.
