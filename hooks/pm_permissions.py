@@ -29,17 +29,35 @@ is tokenised like a shell would, split on `&&`, `||`, `;`, `|` and parentheses, 
 must be `cd` with one directory, `gh pr create|view|checks ...` (options as below) or
 `git [-C dir] [--no-pager] <push|read-only command> ...`.
 
-Quotes are refused everywhere, in gh commands too: the tokenizer cannot tell a quoted word from an
+Quotes are refused everywhere but one place: the tokenizer cannot tell a quoted word from an
 injection, so `gh pr create --body "..."` is denied, and the message tells the PM to write the body
 to a file and pass `--body-file <path>` (words with no quote, `$` or other metacharacter are
-fine: `--title Add_login`, `--fill`).
+fine: `--title Add_login`, `--fill`). The one quoted thing approved is the whole value of the title
+option of `gh pr create` (`--title "..."`, `--title '...'`, `--title="..."`, `-t "..."`). Before
+anything else reads the text, each such value is checked (ASCII letters, digits, spaces and
+`-_.,:;()/#?!*&|<>[]{}+=@%^~` and the quote it is not wrapped in, so `"Don't"` and `'Say "hi"'`:
+no `$`, backtick, backslash, control character or non-ASCII character, and not empty) and swapped for the control character TITLE_WORD, which the
+original text may not hold. The quotes are then gone, the value is one word to the tokenizer, and a
+`|` or `;` inside it splits nothing. The option parser (`_check_gh`) accepts a TITLE_WORD only as
+the value of `--title` or `-t` of `gh pr create`; anywhere else (another option, `gh pr view`, a
+non-gh command, after `--`) it refuses the command.
 
-A `gh pr` command may not name another repository (`--repo`, `-R`) and may not open a browser or
-an editor (`--web`, `-w`, `--editor`, `-e`: they hang a background session; `gh pr checks --watch`
-is fine). `--body-file` (`-F`), `--template` (`-T`) and `--recover` are approved only for a
-relative path with no `..` that
-resolves inside the payload's cwd (from every directory a `cd` may lead to) and that
-deny-secrets' `target_hit` would not block, so a PM cannot post a key file or `/etc/passwd` to a pull request.
+A `gh pr` command may not open a browser or an editor (`--web`, `-w`, `--editor`, `-e`: they hang a
+background session; `gh pr checks --watch` is fine). It may name a repository (`--repo OWNER/NAME`,
+`-R OWNER/NAME`, `--repo=OWNER/NAME`) only when it is the one the `origin` remote of every
+directory it may run in names (case aside, read with git as a GitHub URL: `https://github.com/O/N`,
+the scp form (`<user>@github.com:O/N`, user `git` only) or the ssh form
+(`ssh://<user>@github.com/O/N`, user `git` only), with or without `.git`; the URL git uses after a
+rewrite must agree); a missing origin, another host, another repository, a `HOST/OWNER/NAME`
+value and any other spelling is refused. `--body-file` (`-F`), `--template` (`-T`) and `--recover`
+are approved for a relative path with no `..` that resolves inside the payload's cwd (from every
+directory a `cd` may lead to) and that deny-secrets' `target_hit` would not block, so a PM cannot
+post a key file or `/etc/passwd` to a pull request. `--body-file` and `-F` alone are also approved
+for an absolute path with no `..` whose realpath is inside the temp dir (`/tmp` and `$TMPDIR` of
+the hook's environment, each after realpath; a `$TMPDIR` that is relative, `/`, the home directory
+or above it is ignored; `tempfile` is not asked) and that, when the hook decides, is a regular file
+and not a symlink, with one hard link, owned by the user running the hook, not writable by its
+group or others, and not blocked by `target_hit`.
 
 The read-only commands are merge-base, merge-tree, diff, log, show, status, rev-parse, rev-list,
 ls-files, cat-file and branch (listing forms only). Each has an allow-list of options
@@ -96,6 +114,7 @@ import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
@@ -142,9 +161,14 @@ SPLIT = (
 )
 GH_HINT = (
     f"{PREFIX} {DENIED} Why: {{reason}}. gh pr create, gh pr view and gh pr checks are approved"
-    " automatically when run on their own, with no quotes, $ or redirects (only 2>&1 and a final"
-    " | tail or | head are accepted): write a pull request body to a file and pass"
-    " --body-file <path>."
+    " automatically when run on their own or after a cd, with no $, backtick or redirect (only"
+    " 2>&1 and a final | tail or | head are accepted). A quote is approved only around the whole"
+    " value of --title (or -t) of gh pr create, which must be a double- or single-quoted --title of"
+    " ASCII letters, digits, spaces and plain punctuation, with no `$`, backtick, backslash or the"
+    " quote it is wrapped in. Put the body in a file and pass --body-file <path>, a relative path"
+    " inside the worktree or an absolute path to a file you own (one link, not writable by others)"
+    " under /tmp or $TMPDIR. --repo (or -R) is approved only for the repository of this"
+    " directory's origin remote."
 )
 UNCHECKED = (
     f"{PREFIX} could not check this request ({{why}}); refused. Send the step to the GM as a"
@@ -203,6 +227,7 @@ QUOTE_CHARS = re.compile(r"['\"\\]")
 GH_PR_COMMANDS = frozenset({"create", "view", "checks"})
 PIPE_SOURCES = frozenset({"git", "gh"})
 REPO_REASON = "gh pr with --repo or -R would act on another repository"
+TITLE_REASON = "a quote is approved only around the whole value of --title (or -t) of gh pr create"
 INTERACTIVE_REASON = (
     "gh pr with --web, -w, --editor or -e opens a browser or an editor, which would hang a"
     " background session"
@@ -214,6 +239,29 @@ SHORT_VALUED = frozenset("aBbFHlmprTtiq")
 # names, and the short letters of --body-file and --template.
 FILE_OPTIONS = frozenset({"--body-file", "--template", "--recover"})
 SHORT_FILE_OPTIONS = frozenset("FT")
+# Only a body may come from the temp dir (an absolute path); a template or a recovery file may not.
+TEMP_FILE_OPTIONS = frozenset({"--body-file", "-F"})
+# The conventional temp dir, always a root besides $TMPDIR (a hook may run without it set).
+STANDARD_TEMP = os.path.join(os.sep, "tmp")
+# Long options of gh pr create, view and checks that take a value (besides the file options and
+# `--repo`, which are checked). A title option word right after one is that option's value, not a
+# title option.
+LONG_VALUED = frozenset(
+    {
+        "--assignee",
+        "--base",
+        "--body",
+        "--head",
+        "--label",
+        "--milestone",
+        "--project",
+        "--reviewer",
+        "--json",
+        "--jq",
+        "--interval",
+    }
+)
+TITLE_OPTIONS = frozenset({"--title", "-t"})
 # Besides the shell's own metacharacters: every control character but tab, DEL and the Unicode
 # spaces. shlex splits words on space, tab, CR and LF only, so these would be read as part of a
 # word by the hook and as something else by a shell or a tool.
@@ -226,6 +274,18 @@ FORBIDDEN = re.compile(
 # from here, and only ever as a whole word.
 MERGE_STDERR = re.compile(r"(?<![^ \t])2>&1(?![^ \t])")
 MERGED = "\x01"
+# The one quoted value an approved command may hold: the whole value of `--title`, `--title=` or
+# `-t` of gh pr create, in one pair of quotes, as a word of its own. It is swapped for TITLE_WORD
+# before the FORBIDDEN check and the split, so the hook never reads its text as shell. TITLE_WORD
+# is a control character, refused in the original text, so it can only come from that swap.
+TITLE_WORD = "\x02"
+TITLE_OPTION = re.compile(
+    r"""(?<![^ \t])(--title=|--title[ \t]+|-t[ \t]+)(?:'([^']*)'|"([^"]*)")(?![^ \t])"""
+)
+# What a title may hold: ASCII letters and digits, a space, and plain punctuation, and the quote it
+# is not wrapped in (TITLE_OPTION ends the value at its own quote, so that one cannot occur). Never
+# `$`, a backtick, a backslash, a control character or any non-ASCII character.
+TITLE_CHARACTERS = re.compile(r"""[A-Za-z0-9 _.,:;()/#?!*&|<>\[\]{}+=@%^~'"-]*""")
 TRIMMERS = frozenset({"tail", "head"})
 TRIM_OPTIONS = re.compile(r"(?:-n [0-9]+|-[0-9]+)?")
 SEPARATORS = frozenset({"&&", "||", ";", "|"})
@@ -233,6 +293,13 @@ PARENS = frozenset({"(", ")"})
 OPERATOR_CHARS = frozenset("();<>|&")
 
 REMOTE_NAME = re.compile(r"[A-Za-z0-9._-]+")
+# `--repo OWNER/NAME`, and the three forms of a GitHub remote URL a repository can be read from.
+REPO_VALUE = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+")
+GITHUB_REMOTE = re.compile(
+    r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)",
+    re.IGNORECASE,
+)
 HEADS = "refs/heads/"
 # A destination starting with one of these is matched by git against more than refs/heads.
 QUALIFIED_PREFIXES = ("refs/", "heads/", "tags/", "remotes/")
@@ -439,6 +506,24 @@ def _split(text: str) -> list[str]:
         raise Unsupported(f"the command does not parse ({exc})") from None
 
 
+def _hide_titles(command: str) -> str:
+    """The command with each quoted title value (see TITLE_OPTION) swapped for TITLE_WORD, once its
+    text is checked: Unsupported when it is empty or holds anything TITLE_CHARACTERS does not. Any
+    other quote is left for the FORBIDDEN check, and whether TITLE_WORD sits in a `gh pr create`
+    title option is checked where the words are parsed (`_check_gh`)."""
+
+    def hide(found: re.Match[str]) -> str:
+        text = found[2] if found[2] is not None else found[3]
+        if not text:
+            raise Unsupported("the --title text is empty")
+        odd = next((char for char in text if not TITLE_CHARACTERS.fullmatch(char)), None)
+        if odd is not None:
+            raise Unsupported(f"{odd!r} is not allowed in a --title text of an approved command")
+        return found[1] + TITLE_WORD
+
+    return TITLE_OPTION.sub(hide, command)
+
+
 def _tokens(command: str, lenient: bool = False) -> list[str]:
     """The words of a command. Strict (for approving): anything the hook cannot follow is
     Unsupported. Lenient (for the guard, which only looks for a push): quotes, `#` and the rest are
@@ -447,21 +532,31 @@ def _tokens(command: str, lenient: bool = False) -> list[str]:
         if DOLLAR_QUOTE.search(command):
             raise Unsupported("the command uses $'..' or $\"..\" quoting")
         return _split(command.replace("\\\n", "").replace("\n", " ; "))
-    if MERGED in command:
-        raise Unsupported(f"{MERGED!r} is not allowed in an automatically approved command")
-    text = MERGE_STDERR.sub(MERGED, command)
-    found = FORBIDDEN.search(text.replace(MERGED, " "))
+    for marker in (MERGED, TITLE_WORD):
+        if marker in command:
+            raise Unsupported(f"{marker!r} is not allowed in an automatically approved command")
+    text = MERGE_STDERR.sub(MERGED, _hide_titles(command))
+    found = FORBIDDEN.search(text.replace(MERGED, " ").replace(TITLE_WORD, " "))
     if found:
         raise Unsupported(f"{found[0]!r} is not allowed in an automatically approved command")
     words = _split(text)
     for word in words:
         if MERGED in word and word != MERGED:
             raise Unsupported("2>&1 is approved only as a word of its own")
+        if TITLE_WORD in word and word not in (TITLE_WORD, f"--title={TITLE_WORD}"):
+            raise Unsupported(TITLE_REASON)
         if "~" in word and not _is_home(word):
             raise Unsupported(
                 f"{word} would be expanded by the shell, which the hook cannot follow"
             )
     return words
+
+
+def _is_operator(token: str) -> bool:
+    """Whether the tokenizer meant `token` as a shell operator: a run of operator characters and
+    nothing else. The empty word (`''`) and a quoted word that only starts with one (`"(a b)"`)
+    are words."""
+    return bool(token) and all(char in OPERATOR_CHARS for char in token)
 
 
 def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
@@ -474,10 +569,10 @@ def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
         if token in SEPARATORS or token in PARENS:
             breaks.append(token)
             parts.append([])
-        elif token[0] in OPERATOR_CHARS and lenient:
+        elif _is_operator(token) and lenient:
             breaks.append(token)
             parts.append([])
-        elif token[0] in OPERATOR_CHARS:
+        elif _is_operator(token):
             raise Unsupported(f"the operator {token} is not approved automatically")
         else:
             parts[-1].append(token)
@@ -542,12 +637,61 @@ def _check_trim(words: Sequence[str], follows_source: bool, is_last: bool) -> No
         raise Unsupported(f"{words[0]} is approved only with no option, -n <N> or -<N>")
 
 
-def _body_file_problem(value: str, cwd: str, directories: Sequence[str]) -> str | None:
-    """Why `value` may not be read by a gh file option, or None. It must be a relative path with no
+def _temp_roots() -> list[str]:
+    """The folders a body file may sit in: `/tmp` and `$TMPDIR` of the hook's environment, each
+    after realpath. `tempfile.gettempdir()` is not asked: it writes a probe file and also reads
+    TEMP and TMP. A `$TMPDIR` that is relative has no fixed meaning, and one that is `/`, the home
+    directory or any folder above it (after realpath) would make a temp dir of the home, so it is
+    ignored."""
+    home = os.path.realpath(Path.home())
+    roots = [os.path.realpath(STANDARD_TEMP)]
+    configured = os.environ.get("TMPDIR", "")
+    if configured and os.path.isabs(configured):
+        root = os.path.realpath(configured)
+        if os.path.commonpath([root, home]) != root:  # root is not home or one of its ancestors
+            roots.append(root)
+    return list(dict.fromkeys(roots))
+
+
+def _temp_file_problem(value: str, cwd: str) -> str | None:
+    """Why the absolute path `value` may not be a body file, or None. No `..`; its realpath is
+    inside a temp dir; and now, at decision time, it is a regular file (a symlink is not one) with
+    one hard link (a link to a file elsewhere would not be this file's own), owned by the user
+    running the hook, that neither its group nor anyone else can write, and not one deny-secrets
+    (`target_hit`) would block."""
+    if ".." in value.split("/"):
+        return "has a .. segment"
+    real = os.path.realpath(value)
+    if not any(os.path.commonpath([root, real]) == root for root in _temp_roots()):
+        return "is not under the temp directory"
+    try:
+        info = os.lstat(value)
+    except OSError:
+        return "is not a file that exists"
+    if not stat.S_ISREG(info.st_mode):
+        return "is not a regular file"
+    if info.st_nlink != 1:
+        return "has more than one hard link"
+    if info.st_uid != os.getuid():
+        return "is not owned by the user running the hook"
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return "can be written by its group or by others"
+    if hook_support.sibling("deny_secrets").target_hit(value, cwd, Path.home()):
+        return "names a file that holds secrets"
+    return None
+
+
+def _body_file_problem(
+    value: str, cwd: str, directories: Sequence[str], temp_allowed: bool = False
+) -> str | None:
+    """Why `value` may not be read by a gh file option, or None. It is a relative path with no
     `..` that resolves inside `cwd` from every directory the command may run in, and that
-    deny-secrets (`target_hit`, the check it makes of a Write or Edit target) would not block."""
+    deny-secrets (`target_hit`, the check it makes of a Write or Edit target) would not block; or,
+    when `temp_allowed` (a body file), an absolute path that `_temp_file_problem` accepts."""
     if not value or value == "-":
         return "needs the path of a file (not stdin)"
+    if temp_allowed and value.startswith("/"):
+        return _temp_file_problem(value, cwd)
     if value.startswith(("/", "~")):
         return "is not a relative path"
     if ".." in value.split("/"):
@@ -563,35 +707,89 @@ def _body_file_problem(value: str, cwd: str, directories: Sequence[str]) -> str 
 
 
 def _check_file_option(name: str, value: str, cwd: str, directories: Sequence[str]) -> None:
-    problem = _body_file_problem(value, cwd, directories)
+    problem = _body_file_problem(value, cwd, directories, temp_allowed=name in TEMP_FILE_OPTIONS)
     if problem:
         raise Escalate(
             f"gh pr {name} {value!r} {problem}: write the file inside the worktree and pass its"
-            " relative path (for a body, --body-file <relative path>)"
+            " relative path, or for --body-file write it under /tmp or $TMPDIR and pass its"
+            " absolute path (a regular file with one link that you own and no one else can write);"
+            " a body is --body-file <path>"
         )
+
+
+def _github_slug(url: str) -> str | None:
+    """`owner/name` in lower case for a GitHub remote URL in one of the three forms
+    `https://github.com/O/N(.git)`, the scp form (`<user>@github.com:O/N(.git)`) and the ssh form
+    (`ssh://<user>@github.com/O/N(.git)`), where the user is `git` in both;
+    None for any other text (another host, credentials, a port, a trailing path, a local path)."""
+    found = GITHUB_REMOTE.fullmatch(url)
+    if not found:
+        return None
+    name = found[2].removesuffix(".git")
+    if not name.strip("."):
+        return None
+    return f"{found[1]}/{name}".casefold()
+
+
+def _origin_slug(directory: str) -> str | None:
+    """The GitHub repository the `origin` remote of `directory` names, or None when there is no
+    origin or it is not a plain GitHub URL. Both the configured URL and the one git uses (after a
+    URL rewrite, `insteadOf`) must name the same repository, and there must be one URL."""
+    configured = _git(directory, "config", "--get-all", "remote.origin.url")
+    if not configured or len(configured.splitlines()) != 1:
+        return None
+    in_use = _git(directory, "remote", "get-url", "origin")
+    slug = _github_slug(configured)
+    return slug if slug is not None and slug == _github_slug(in_use or "") else None
+
+
+def _check_repo(value: str, directories: Sequence[str]) -> None:
+    """`--repo`/`-R` is approved only as `OWNER/NAME` naming the origin remote of every directory
+    the command may run in (case aside); anything else acts on another repository."""
+    if not REPO_VALUE.fullmatch(value):
+        raise Escalate(REPO_REASON)
+    _refuse_git_environment()
+    named = value.casefold()
+    if any(_origin_slug(directory) != named for directory in directories):
+        raise Escalate(REPO_REASON)
 
 
 def _check_long_option(
     option: str, pending: list[str], cwd: str, directories: Sequence[str]
-) -> None:
+) -> int:
+    """One `--name[=value]` word, with its value taken from `pending` when it has none; 1 when it
+    is `--title` with a quoted value, else 0."""
     name, equals, value = option.partition("=")
-    if name == "--repo":
-        raise Escalate(REPO_REASON)
     if name in ("--web", "--editor"):
         raise Escalate(INTERACTIVE_REASON)
-    if name in FILE_OPTIONS:
+    if name == "--title":
+        quoted = value == TITLE_WORD if equals else bool(pending) and pending[0] == TITLE_WORD
+        if quoted and not equals:
+            pending.pop(0)
+        return int(quoted)
+    if name == "--repo" or name in FILE_OPTIONS:
         file = value if equals else (pending.pop(0) if pending else "")
-        _check_file_option(name, file, cwd, directories)
+        if name == "--repo":
+            _check_repo(file, directories)
+        else:
+            _check_file_option(name, file, cwd, directories)
+    elif name in LONG_VALUED and not equals and pending and pending[0] in TITLE_OPTIONS:
+        pending.pop(0)  # `--base --title`: gh reads `--title` as the base, so no title option here
+    return 0
 
 
 def _check_short_options(
     letters: str, pending: list[str], cwd: str, directories: Sequence[str]
-) -> None:
+) -> int:
     """The letters of one `-xyz` word, read the way gh's option parser does: a letter that takes a
-    value ends the word, and the value is its rest or the next word."""
+    value ends the word, and the value is its rest or the next word. 1 when it is `-t` with a
+    quoted title, else 0. `-R` is read only as a word of its own."""
     for position, letter in enumerate(letters):
         if letter == "R":
-            raise Escalate(REPO_REASON)
+            if letters != "R":
+                raise Escalate(REPO_REASON)
+            _check_repo(pending.pop(0) if pending else "", directories)
+            return 0
         if letter in "we":
             raise Escalate(INTERACTIVE_REASON)
         if letter in SHORT_VALUED:
@@ -600,26 +798,35 @@ def _check_short_options(
             value = rest.removeprefix("=") if rest else (pending.pop(0) if pending else "")
             if letter in SHORT_FILE_OPTIONS:
                 _check_file_option(f"-{letter}", value, cwd, directories)
-            return
+            return int(letter == "t" and not rest and value == TITLE_WORD)
+    return 0
 
 
 def _check_gh(arguments: Sequence[str], cwd: str, directories: Sequence[str]) -> None:
     """A `gh` segment (the words after `gh`): only `pr create`, `pr view` and `pr checks`. The
-    shell metacharacters were refused with the whole text. Options are free but for another
-    repository (`--repo`, `-R`), a browser or editor (`--web`, `--editor`), and the file options
-    (`--body-file`, `--template`, `--recover`, `-F`, `-T`), which read a file the PM can post."""
+    shell metacharacters were refused with the whole text, but for a quoted title, which arrives
+    here as TITLE_WORD: it must be the value of `--title` or `-t` of `pr create`, and nowhere
+    else. Options are free but for `--repo`/`-R` (only this directory's origin), a browser or
+    editor (`--web`, `--editor`), and the file options (`--body-file`, `--template`,
+    `--recover`, `-F`, `-T`), which read a file the PM can post."""
     if len(arguments) < 2 or arguments[0] != "pr" or arguments[1] not in GH_PR_COMMANDS:
         name = " ".join(["gh", *arguments[:2]])
         raise Escalate(f"{name} is not approved automatically")
+    quoted_titles = sum(word.count(TITLE_WORD) for word in arguments)
+    if quoted_titles and arguments[1] != "create":
+        raise Unsupported(TITLE_REASON)
     pending = list(arguments[2:])
+    consumed = 0
     while pending:
         option = pending.pop(0)
         if option == "--":
-            return
+            break
         if option.startswith("--"):
-            _check_long_option(option, pending, cwd, directories)
+            consumed += _check_long_option(option, pending, cwd, directories)
         elif option.startswith("-") and option != "-":
-            _check_short_options(option[1:], pending, cwd, directories)
+            consumed += _check_short_options(option[1:], pending, cwd, directories)
+    if consumed != quoted_titles:
+        raise Unsupported(TITLE_REASON)
 
 
 def _plan(command: str, cwd: str) -> list[GitStep]:
@@ -630,6 +837,8 @@ def _plan(command: str, cwd: str) -> list[GitStep]:
     segments = _segments(_tokens(command))
     for index, segment in enumerate(segments):
         words, _ = _without_merge(segment.words)
+        if words[0] != "gh" and any(TITLE_WORD in word for word in words):
+            raise Unsupported(TITLE_REASON)
         previous = segments[index - 1].words[0] if index else ""
         if words[0] in TRIMMERS and segment.piped:
             _check_trim(words, previous in PIPE_SOURCES, is_last=index == len(segments) - 1)

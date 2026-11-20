@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -1314,7 +1315,6 @@ def test_gh_pr_refuses_shell_metacharacters_and_chaining(repo, command):
     "command",
     [
         'gh pr create --title "Add login" --body "Adds the form"',
-        "gh pr create --title 'Add login' --fill",
         "gh pr create --fill --body 'x'",
     ],
 )
@@ -1832,3 +1832,899 @@ def test_the_guard_runs_as_a_script(repo):
     )
     assert (proc.returncode, proc.stdout) == (2, "")
     assert "force push" in proc.stderr
+
+
+# --- an empty word is a word, never an operator ---------------------------------------------------
+
+# Each pair is a command with empty quotes and the same command without them: the guard must give
+# the same answer for both (and not crash on the first).
+EMPTY_WORD_PAIRS = [
+    ("echo ''", "echo"),
+    ('echo ""', "echo"),
+    ("cat <<'EOF'\nfoo '' bar\nEOF", "cat <<'EOF'\nfoo bar\nEOF"),
+    ("echo $(printf '%s' '')", "echo $(printf '%s')"),
+    ("echo $(echo a | tr '\\n' '')", "echo $(echo a | tr '\\n')"),
+    ("echo $(echo a | tr '\\n' ' ')", "echo $(echo a | tr '\\n' ' ')"),
+    ("git push -f ''", "git push -f"),
+    ("echo '' && git push --force", "echo && git push --force"),
+    ("gh pr merge ''", "gh pr merge"),
+]
+
+
+def test_an_empty_git_subcommand_does_not_crash_the_guard(repo):
+    # `git '' push -f` is not the same command as `git push -f` (git rejects the empty name and
+    # pushes nothing), so only the absence of a crash is pinned.
+    assert isinstance(pm._is_guarded("git '' push -f"), bool)
+    assert "internal error" not in guard(request("git '' push -f", repo))[2]
+
+
+@pytest.mark.parametrize(("quoted", "bare"), EMPTY_WORD_PAIRS)
+def test_empty_quotes_do_not_change_whether_the_guard_looks_at_a_command(quoted, bare):
+    assert pm._is_guarded(quoted) == pm._is_guarded(bare)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo ''",
+        'echo ""',
+        "cat <<'EOF'\nfoo '' bar\nEOF",
+        "echo $(printf '%s' '')",
+        "echo $(echo a | tr '\\n' '')",
+        "echo $(echo a | tr '\\n' ' ')",
+    ],
+)
+def test_the_guard_says_nothing_about_a_harmless_command_with_empty_quotes(repo, command):
+    assert guard(request(command, repo)) == (0, "", "")
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git push -f ''", "echo '' && git push --force", "gh pr merge ''", 'bash -c ""; git push -f'],
+)
+def test_the_guard_still_denies_a_guarded_command_with_empty_quotes(repo, command):
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.startswith(PREFIX)
+    assert "internal error" not in err
+
+
+def test_the_permission_request_for_a_harmless_command_with_empty_quotes_is_still_denied(repo):
+    # The PermissionRequest hook approves only what it understands: quotes are refused, as before.
+    assert "not allowed" in denied("echo ''", repo)
+
+
+@pytest.mark.parametrize("lenient", [False, True])
+def test_an_empty_token_is_a_word_in_a_segment(lenient):
+    segments = pm._segments(["echo", "", "a"], lenient=lenient)
+    assert [segment.words for segment in segments] == [["echo", "", "a"]]
+
+
+@pytest.mark.parametrize("lenient", [False, True])
+def test_a_lone_empty_token_is_a_segment_of_its_own(lenient):
+    assert [segment.words for segment in pm._segments([""], lenient=lenient)] == [[""]]
+
+
+# A quoted word that merely starts with an operator character is a word, not an operator: the
+# guard used to drop it, so a wrapper's `-c` text was never looked at.
+@pytest.mark.parametrize(
+    "command",
+    [
+        'bash -c "(git push -f)"',
+        'bash -c ";git push --force"',
+        'sh -c "&& git push -f"',
+        'bash -c "|git push -f"',
+        "sh -c '>x git push -f'",
+        "eval '(git push -f)'",
+        "env sh -c '<x git push -f'",
+    ],
+)
+def test_the_guard_reads_a_wrapper_text_that_starts_with_an_operator_character(repo, command):
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.startswith(PREFIX)
+
+
+def test_a_real_operator_still_splits_in_the_lenient_reading():
+    tokens = pm._tokens("echo a && git push -f ; ls | tail", lenient=True)
+    segments = pm._segments(tokens, lenient=True)
+    assert [segment.words for segment in segments] == [
+        ["echo", "a"],
+        ["git", "push", "-f"],
+        ["ls"],
+        ["tail"],
+    ]
+
+
+# --- opening a pull request with the normal command -----------------------------------------------
+
+PUNCTUATION = "-_.,:;()/#?!*&|<>[]{}+=@%^~"
+
+
+def assert_allowed(command, repo):
+    assert verdict(fill(command, repo), repo) == {"behavior": "allow"}, command
+
+
+def assert_refused(command, repo):
+    message = denied(fill(command, repo), repo)
+    assert message.startswith(f"{PREFIX} {DENIED}"), command
+    return message
+
+
+# a) a quoted --title -----------------------------------------------------------------------------
+
+TITLE_APPROVED = [
+    'gh pr create --title "Add the login form" --body-file body.md',
+    "gh pr create --title 'Add the login form' --body-file body.md",
+    'gh pr create -t "Add the login form" --fill',
+    "gh pr create -t 'Add the login form' --fill",
+    'gh pr create --title="Add the login form" --fill',
+    "gh pr create --title='Add the login form' --fill",
+    'gh pr create --fill --title "Last option"',
+    'gh pr create --title "a" --title "b" --fill',
+    'gh pr create --title "a | b" --fill',
+    'gh pr create --title "x; rm -rf /" --fill',
+    'gh pr create --title "a && b || c" --fill',
+    'gh pr create --title "a > b < c >> d" --fill',
+    'gh pr create --title "(fix) [core] {x}: a, b. c? d! e* f#1 @g %h ^i ~j +k =l -m _n /o &p" --fill',
+    "gh pr create --title '(fix) [core] {x}: a, b. c? d! e* f#1 @g %h ^i ~j +k =l' --fill",
+    'gh pr create --title "~root and ~-" --fill',
+    'gh pr create --title "-x" --fill',
+    'gh pr create --title "Don\'t break" --fill',
+    "gh pr create --title 'Say \"hi\"' --fill",
+    'gh pr create --title="Don\'t break" --fill',
+    "gh pr create -t \"it's a 'quoted' word\" --fill",
+    'cd {repo} && gh pr create --title "Don\'t | break" --fill 2>&1 | tail -n 5',
+    'gh pr create --title "Add login" --fill 2>&1',
+    'gh pr create --title "Add login" --fill 2>&1 | tail -n 5',
+    'cd {repo} && gh pr create --base main --head feature --title "a | b" --body-file b.md',
+    'cd {repo} && gh pr create --title "a; b" --fill 2>&1 | tail -n 5',
+    'git push -u origin feature && gh pr create --title "Add login" --fill',
+]
+
+
+@pytest.mark.parametrize("command", TITLE_APPROVED)
+def test_a_quoted_title_of_gh_pr_create_is_approved(repo, command):
+    assert_allowed(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gh pr create --title "a | b; c && d" --fill',
+        "gh pr create --title='a > b' --fill",
+        "gh pr create -t 'x; rm -rf /' --fill",
+    ],
+)
+def test_the_hook_reads_a_quoted_title_as_one_word_with_no_operator(command):
+    words = pm._tokens(command)
+    assert any(pm.TITLE_WORD in word for word in words)
+    assert not any(pm._is_operator(word) for word in words)
+    assert [segment.words for segment in pm._segments(words)] == [words]
+
+
+def test_every_punctuation_mark_of_the_rule_is_accepted_alone_in_a_title(repo):
+    for mark in PUNCTUATION:
+        assert_allowed(f'gh pr create --title "a {mark} b" --fill', repo)
+        assert_allowed(f"gh pr create --title 'a {mark} b' --fill", repo)
+
+
+TITLE_REFUSED = [
+    'gh pr create --title "a $x" --fill',
+    'gh pr create --title "a ${x}" --fill',
+    'gh pr create --title "a $(id)" --fill',
+    'gh pr create --title "a `id`" --fill',
+    "gh pr create --title 'a $x' --fill",
+    "gh pr create --title 'a $(id)' --fill",
+    "gh pr create --title 'a `id`' --fill",
+    'gh pr create --title "a \\b" --fill',
+    "gh pr create --title 'a \\b' --fill",
+    'gh pr create --title "a\tb" --fill',
+    'gh pr create --title "a\nb" --fill',
+    'gh pr create --title "a\rb" --fill',
+    'gh pr create --title "a\x07b" --fill',
+    'gh pr create --title "a\x1bb" --fill',
+    'gh pr create --title "a\x7fb" --fill',
+    'gh pr create --title "a\x00b" --fill',
+    'gh pr create --title "a b" --fill',
+    'gh pr create --title "a b" --fill',
+    'gh pr create --title "café" --fill',
+    'gh pr create --title "" --fill',
+    "gh pr create --title '' --fill",
+    'gh pr create --title "a" b" --fill',
+    'gh pr create --title "a"b --fill',
+    'gh pr create --title "a""b" --fill',
+    'gh pr create --title "a" "b" --fill',
+    "gh pr create --title \"a\" 'b' --fill",
+    'gh pr create --title x"a b" --fill',
+    'gh pr create --title "a --fill',
+    'gh pr create --title "a b"; gh pr merge 12',
+    'gh pr create --title "a" ; echo "b"',
+    'gh pr create --title "a b" | sh',
+    'gh pr create --title "a b" > out',
+    'gh pr create --title "a\x02b" --fill',
+    "gh pr create --title a\x02 --fill",
+    'gh pr create --title "a" --fill\x02',
+    "echo \"gh pr create --title 'x'\"",
+]
+
+
+@pytest.mark.parametrize("command", TITLE_REFUSED)
+def test_a_title_that_breaks_the_rule_is_refused(repo, command):
+    assert_refused(command, repo)
+
+
+# Quotes anywhere but around the whole value of the title option of gh pr create stay refused.
+QUOTES_ELSEWHERE = [
+    'gh pr create --body "x" --fill',
+    "gh pr create --body 'x' --fill",
+    'gh pr create -b "x" --fill',
+    'gh pr create --body="x" --fill',
+    'gh pr create --title "ok" --body "x"',
+    'gh pr create --base "main" --fill',
+    'gh pr create --head "feature" --fill',
+    'gh pr create --label "bug" --fill',
+    'gh pr create --assignee "me" --fill',
+    'gh pr create --body-file "b.md"',
+    'gh pr create --template "t.md"',
+    'gh pr create --repo "Owner/Name" --fill',
+    'gh pr create -R "Owner/Name" --fill',
+    'gh pr create --fill "x"',
+    'gh pr create -dt "x"',
+    'gh pr create -t"x"',
+    'gh pr create -t="x"',
+    'gh pr create --titles "x"',
+    'gh pr create --title-x "x"',
+    'gh pr create --title -- "x"',
+    'gh pr create --title "x" --head "feature"',
+    'gh pr create --body-file --title "x"',
+    'gh pr create -b -t "x"',
+    'gh pr create -F -t "x"',
+    'gh pr create --base --title "x"',
+    'gh pr create -- --title "x"',
+    'gh pr view 12 --title "x"',
+    'gh pr view -t "x"',
+    'gh pr checks 12 --title "x"',
+    'gh pr merge 12 --title "x"',
+    'gh pr edit 12 --title "x"',
+    'gh issue create --title "x"',
+    'git log --title "x"',
+    'git log --grep "x"',
+    'git push origin feature --title "x"',
+    'git push -t "x"',
+    'git status --title "x"',
+    'echo --title "x"',
+    'cd --title "x"',
+    'tail --title "x"',
+    'gh pr create --fill | tail -n "5"',
+    'cd "{repo}" && gh pr create --fill',
+]
+
+
+@pytest.mark.parametrize("command", QUOTES_ELSEWHERE)
+def test_a_quote_anywhere_but_around_a_title_is_still_refused(repo, command):
+    assert_refused(command, repo)
+
+
+def test_a_quoted_body_is_sent_to_a_body_file_and_a_quoted_title_is_explained(repo):
+    message = assert_refused('gh pr create --title "ok" --body "x"', repo)
+    assert "--body-file" in message
+    assert "--title" in message
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gh pr merge 12 --subject "x"',
+        "gh pr merge 12",
+        "gh pr merge --auto --squash 12",
+        'gh pr comment 12 --body "x"',
+        "gh pr close 12",
+        "gh pr ready 12",
+        "gh issue list",
+        "gh api repos/Owner/Name/pulls",
+        'gh pr create --title "x" --web',
+        'gh pr create --title "x" -w',
+        'gh pr create --title "x" --editor',
+        'gh pr create --title "x" -e',
+        'gh pr create --title "x" --fill --web',
+        "gh pr create --fill --web",
+        "gh pr create --title $(id)",
+        "gh pr create --title `id`",
+        "gh pr create --title $TITLE",
+        'gh pr create --title "$(id)" --fill',
+        'gh pr create --title "`id`" --fill',
+        "git push --force origin feature",
+        "git push -f origin feature",
+        "git push origin +feature",
+        "git push --force-with-lease origin feature",
+        'git push -f && gh pr create --title "x" --fill',
+        'gh pr create --title "x" --fill && git push --force',
+        "git push origin main",
+    ],
+)
+def test_what_a_pm_may_never_do_stays_refused_next_to_a_quoted_title(repo, command):
+    assert_refused(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ['git log -- -t "x"', 'git diff -- --title "x"', 'git status -- -t "a b"'],
+)
+def test_a_quoted_title_after_a_git_double_dash_is_refused(repo, command):
+    # Words after `--` are paths to git, so no option check would see the swapped title.
+    assert "--title" in assert_refused(command, repo)
+
+
+# b) a --body-file under the temp dir ---------------------------------------------------------------
+
+
+@pytest.fixture
+def temp_dir(tmp_path, monkeypatch):
+    """A private temp dir for body files. The real /tmp is out of play: the hook reads `$TMPDIR` and
+    the fixed fallback at decision time, so setting one and moving the other is enough."""
+    directory = tmp_path / "tmp"
+    directory.mkdir(mode=0o700)
+    monkeypatch.setenv("TMPDIR", str(directory))
+    monkeypatch.setattr(pm, "STANDARD_TEMP", str(tmp_path / "no-standard-temp"))
+    return directory
+
+
+def body_file(directory, name="body.md", mode=0o600):
+    path = directory / name
+    path.write_text("body\n")
+    path.chmod(mode)
+    return path
+
+
+def outside_file(tmp_path, name="body.md", mode=0o600):
+    directory = tmp_path / "outside"
+    directory.mkdir(exist_ok=True)
+    return body_file(directory, name, mode)
+
+
+BODY_SPELLINGS = [
+    "--body-file {body}",
+    "--body-file={body}",
+    "-F {body}",
+    "-F={body}",
+    "-F{body}",
+    "-dF {body}",
+]
+
+
+@pytest.mark.parametrize("spelling", BODY_SPELLINGS)
+def test_a_body_file_under_the_temp_dir_is_approved_in_every_spelling(repo, temp_dir, spelling):
+    body = body_file(temp_dir)
+    assert_allowed("gh pr create --fill " + spelling.replace("{body}", str(body)), repo)
+
+
+def test_the_normal_pr_command_with_a_body_file_in_the_temp_dir_is_approved(repo, temp_dir):
+    body = body_file(temp_dir)
+    command = (
+        'gh pr create --base main --head feature --title "Add the login form" --body-file '
+        + str(body)
+    )
+    assert_allowed(command, repo)
+    assert_allowed("cd {repo} && " + command, repo)
+    assert_allowed("cd {repo} && " + command + " 2>&1", repo)
+    assert_allowed("cd {repo} && " + command + " 2>&1 | tail -n 5", repo)
+    assert_allowed(command + " | tail -n 5", repo)
+
+
+def test_a_body_file_in_the_worktree_is_still_approved_with_a_title(repo):
+    assert_allowed('gh pr create --title "Add the login form" --body-file docs/body.md', repo)
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o400, 0o640, 0o644, 0o700])
+def test_a_body_file_nobody_else_can_write_is_approved(repo, temp_dir, mode):
+    body = body_file(temp_dir, mode=mode)
+    assert_allowed(f"gh pr create --fill --body-file {body}", repo)
+
+
+@pytest.mark.parametrize("mode", [0o660, 0o620, 0o666, 0o602, 0o662, 0o777])
+def test_a_body_file_that_the_group_or_the_world_can_write_is_refused(repo, temp_dir, mode):
+    body = body_file(temp_dir, mode=mode)
+    assert "inside the worktree" in assert_refused(f"gh pr create --fill --body-file {body}", repo)
+
+
+def test_a_body_file_outside_the_temp_dir_is_refused(repo, temp_dir, tmp_path):
+    body = outside_file(tmp_path)
+    assert "inside the worktree" in assert_refused(f"gh pr create --fill --body-file {body}", repo)
+
+
+def test_the_fixed_tmp_fallback_is_a_temp_dir_too(repo, temp_dir, tmp_path, monkeypatch):
+    fixed = tmp_path / "fixed"
+    fixed.mkdir(mode=0o700)
+    monkeypatch.setattr(pm, "STANDARD_TEMP", str(fixed))
+    assert_allowed(f"gh pr create --fill --body-file {body_file(fixed)}", repo)
+
+
+def test_tmpdir_in_the_hook_environment_is_a_temp_dir_too(repo, temp_dir, tmp_path, monkeypatch):
+    other = tmp_path / "other-temp"
+    other.mkdir(mode=0o700)
+    body = body_file(other)
+    assert_refused(f"gh pr create --fill --body-file {body}", repo)
+    monkeypatch.setenv("TMPDIR", str(other))
+    assert_allowed(f"gh pr create --fill --body-file {body}", repo)
+
+
+def test_tempfile_is_never_asked_for_the_temp_dir(repo, temp_dir, monkeypatch):
+    # tempfile.gettempdir() writes a probe file and reads TEMP and TMP as well as TMPDIR.
+    def refuse():
+        raise AssertionError("tempfile.gettempdir was called")
+
+    monkeypatch.setattr(tempfile, "gettempdir", refuse)
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    assert_allowed(f"gh pr create --fill --body-file {body_file(temp_dir)}", repo)
+
+
+def test_temp_and_tmp_are_not_temp_dirs(repo, temp_dir, tmp_path, monkeypatch):
+    other = tmp_path / "from-temp"
+    other.mkdir(mode=0o700)
+    monkeypatch.setenv("TEMP", str(other))
+    monkeypatch.setenv("TMP", str(other))
+    assert_refused(f"gh pr create --fill --body-file {body_file(other)}", repo)
+
+
+def test_a_tmpdir_below_the_home_directory_is_a_temp_dir(repo, temp_dir, monkeypatch):
+    scratch = Path(os.environ["HOME"]) / "scratch"
+    scratch.mkdir(mode=0o700)
+    monkeypatch.setenv("TMPDIR", str(scratch))
+    assert_allowed(f"gh pr create --fill --body-file {body_file(scratch)}", repo)
+
+
+@pytest.mark.parametrize("level", ["home", "parent", "grandparent", "root"])
+def test_a_tmpdir_that_is_the_home_directory_or_above_it_is_ignored(
+    repo, temp_dir, tmp_path, monkeypatch, level
+):
+    home = Path(os.environ["HOME"])
+    above = {"home": home, "parent": home.parent, "grandparent": home.parent.parent}
+    monkeypatch.setenv("TMPDIR", str(above.get(level, Path("/"))))
+    inside_home = body_file(home)
+    beside_home = outside_file(tmp_path)
+    assert_refused(f"gh pr create --fill --body-file {inside_home}", repo)
+    assert_refused(f"gh pr create --fill --body-file {beside_home}", repo)
+
+
+def test_a_tmpdir_that_is_a_symlink_to_the_home_directory_is_ignored(
+    repo, temp_dir, tmp_path, monkeypatch
+):
+    link = tmp_path / "home-link"
+    link.symlink_to(os.environ["HOME"])
+    monkeypatch.setenv("TMPDIR", str(link))
+    assert_refused(f"gh pr create --fill --body-file {body_file(Path(os.environ['HOME']))}", repo)
+
+
+@pytest.mark.parametrize("value", ["", "/", "relative/dir"])
+def test_a_tmpdir_that_is_not_a_usable_temp_dir_is_ignored(
+    repo, temp_dir, tmp_path, monkeypatch, value
+):
+    monkeypatch.setenv("TMPDIR", value)
+    body = outside_file(tmp_path)
+    assert_refused(f"gh pr create --fill --body-file {body}", repo)
+
+
+def test_a_temp_dir_that_is_a_symlink_is_followed_once_for_the_root(
+    repo, temp_dir, tmp_path, monkeypatch
+):
+    link = tmp_path / "temp-link"
+    link.symlink_to(temp_dir)
+    monkeypatch.setenv("TMPDIR", str(link))
+    body_file(temp_dir)
+    assert_allowed(f"gh pr create --fill --body-file {link}/body.md", repo)
+
+
+def test_the_temp_dir_itself_is_not_a_body_file(repo, temp_dir):
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}", repo)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "{temp}/missing.md",
+        "{temp}/",
+        "{temp}/subdir",
+        "{temp}/fifo",
+        "{temp}/..",
+        "{temp}/../outside/body.md",
+        "{temp}/sub/../body.md",
+        "{temp}/./../outside/body.md",
+        "/tmp/../etc/passwd",
+        "/etc/passwd",
+        "/tmp/../../etc/passwd",
+        "~/body.md",
+    ],
+)
+def test_a_body_path_that_is_not_a_plain_file_in_the_temp_dir_is_refused(
+    repo, temp_dir, tmp_path, path
+):
+    body_file(temp_dir)
+    (temp_dir / "subdir").mkdir()
+    (temp_dir / "sub").mkdir()
+    os.mkfifo(temp_dir / "fifo")
+    outside_file(tmp_path)
+    command = "gh pr create --fill --body-file " + path.replace("{temp}", str(temp_dir))
+    assert "inside the worktree" in assert_refused(command, repo)
+
+
+def test_a_symlink_in_the_temp_dir_is_refused_even_when_it_points_inside(repo, temp_dir):
+    target = body_file(temp_dir, "real.md")
+    (temp_dir / "link.md").symlink_to(target)
+    assert_allowed(f"gh pr create --fill --body-file {target}", repo)
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}/link.md", repo)
+
+
+def test_a_hardlink_in_the_temp_dir_to_a_file_outside_it_is_refused(repo, temp_dir, tmp_path):
+    target = outside_file(tmp_path, "profile")
+    os.link(target, temp_dir / "hl.md")
+    assert os.stat(target).st_nlink == 2
+    message = assert_refused(f"gh pr create --fill --body-file {temp_dir}/hl.md", repo)
+    assert "hard link" in message
+
+
+def test_a_hardlink_to_a_file_in_the_home_directory_is_refused(repo, temp_dir):
+    home = Path(os.environ["HOME"])
+    secret = body_file(home, ".profile")
+    os.link(secret, temp_dir / "hl.md")
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}/hl.md", repo)
+
+
+def test_a_file_with_one_link_is_approved(repo, temp_dir):
+    body = body_file(temp_dir)
+    assert os.stat(body).st_nlink == 1
+    assert_allowed(f"gh pr create --fill --body-file {body}", repo)
+
+
+def test_a_symlink_to_a_ssh_key_is_refused(repo, temp_dir):
+    ssh = Path(os.environ["HOME"]) / ".ssh"
+    ssh.mkdir(parents=True)
+    key = ssh / "id_rsa"
+    key.write_text("secret\n")
+    key.chmod(0o600)
+    (temp_dir / "innocent.md").symlink_to(key)
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}/innocent.md", repo)
+    assert_refused(f"gh pr create --fill --body-file {key}", repo)
+    assert_refused("gh pr create --fill --body-file ~/.ssh/id_rsa", repo)
+
+
+def test_a_symlink_to_a_file_outside_the_temp_dir_is_refused(repo, temp_dir, tmp_path):
+    target = outside_file(tmp_path)
+    (temp_dir / "link.md").symlink_to(target)
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}/link.md", repo)
+
+
+def test_a_file_reached_through_a_symlinked_folder_that_leaves_the_temp_dir_is_refused(
+    repo, temp_dir, tmp_path
+):
+    outside_file(tmp_path)
+    (temp_dir / "folder").symlink_to(tmp_path / "outside")
+    assert_refused(f"gh pr create --fill --body-file {temp_dir}/folder/body.md", repo)
+
+
+def test_a_body_file_that_another_user_owns_is_refused(repo, temp_dir, monkeypatch):
+    body = body_file(temp_dir)
+    assert_allowed(f"gh pr create --fill --body-file {body}", repo)
+    other_user = os.getuid() + 1
+    monkeypatch.setattr(pm.os, "getuid", lambda: other_user)
+    assert_refused(f"gh pr create --fill --body-file {body}", repo)
+
+
+@pytest.mark.parametrize("name", [".env", ".env.local", ".ssh/id_rsa"])
+def test_a_body_file_that_deny_secrets_would_block_is_refused_in_the_temp_dir(repo, temp_dir, name):
+    (temp_dir / name).parent.mkdir(exist_ok=True)
+    body = body_file(temp_dir, name)
+    assert_refused(f"gh pr create --fill --body-file {body}", repo)
+
+
+@pytest.mark.parametrize("option", ["--template", "-T", "--recover", "--template=", "--recover="])
+def test_template_and_recover_still_take_relative_paths_only(repo, temp_dir, option):
+    body = body_file(temp_dir)
+    separator = "" if option.endswith("=") else " "
+    assert "inside the worktree" in assert_refused(
+        f"gh pr create --fill {option}{separator}{body}", repo
+    )
+
+
+@pytest.mark.parametrize(
+    "command", ["gh pr view 12 --body-file {body}", "gh pr checks 12 -F {body}"]
+)
+def test_a_temp_body_file_is_checked_on_every_gh_pr_command_the_same_way(repo, temp_dir, command):
+    body = body_file(temp_dir, mode=0o666)
+    assert_refused(command.replace("{body}", str(body)), repo)
+
+
+def test_a_missing_body_file_name_is_still_refused(repo, temp_dir):
+    for command in (
+        "gh pr create --fill --body-file",
+        "gh pr create --fill -F",
+        "gh pr create --fill --body-file -",
+    ):
+        assert_refused(command, repo)
+
+
+# c) --repo / -R ---------------------------------------------------------------------------------
+
+
+# The privacy scan reads a user, an at sign and a dotted host as an email address; these are git
+# remote URLs, not addresses, so they are joined from parts.
+def scp_url(user: str, host: str, path: str) -> str:
+    return f"{user}@{host}:{path}"
+
+
+# Same reason as scp_url: a git remote URL, not an email address.
+def ssh_url(user: str, host: str, path: str) -> str:
+    return f"ssh://{user}@{host}{path}"
+
+
+# Same reason as scp_url: a git remote URL with a login in it, not an email address.
+def https_login_url(login: str, host: str, path: str) -> str:
+    return f"https://{login}@{host}{path}"
+
+
+def set_origin(repo, url):
+    git(repo, "remote", "set-url", "origin", url)
+
+
+@pytest.mark.parametrize(
+    ("url", "slug"),
+    [
+        ("https://github.com/Owner/Name.git", "owner/name"),
+        ("https://github.com/Owner/Name", "owner/name"),
+        (scp_url("git", "github.com", "Owner/Name.git"), "owner/name"),
+        (scp_url("git", "github.com", "Owner/Name"), "owner/name"),
+        (ssh_url("git", "github.com", "/Owner/Name.git"), "owner/name"),
+        (ssh_url("git", "github.com", "/Owner/Name"), "owner/name"),
+        ("https://GitHub.com/OWNER/name.git", "owner/name"),
+        ("https://github.com/o-w_n/a.b-c_d.git", None),
+        ("https://github.com/o-w/a.b-c_d.git", "o-w/a.b-c_d"),
+        ("https://github.com/Owner/Name.git.git", "owner/name.git"),
+        ("https://github.com/Owner/.git", None),
+        ("https://github.com/Owner/..", None),
+        ("https://github.com/Owner/Name/", None),
+        ("https://github.com/Owner/Name/extra", None),
+        ("https://github.com/Owner", None),
+        ("https://github.com//Name", None),
+        (https_login_url("user:token", "github.com", "/Owner/Name.git"), None),
+        ("https://github.com:443/Owner/Name.git", None),
+        ("http://github.com/Owner/Name.git", None),
+        ("git://github.com/Owner/Name.git", None),
+        (scp_url("git", "github.com", "Owner/Name/extra"), None),
+        (scp_url("git", "github.com", "/Owner/Name"), None),
+        (scp_url("other", "github.com", "Owner/Name"), None),
+        (ssh_url("git", "github.com:22", "/Owner/Name.git"), None),
+        (ssh_url("other", "github.com", "/Owner/Name.git"), None),
+        ("https://gitlab.com/Owner/Name.git", None),
+        ("https://github.com.evil.example/Owner/Name.git", None),
+        ("https://evil.example/github.com/Owner/Name.git", None),
+        ("https://github.example.com/Owner/Name.git", None),
+        (scp_url("git", "github.com.evil.test", "Owner/Name.git"), None),
+        (scp_url("git", "gitlab.test", "Owner/Name.git"), None),
+        ("/home/user/origin.git", None),
+        ("file:///home/user/Owner/Name.git", None),
+        ("", None),
+        ("Owner/Name", None),
+        ("github.com/Owner/Name", None),
+        ("https://github.com/Owner/Na me", None),
+        ("https://github.com/Owner/Name\\n", None),
+    ],
+)
+def test_the_github_forms_of_a_remote_are_parsed_and_nothing_else(url, slug):
+    assert pm._github_slug(url) == slug
+
+
+ORIGINS = [
+    "https://github.com/Owner/Name.git",
+    "https://github.com/Owner/Name",
+    scp_url("git", "github.com", "Owner/Name.git"),
+    scp_url("git", "github.com", "Owner/Name"),
+    ssh_url("git", "github.com", "/Owner/Name.git"),
+    ssh_url("git", "github.com", "/Owner/Name"),
+    "https://github.com/owner/NAME.git",
+]
+REPO_OPTIONS = [
+    "--repo Owner/Name",
+    "-R Owner/Name",
+    "--repo=Owner/Name",
+    "--repo owner/name",
+    "-R OWNER/NAME",
+]
+
+
+@pytest.mark.parametrize("origin", ORIGINS)
+@pytest.mark.parametrize("option", REPO_OPTIONS)
+def test_repo_naming_the_origin_is_approved(repo, origin, option):
+    set_origin(repo, origin)
+    assert_allowed(f"gh pr create --fill {option}", repo)
+
+
+@pytest.mark.parametrize("sub", ["create --fill", "view 12", "checks 12 --watch"])
+def test_repo_naming_the_origin_is_approved_for_create_view_and_checks(repo, sub):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    assert_allowed(f"gh pr {sub} --repo Owner/Name", repo)
+
+
+def test_the_normal_pr_command_with_repo_and_title_and_temp_body_is_approved(repo, temp_dir):
+    set_origin(repo, scp_url("git", "github.com", "Owner/Name.git"))
+    body = body_file(temp_dir)
+    command = (
+        "gh pr create --repo Owner/Name --base main --head feature "
+        f'--title "Add the login form" --body-file {body}'
+    )
+    assert_allowed("cd {repo} && " + command + " 2>&1 | tail -n 5", repo)
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--repo Other/Name",
+        "--repo Owner/Other",
+        "-R Other/Name",
+        "--repo=Owner/Other",
+        "--repo OwnerName",
+        "--repo Owner/Name/x",
+        "--repo Owner/Name.git",
+        "--repo github.com/Owner/Name",
+        "--repo https://github.com/Owner/Name",
+        f"--repo {scp_url('git', 'github.com', 'Owner/Name')}",
+        "--repo example.com/Owner/Name",
+        "--repo ~/Name",
+        "--repo=",
+        "--repo",
+        "-R",
+        "-ROwner/Name",
+        "-R=Owner/Name",
+        "-dR Owner/Name",
+        "-dROwner/Name",
+        "--repo -x/y",
+    ],
+)
+def test_repo_that_is_not_exactly_the_origin_is_refused(repo, option):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    assert "another repository" in assert_refused(f"gh pr create --fill {option}", repo)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://gitlab.com/Owner/Name.git",
+        "https://github.com.evil.example/Owner/Name.git",
+        "https://github.example.com/Owner/Name.git",
+        scp_url("git", "gitlab.test", "Owner/Name.git"),
+        https_login_url("user:token", "github.com", "/Owner/Name.git"),
+        "https://github.com/Owner/Name/",
+        "https://github.com/Other/Name.git",
+        "/home/user/Owner/Name.git",
+    ],
+)
+def test_repo_is_refused_when_the_origin_is_not_a_github_remote_of_that_repo(repo, origin):
+    set_origin(repo, origin)
+    assert "another repository" in assert_refused("gh pr create --fill --repo Owner/Name", repo)
+
+
+def test_repo_is_refused_when_there_is_no_origin(repo):
+    git(repo, "remote", "remove", "origin")
+    assert "another repository" in assert_refused("gh pr create --fill --repo Owner/Name", repo)
+
+
+def test_repo_is_refused_when_origin_is_rewritten_to_another_repository(repo):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    git(repo, "config", "url.https://github.com/Other/.insteadOf", "https://github.com/Owner/")
+    assert "another repository" in assert_refused("gh pr create --fill --repo Owner/Name", repo)
+    assert "another repository" in assert_refused("gh pr create --fill --repo Other/Name", repo)
+
+
+def test_repo_is_refused_in_a_directory_that_is_not_a_repository(repo, tmp_path):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert_refused(f"cd {plain} && gh pr create --fill --repo Owner/Name", repo)
+    assert_refused("gh pr create --fill --repo Owner/Name", plain)
+
+
+def test_repo_is_checked_in_every_directory_a_cd_may_lead_to(repo, tmp_path):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    other = tmp_path / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True, env=clean_env())
+    git(other, "remote", "add", "origin", "https://github.com/Else/Where.git")
+    assert_allowed("cd {repo} && gh pr create --fill --repo Owner/Name", repo)
+    assert "another repository" in assert_refused(
+        f"cd {other} && gh pr create --fill --repo Owner/Name", repo
+    )
+    assert "another repository" in assert_refused(
+        f"cd {other} && gh pr create --fill --repo Else/Where", repo
+    )
+
+
+def test_repo_is_refused_when_a_git_variable_could_change_what_git_reads(repo, monkeypatch):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+    assert "GIT_DIR" in assert_refused("gh pr create --fill --repo Owner/Name", repo)
+
+
+def test_repo_asks_git_with_its_timeout_and_a_hang_refuses(repo, monkeypatch):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+
+    def hang(*_args, **kwargs):
+        assert kwargs["timeout"] == pm.GIT_TIMEOUT
+        raise subprocess.TimeoutExpired("git", kwargs["timeout"])
+
+    monkeypatch.setattr(pm.subprocess, "run", hang)
+    assert_refused("gh pr create --fill --repo Owner/Name", repo)
+
+
+def test_repo_never_runs_gh_or_the_network(repo, monkeypatch):
+    set_origin(repo, "https://github.com/Owner/Name.git")
+    real_run = subprocess.run
+    seen = []
+
+    def watch(args, *rest, **kwargs):
+        seen.append(list(args))
+        return real_run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(pm.subprocess, "run", watch)
+    assert_allowed("gh pr create --fill --repo Owner/Name", repo)
+    assert seen
+    assert {call[0] for call in seen} == {"git"}
+    assert not any(word in call for call in seen for word in ("fetch", "ls-remote", "push", "pull"))
+
+
+def test_a_command_without_repo_does_not_ask_git_about_origin(repo, monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise AssertionError("git was run")
+
+    monkeypatch.setattr(pm.subprocess, "run", fail)
+    assert_allowed('gh pr create --title "Add login" --fill', repo)
+
+
+# the hints and the role text -----------------------------------------------------------------------
+
+ROLE_TEXT = (SCRIPT.parents[1] / "agents" / "project-manager.md").read_text()
+
+
+def test_the_gh_hint_says_what_is_approved_now(repo):
+    message = assert_refused("gh pr create --fill --body 'x'", repo)
+    assert "--title" in message
+    assert "--body-file" in message
+    assert "/tmp or $TMPDIR" in message
+    assert "--repo" in message
+
+
+def test_a_refused_body_file_says_the_worktree_and_the_temp_dir_are_the_choices(repo):
+    message = assert_refused("gh pr create --fill --body-file /etc/passwd", repo)
+    assert "inside the worktree" in message
+    assert "/tmp or $TMPDIR" in message
+
+
+TITLE_RULE = (
+    "a double- or single-quoted --title of ASCII letters, digits, spaces and plain punctuation,"
+    " with no `$`, backtick, backslash or the quote it is wrapped in"
+)
+
+
+def test_the_role_text_says_what_the_hook_approves():
+    assert "`--title`" in ROLE_TEXT
+    assert "`--body-file`" in ROLE_TEXT
+    assert "`/tmp`" in ROLE_TEXT
+    assert "`$TMPDIR`" in ROLE_TEXT
+
+
+def test_the_role_text_and_the_gh_hint_state_the_title_rule_exactly():
+    assert TITLE_RULE in " ".join(ROLE_TEXT.replace("`--title`", "--title").split())
+    assert TITLE_RULE in pm.GH_HINT.replace("`--title`", "--title")
+
+
+def test_the_manager_skill_names_the_pr_commands_the_hook_approves():
+    skill = (SCRIPT.parents[1] / "skills" / "manager" / "SKILL.md").read_text()
+    text = " ".join(skill.split())
+    assert "`gh pr create`, `gh pr view` and `gh pr checks`" in text
+    assert "refuses everything else" in text
+
+
+def test_the_role_text_no_longer_sends_the_body_to_a_file_in_the_repo():
+    assert "Write a PR body to a file in the repo" not in ROLE_TEXT
+
+
+def test_the_role_text_keeps_its_other_rules():
+    assert "not retried or rephrased" in ROLE_TEXT
+    assert "(not `git fetch`)" in ROLE_TEXT
