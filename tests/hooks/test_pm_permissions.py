@@ -2876,3 +2876,45 @@ def test_a_redirect_with_no_target_does_not_crash_the_guard(repo, command):
 @pytest.mark.parametrize("command", ["git push -f >", "> ; git push -f"])
 def test_a_redirect_with_no_target_still_leaves_a_push_guarded(command):
     assert pm._is_guarded(command)
+
+
+# --- a digit before a redirect is a descriptor or an argument: both readings are checked -----------
+
+# The tokenizer loses the spacing: `2>f` makes `2` a descriptor, `2 >f` makes it an argument (the
+# value of `-C` here), so the guard reads a segment both ways.
+GUARD_DESCRIPTOR_OR_ARGUMENT = [
+    "git -C 2 >f push -f",
+    "git -c 2 >f push -f",
+    "git --git-dir 2 >f push -f",
+    "git -C 2 2>f push -f",
+    "git -C {fd} >f push -f",
+    "2>&1 gh pr merge 1",
+    "2 >&1 gh pr merge 1",
+    "FOO=1 2 >/dev/null git push -f",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_DESCRIPTOR_OR_ARGUMENT)
+def test_a_digit_before_a_redirect_does_not_hide_a_guarded_command(repo, command):
+    assert pm._is_guarded(command)
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.strip() == pm.decide(pm.Call("Bash", command, str(repo)))
+
+
+@pytest.mark.parametrize("command", ["echo 2 >f", "ls 2>/dev/null", "echo 2 3 >f 2>&1", "git -C 2 >f log"])
+def test_a_digit_before_a_redirect_on_a_harmless_command_stays_unguarded(repo, command):
+    assert not pm._is_guarded(command)
+    assert guard(request(command, repo)) == (0, "", "")
+
+
+@pytest.mark.parametrize(
+    ("keep", "words"),
+    [
+        (False, ["git", "push"]),
+        (True, ["git", "2", "push"]),
+    ],
+)
+def test_the_redirect_reading_drops_or_keeps_a_descriptor_candidate(keep, words):
+    tokens = ["git", "2", ">", "f", "push"]
+    assert pm._drop_redirects(tokens, keep_descriptors=keep) == words

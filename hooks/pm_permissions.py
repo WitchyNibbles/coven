@@ -563,9 +563,11 @@ def _is_operator(token: str) -> bool:
     return bool(token) and all(char in OPERATOR_CHARS for char in token)
 
 
-def _drop_redirects(tokens: Iterable[str]) -> list[str]:
+def _drop_redirects(tokens: Iterable[str], keep_descriptors: bool = False) -> list[str]:
     """The tokens without the redirects: each operator of REDIRECTS, the word it targets (none
-    when an operator, or the end, comes next) and the descriptor word directly before it."""
+    when an operator, or the end, comes next) and the descriptor word directly before it. The
+    tokenizer loses the spacing, so that word is a descriptor (`2>f`) or an argument (`2 >f`):
+    `keep_descriptors` keeps it, for the other reading."""
     kept: list[str] = []
     after_word = False  # whether the last token read is the last one kept, and a word
     skip_target = False
@@ -573,7 +575,7 @@ def _drop_redirects(tokens: Iterable[str]) -> list[str]:
         if skip_target and not _is_operator(token):
             skip_target = after_word = False
         elif token in REDIRECTS:
-            if after_word and DESCRIPTOR.fullmatch(kept[-1]):
+            if after_word and not keep_descriptors and DESCRIPTOR.fullmatch(kept[-1]):
                 kept.pop()
             skip_target, after_word = True, False
         else:
@@ -583,15 +585,17 @@ def _drop_redirects(tokens: Iterable[str]) -> list[str]:
     return kept
 
 
-def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
+def _segments(
+    tokens: Iterable[str], lenient: bool = False, keep_descriptors: bool = False
+) -> list[Segment]:
     """The non-empty command segments. Parentheses only split: whatever bash would run is one of
     the segments, and an unbalanced pair is a syntax error that runs nothing. Lenient (for the
     guard): a redirect is dropped from its segment with its target and its descriptor word (it
-    does not split, or the word after it would be read as the command), any other operator (a lone
-    `&`, `|&`) splits, and empty parts are fine."""
+    does not split, or the word after it would be read as the command; see `_drop_redirects` for
+    `keep_descriptors`), any other operator (a lone `&`, `|&`) splits, and empty parts are fine."""
     parts: list[list[str]] = [[]]
     breaks: list[str] = []
-    for token in _drop_redirects(tokens) if lenient else tokens:
+    for token in _drop_redirects(tokens, keep_descriptors) if lenient else tokens:
         if token in SEPARATORS or token in PARENS:
             breaks.append(token)
             parts.append([])
@@ -1166,12 +1170,14 @@ def _segment_is_guarded(words: Sequence[str]) -> bool:
 def _is_guarded(command: str) -> bool:
     """Whether the guard must run decide() on a command: a segment that is a push, merge,
     send-pack or gh command, or a wrapper holding such a word, or text the tokenizer cannot read
-    that holds a git or gh word. A word in a message, a pattern or a file name is not one."""
+    that holds a git or gh word. A word in a message, a pattern or a file name is not one. A digit
+    before a redirect is read both ways (a descriptor, or an argument), and either may be guarded."""
     try:
-        segments = _segments(_tokens(command, lenient=True), lenient=True)
+        tokens = _tokens(command, lenient=True)
+        readings = [_segments(tokens, lenient=True, keep_descriptors=keep) for keep in (False, True)]
     except Unsupported:
         return bool(HOLDS_GIT_OR_GH.search(command))
-    return any(_segment_is_guarded(segment.words) for segment in segments)
+    return any(_segment_is_guarded(segment.words) for segments in readings for segment in segments)
 
 
 @dataclass(frozen=True)
