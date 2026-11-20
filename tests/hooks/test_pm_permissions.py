@@ -2728,3 +2728,151 @@ def test_the_role_text_no_longer_sends_the_body_to_a_file_in_the_repo():
 def test_the_role_text_keeps_its_other_rules():
     assert "not retried or rephrased" in ROLE_TEXT
     assert "(not `git fetch`)" in ROLE_TEXT
+
+
+# --- a redirect is not the start of another command -----------------------------------------------
+
+# Each hides a push or a merge behind a redirect: the word after the redirect used to be read as
+# the command (or, in the middle, the push landed in another part), and in bypassPermissions the
+# guard is the only check that runs.
+GUARD_REDIRECT_DENIED = [
+    "2>&1 gh pr merge 1",
+    ">out gh pr merge 1",
+    "</dev/null git push -f",
+    "FOO=1 2>/dev/null gh pr merge",
+    "git 2>/dev/null push -f",
+    # A redirect at the end and one in the middle, for both commands.
+    "git push -f 2>&1",
+    "gh pr merge 1 2>&1",
+    "git push 2>/dev/null -f",
+    "gh pr merge 2>/dev/null 1",
+    "git push -f >out",
+    "gh pr merge 1 >>log 2>&1",
+    # The other redirect operators, and a redirect with its fd or a `{fd}` word.
+    ">>out git push -f",
+    "<<<text git push -f",
+    "&>out gh pr merge 1",
+    "&>>out gh pr merge 1",
+    ">|out gh pr merge 1",
+    "<>out gh pr merge 1",
+    ">&2 gh pr merge 1",
+    "<&0 gh pr merge 1",
+    "{fd}>out gh pr merge 1",
+    "2>out 1>&2 git push -f",
+    # Assignments, redirects and wrappers in any order.
+    "FOO=1 2>&1 BAR=2 gh pr merge 1",
+    "2>&1 FOO=1 gh pr merge 1",
+    "FOO=1 BAR=2 2>&1 git push -f",
+    "2>&1 env gh pr merge 1",
+    "nice -n 5 2>/dev/null git push -f",
+    "2>&1 sudo git push -f",
+    "env 2>&1 gh pr merge 1",
+    'bash -c "2>&1 gh pr merge 1"',
+    "sh -c '>x git push -f'",
+    # After a separator or a background `&`, and inside a group.
+    "echo hi; 2>&1 gh pr merge 1",
+    "echo hi && >out git push -f",
+    "sleep 1 & 2>&1 gh pr merge 1",
+    "{ 2>&1 gh pr merge 1; }",
+    "(2>&1 git push -f)",
+    "echo hi |& 2>&1 gh pr merge 1",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_REDIRECT_DENIED)
+def test_a_redirect_does_not_hide_a_guarded_command(command):
+    assert pm._is_guarded(command)
+
+
+@pytest.mark.parametrize("command", GUARD_REDIRECT_DENIED)
+def test_the_guard_denies_a_guarded_command_behind_a_redirect(repo, command):
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.startswith(PREFIX)
+    assert err.strip() == pm.decide(pm.Call("Bash", command, str(repo)))
+
+
+# A redirect on a command that is not a push, a merge or gh stays quiet, as it always did.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo hi 2>&1",
+        "grep gh file 2>/dev/null",
+        "ls >out",
+        "cat <in",
+        "2>&1 echo hi",
+        ">out echo hi",
+        "FOO=1 2>/dev/null ls",
+        "ls >out 2>&1; cat <in",
+        "echo hi >&2",
+        "ls &>out",
+        "cat <<<text",
+    ],
+)
+def test_a_redirect_on_a_harmless_command_stays_unguarded(repo, command):
+    assert not pm._is_guarded(command)
+    assert guard(request(command, repo)) == (0, "", "")
+
+
+# What the strict reading (the one that approves commands) does with the same operators: it
+# refuses them, so a redirect never gets a command approved.
+STRICT_REDIRECT_TOKENS = [
+    ["git", "push", "-f", ">", "out"],
+    ["2", ">", "out", "gh", "pr", "merge", "1"],
+    ["gh", "pr", "view", "<", "in"],
+    ["echo", "hi", ">>", "out"],
+    ["echo", "hi", "&>", "out"],
+    ["echo", "hi", "&"],
+]
+
+
+@pytest.mark.parametrize("tokens", STRICT_REDIRECT_TOKENS)
+def test_the_strict_reading_still_refuses_a_redirect_operator(tokens):
+    with pytest.raises(pm.Unsupported):
+        pm._segments(tokens)
+
+
+@pytest.mark.parametrize(
+    "command", ["gh pr view 1 >out", "gh pr view 1 <in", "gh pr checks 1 &>out"]
+)
+def test_a_redirect_still_gets_no_command_approved(command, repo):
+    assert "not allowed" in denied(command, repo)
+
+
+@pytest.mark.parametrize(
+    ("tokens", "words"),
+    [
+        (["2", ">&", "1", "gh", "pr", "merge", "1"], [["gh", "pr", "merge", "1"]]),
+        ([">", "out", "gh", "pr"], [["gh", "pr"]]),
+        (["<", "/dev/null", "git", "push", "-f"], [["git", "push", "-f"]]),
+        (["git", "2", ">", "/dev/null", "push", "-f"], [["git", "push", "-f"]]),
+        (["{fd}", ">", "out", "git", "push"], [["git", "push"]]),
+        (["git", "push", "2", ">&", "1", "-f"], [["git", "push", "-f"]]),
+        (["echo", "2x", ">", "out"], [["echo", "2x"]]),
+        # Only the word directly before the operator is a descriptor.
+        (["echo", "3", "2", ">", "a", ">", "b"], [["echo", "3"]]),
+        (["echo", "x", ">", "a", "3", ">", "b"], [["echo", "x"]]),
+        # No target: drop the operator and nothing else.
+        (["ls", ">"], [["ls"]]),
+        (["ls", ">", ";", "git", "push"], [["ls"], ["git", "push"]]),
+        (["ls", ">", "&&", "git", "push"], [["ls"], ["git", "push"]]),
+        (["ls", ">", ">", "out", "git"], [["ls", "git"]]),
+        # A lone `&`, a pipe and a group still split.
+        (["sleep", "1", "&", "git", "push"], [["sleep", "1"], ["git", "push"]]),
+        (["a", "|&", "git", "push"], [["a"], ["git", "push"]]),
+        (["a", "|", ">", "out", "git", "push"], [["a"], ["git", "push"]]),
+    ],
+)
+def test_a_redirect_does_not_split_a_segment_in_the_lenient_reading(tokens, words):
+    assert [segment.words for segment in pm._segments(tokens, lenient=True)] == words
+
+
+@pytest.mark.parametrize("command", ["ls >", "2>", "git push -f >", "git push -f 2>&1 >"])
+def test_a_redirect_with_no_target_does_not_crash_the_guard(repo, command):
+    assert isinstance(pm._is_guarded(command), bool)
+    assert "internal error" not in guard(request(command, repo))[2]
+
+
+@pytest.mark.parametrize("command", ["git push -f >", "> ; git push -f"])
+def test_a_redirect_with_no_target_still_leaves_a_push_guarded(command):
+    assert pm._is_guarded(command)

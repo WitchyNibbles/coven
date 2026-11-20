@@ -290,6 +290,10 @@ TRIMMERS = frozenset({"tail", "head"})
 TRIM_OPTIONS = re.compile(r"(?:-n [0-9]+|-[0-9]+)?")
 SEPARATORS = frozenset({"&&", "||", ";", "|"})
 PARENS = frozenset({"(", ")"})
+# The redirect operators (`|&` is a pipe and a lone `&` runs in the background: both separate
+# commands), and the word before one that names a descriptor: `2` in `2>&1`, `{fd}` in `{fd}>f`.
+REDIRECTS = frozenset({">", ">>", "<", "<<", "<<<", ">&", "<&", "&>", "&>>", ">|", "<>"})
+DESCRIPTOR = re.compile(r"\d+|\{[A-Za-z_]\w*\}")
 OPERATOR_CHARS = frozenset("();<>|&")
 
 REMOTE_NAME = re.compile(r"[A-Za-z0-9._-]+")
@@ -562,20 +566,37 @@ def _is_operator(token: str) -> bool:
 def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
     """The non-empty command segments. Parentheses only split: whatever bash would run is one of
     the segments, and an unbalanced pair is a syntax error that runs nothing. Lenient (for the
-    guard): any other operator (`&`, a redirect) splits too, and empty parts are fine."""
+    guard): a redirect is dropped from its segment with its target and its descriptor word (it
+    does not split, or the word after it would be read as the command), any other operator (a lone
+    `&`, `|&`) splits, and empty parts are fine."""
     parts: list[list[str]] = [[]]
     breaks: list[str] = []
+    after_word = False  # whether the previous token went into the current part as a word
+    skip_target = False
     for token in tokens:
+        if skip_target:
+            skip_target = False
+            if not _is_operator(token):
+                after_word = False
+                continue
         if token in SEPARATORS or token in PARENS:
             breaks.append(token)
             parts.append([])
+            after_word = False
+        elif token in REDIRECTS and lenient:
+            if after_word and DESCRIPTOR.fullmatch(parts[-1][-1]):
+                parts[-1].pop()
+            skip_target = True
+            after_word = False
         elif _is_operator(token) and lenient:
             breaks.append(token)
             parts.append([])
+            after_word = False
         elif _is_operator(token):
             raise Unsupported(f"the operator {token} is not approved automatically")
         else:
             parts[-1].append(token)
+            after_word = True
     for index, part in enumerate(parts):
         opens_after = index < len(breaks) and breaks[index] == "("
         closes_before = index > 0 and breaks[index - 1] == ")"
