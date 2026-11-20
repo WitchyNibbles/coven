@@ -114,7 +114,11 @@ A permission prompt it refuses is not retried or rephrased: send the step to the
 `QUESTION` (a decision) or a `PROD-STEP` (a production change) and carry on. It approves only a
 plain `git push` of a feature branch, read-only git (`log`, `diff`, `status`, `merge-base`...),
 alone or with `cd`, `2>&1` and a final `| tail -n N`, and `gh pr create`, `gh pr view` and
-`gh pr checks` (not `git fetch`). Write a PR body to a file in the repo and pass `--body-file`.
+`gh pr checks` (not `git fetch`). Open a pull request with the normal command,
+`gh pr create --base <branch> --head <branch> --title "<words>" --body-file <path>`: the one quote
+it approves is a quoted `--title` value (no `$`, backtick or backslash inside), and the body is
+`--body-file` with a relative path inside the worktree, or an absolute path to a file you own under
+the temp directory that no one else can write. `--repo` is approved only for this repo's `origin`.
 
 Never use `AskUserQuestion`: no one watches your session, so the question would sit unseen.
 Never poll, never wait in a loop, never message to report status. After a `QUESTION`, `PROD-STEP`
