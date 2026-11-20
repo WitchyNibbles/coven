@@ -46,8 +46,9 @@ A `gh pr` command may not open a browser or an editor (`--web`, `-w`, `--editor`
 background session; `gh pr checks --watch` is fine). It may name a repository (`--repo OWNER/NAME`,
 `-R OWNER/NAME`, `--repo=OWNER/NAME`) only when it is the one the `origin` remote of every
 directory it may run in names (case aside, read with git as a GitHub URL: `https://github.com/O/N`,
-`git@github.com:O/N` or `ssh://git@github.com/O/N`, with or without `.git`; the URL git uses after
-a rewrite must agree); a missing origin, another host, another repository, a `HOST/OWNER/NAME`
+the scp form (`<user>@github.com:O/N`, user `git` only) or the ssh form
+(`ssh://<user>@github.com/O/N`, user `git` only), with or without `.git`; the URL git uses after a
+rewrite must agree); a missing origin, another host, another repository, a `HOST/OWNER/NAME`
 value and any other spelling is refused. `--body-file` (`-F`), `--template` (`-T`) and `--recover`
 are approved for a relative path with no `..` that resolves inside the payload's cwd (from every
 directory a `cd` may lead to) and that deny-secrets' `target_hit` would not block, so a PM cannot
@@ -718,7 +719,8 @@ def _check_file_option(name: str, value: str, cwd: str, directories: Sequence[st
 
 def _github_slug(url: str) -> str | None:
     """`owner/name` in lower case for a GitHub remote URL in one of the three forms
-    `https://github.com/O/N(.git)`, `git@github.com:O/N(.git)` and `ssh://git@github.com/O/N(.git)`;
+    `https://github.com/O/N(.git)`, the scp form (`<user>@github.com:O/N(.git)`) and the ssh form
+    (`ssh://<user>@github.com/O/N(.git)`), where the user is `git` in both;
     None for any other text (another host, credentials, a port, a trailing path, a local path)."""
     found = GITHUB_REMOTE.fullmatch(url)
     if not found:

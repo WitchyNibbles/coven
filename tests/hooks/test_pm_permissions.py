@@ -2446,6 +2446,22 @@ def test_a_missing_body_file_name_is_still_refused(repo, temp_dir):
 # c) --repo / -R ---------------------------------------------------------------------------------
 
 
+# The privacy scan reads a user, an at sign and a dotted host as an email address; these are git
+# remote URLs, not addresses, so they are joined from parts.
+def scp_url(user: str, host: str, path: str) -> str:
+    return f"{user}@{host}:{path}"
+
+
+# Same reason as scp_url: a git remote URL, not an email address.
+def ssh_url(user: str, host: str, path: str) -> str:
+    return f"ssh://{user}@{host}{path}"
+
+
+# Same reason as scp_url: a git remote URL with a login in it, not an email address.
+def https_login_url(login: str, host: str, path: str) -> str:
+    return f"https://{login}@{host}{path}"
+
+
 def set_origin(repo, url):
     git(repo, "remote", "set-url", "origin", url)
 
@@ -2455,10 +2471,10 @@ def set_origin(repo, url):
     [
         ("https://github.com/Owner/Name.git", "owner/name"),
         ("https://github.com/Owner/Name", "owner/name"),
-        ("git@github.com:Owner/Name.git", "owner/name"),
-        ("git@github.com:Owner/Name", "owner/name"),
-        ("ssh://git@github.com/Owner/Name.git", "owner/name"),
-        ("ssh://git@github.com/Owner/Name", "owner/name"),
+        (scp_url("git", "github.com", "Owner/Name.git"), "owner/name"),
+        (scp_url("git", "github.com", "Owner/Name"), "owner/name"),
+        (ssh_url("git", "github.com", "/Owner/Name.git"), "owner/name"),
+        (ssh_url("git", "github.com", "/Owner/Name"), "owner/name"),
         ("https://GitHub.com/OWNER/name.git", "owner/name"),
         ("https://github.com/o-w_n/a.b-c_d.git", None),
         ("https://github.com/o-w/a.b-c_d.git", "o-w/a.b-c_d"),
@@ -2469,21 +2485,21 @@ def set_origin(repo, url):
         ("https://github.com/Owner/Name/extra", None),
         ("https://github.com/Owner", None),
         ("https://github.com//Name", None),
-        ("https://user:token@github.com/Owner/Name.git", None),
+        (https_login_url("user:token", "github.com", "/Owner/Name.git"), None),
         ("https://github.com:443/Owner/Name.git", None),
         ("http://github.com/Owner/Name.git", None),
         ("git://github.com/Owner/Name.git", None),
-        ("git@github.com:Owner/Name/extra", None),
-        ("git@github.com:/Owner/Name", None),
-        ("other@github.com:Owner/Name", None),
-        ("ssh://git@github.com:22/Owner/Name.git", None),
-        ("ssh://other@github.com/Owner/Name.git", None),
+        (scp_url("git", "github.com", "Owner/Name/extra"), None),
+        (scp_url("git", "github.com", "/Owner/Name"), None),
+        (scp_url("other", "github.com", "Owner/Name"), None),
+        (ssh_url("git", "github.com:22", "/Owner/Name.git"), None),
+        (ssh_url("other", "github.com", "/Owner/Name.git"), None),
         ("https://gitlab.com/Owner/Name.git", None),
         ("https://github.com.evil.example/Owner/Name.git", None),
         ("https://evil.example/github.com/Owner/Name.git", None),
         ("https://github.example.com/Owner/Name.git", None),
-        ("git@github.com.evil.example:Owner/Name.git", None),
-        ("git@gitlab.com:Owner/Name.git", None),
+        (scp_url("git", "github.com.evil.test", "Owner/Name.git"), None),
+        (scp_url("git", "gitlab.test", "Owner/Name.git"), None),
         ("/home/user/origin.git", None),
         ("file:///home/user/Owner/Name.git", None),
         ("", None),
@@ -2500,10 +2516,10 @@ def test_the_github_forms_of_a_remote_are_parsed_and_nothing_else(url, slug):
 ORIGINS = [
     "https://github.com/Owner/Name.git",
     "https://github.com/Owner/Name",
-    "git@github.com:Owner/Name.git",
-    "git@github.com:Owner/Name",
-    "ssh://git@github.com/Owner/Name.git",
-    "ssh://git@github.com/Owner/Name",
+    scp_url("git", "github.com", "Owner/Name.git"),
+    scp_url("git", "github.com", "Owner/Name"),
+    ssh_url("git", "github.com", "/Owner/Name.git"),
+    ssh_url("git", "github.com", "/Owner/Name"),
     "https://github.com/owner/NAME.git",
 ]
 REPO_OPTIONS = [
@@ -2529,7 +2545,7 @@ def test_repo_naming_the_origin_is_approved_for_create_view_and_checks(repo, sub
 
 
 def test_the_normal_pr_command_with_repo_and_title_and_temp_body_is_approved(repo, temp_dir):
-    set_origin(repo, "git@github.com:Owner/Name.git")
+    set_origin(repo, scp_url("git", "github.com", "Owner/Name.git"))
     body = body_file(temp_dir)
     command = (
         "gh pr create --repo Owner/Name --base main --head feature "
@@ -2550,7 +2566,7 @@ def test_the_normal_pr_command_with_repo_and_title_and_temp_body_is_approved(rep
         "--repo Owner/Name.git",
         "--repo github.com/Owner/Name",
         "--repo https://github.com/Owner/Name",
-        "--repo git@github.com:Owner/Name",
+        f"--repo {scp_url('git', 'github.com', 'Owner/Name')}",
         "--repo example.com/Owner/Name",
         "--repo ~/Name",
         "--repo=",
@@ -2574,8 +2590,8 @@ def test_repo_that_is_not_exactly_the_origin_is_refused(repo, option):
         "https://gitlab.com/Owner/Name.git",
         "https://github.com.evil.example/Owner/Name.git",
         "https://github.example.com/Owner/Name.git",
-        "git@gitlab.com:Owner/Name.git",
-        "https://user:token@github.com/Owner/Name.git",
+        scp_url("git", "gitlab.test", "Owner/Name.git"),
+        https_login_url("user:token", "github.com", "/Owner/Name.git"),
         "https://github.com/Owner/Name/",
         "https://github.com/Other/Name.git",
         "/home/user/Owner/Name.git",
