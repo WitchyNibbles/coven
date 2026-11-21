@@ -68,8 +68,10 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   closed: `echo $(( $(git rev-list --count HEAD) + 1 ))` (it does not read a substitution inside
   arithmetic, so it guards one that mentions git), and a pipe from git into any shell, even one
   whose `-c` script ignores stdin (`git log --oneline | sh -c 'head -2'`). Write the count as
-  `n=$(git rev-list --count HEAD); echo $((n + 1))` and drop the `sh -c`. What still gets
-  through:
+  `n=$(git rev-list --count HEAD); echo $((n + 1))` and drop the `sh -c`. A pipe from git into
+  parallel with a git, shell or wrapper command (`git ls-files | parallel git log -1`) or into
+  `make -f -` is guarded too, as parallel adds what it reads to that command's words; use
+  a `for` loop over `$(git ls-files)` instead. What still gets through:
   - git aliases (`git config alias.p push`, or `-c alias.p=push`, then `git p`), and any shell
     function or script that pushes;
   - a script file written now and run later, even in the same command: `tee f <<'EOF'`, a push in

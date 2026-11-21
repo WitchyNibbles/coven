@@ -39,8 +39,10 @@ for substitutions, which always run. A heredoc or here-string body is read as co
 command it feeds reads commands: a shell (bash, sh, zsh, dash, ksh, mksh, ash, fish, csh, tcsh,
 with any arguments), `source`, `.`, `eval`, a shell, `source` or `eval` as a word of an exec
 wrapper (`stdbuf -oL bash`, `busybox sh`), one in find's exec action (`find . -exec sh \;`, which
-inherits find's stdin), an expansion (`$x`), a wrapper the guard cannot
-unwrap, or a compound command (`} done fi esac )`). The words of any other command are its own
+inherits find's stdin), parallel with no command of its own, an option the guard cannot follow or
+a git, gh, shell, eval or wrapper command (`parallel`, `parallel git`: it runs or adds what it
+reads, as xargs does), `make -f -` (its makefile is stdin), an expansion (`$x`), a wrapper the
+guard cannot unwrap, or a compound command (`} done fi esac )`). The words of any other command are its own
 data: `git diff --name-only | grep bash` and `git status --short | grep -c .` are not guarded. Anything else (cat, tee, python3 -, node,
 perl) is data. Such a command is also guarded when its own words mention a guarded word, as its
 script then reads the body as data (`bash -c 'git $(cat)' <<EOF`), and when an unquoted body or a
@@ -52,7 +54,12 @@ compound command it feeds (`| { bash; }`, `| while ...; do sh; done`): `git log 
 is not fed. An opener counts at the start of a command, also after `time`, `time -p`, `function
 NAME` and `coproc [NAME]`, and a closer ends only the open group it matches (`}` a `{`, `fi` an
 `if`, `done` a loop, `esac` a case, `)` a `(`). A closer that matches none ends nothing, so a pipe
-into an outer group still feeds what follows: that fails closed.
+into an outer group still feeds what follows: that fails closed. A reserved word is unquoted, as
+in bash: `"}"`, `\}` and `'fi'` are commands and close nothing, `"{"` opens nothing, a `}` after a
+quoted `"!"` is a plain word, and a case after `\time` or `time "-p"` is a word (its `)` ends the
+`$(`). Only coproc's NAME may be quoted. Deciding which word names the command (`_command_start`)
+still skips a quoted `!`, `{` or `function NAME`: no command has those names, so that only
+guards more.
 
 ## Wrappers
 

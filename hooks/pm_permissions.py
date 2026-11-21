@@ -107,7 +107,8 @@ hold `push`, `merge`, `send-pack` or `gh`; a find whose `-exec` command is one o
 command name that expands (`$g`, `$(...)`) next to such a word or a git word; or a `$((...))`
 that mentions one. A heredoc or here-string body is data, but for its unquoted-delimiter
 substitutions, unless it feeds a command that reads commands (a shell, `source`, `.`, `eval`, a
-shell as a word of an exec wrapper, a compound command or a command the guard cannot name): then
+shell as a word of an exec wrapper, parallel with no command or a git, shell or wrapper one,
+`make -f -`, a compound command or a command the guard cannot name): then
 it is read as commands, and the command's own words must not mention git or a push. A grep
 pattern such as `bash` is data. A shell fed by a pipe (in its own pipeline or group) or an
 input redirect guards a text that mentions git, gh or a push. Text the scanner cannot follow (an
