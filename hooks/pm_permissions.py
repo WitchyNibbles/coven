@@ -1697,6 +1697,8 @@ def _unwrapped(words: Sequence[str]) -> Unwrapped:
         inner = _wrapped_start(syntax, words, start + 1)
         if inner is None:
             return Unwrapped(list(words[start:]), followed=False, stdin_words=stdin_words)
+        if name == "xargs" and _command_start(words, inner) == len(words):
+            return Unwrapped(["echo"], stdin_words=True)  # xargs with no command runs echo
         stdin_words = stdin_words or name == "xargs"
         start = _command_start(words, inner)
     return Unwrapped(list(words[start:]), stdin_words=stdin_words)
@@ -1739,13 +1741,13 @@ def _segment_is_guarded(words: Sequence[str]) -> bool:
 
 def _receiver(words: Sequence[str]) -> str:
     """The name of the command that reads a simple command's stdin, under its wrappers; NO_COMMAND
-    for none or a compound command, UNKNOWN_COMMAND when it expands or a wrapper stops the
-    reading."""
+    for none or a compound command, UNKNOWN_COMMAND when it expands, a wrapper stops the reading,
+    or a wrapper under xargs takes its command from stdin."""
     inner = _unwrapped(words)
     if not inner.followed:
         return UNKNOWN_COMMAND
     if not inner.command:
-        return NO_COMMAND
+        return UNKNOWN_COMMAND if inner.stdin_words else NO_COMMAND
     if _expands(inner.command[0]):
         return UNKNOWN_COMMAND
     name = os.path.basename(inner.command[0])

@@ -3195,6 +3195,10 @@ GUARD_WRAPPED = [
     # xargs runs git with a subcommand it reads from stdin.
     "echo push | xargs git",
     "xargs -0 git -C x < list",
+    # A wrapper under xargs with no command runs the words xargs reads from a git or gh text.
+    "echo git push | xargs env",
+    "printf '%s\\n' git push -f | xargs -n 9 nice",
+    "echo gh pr merge 1 | xargs sudo",
 ]
 
 
@@ -3328,6 +3332,10 @@ GUARD_STILL_QUIET = [
     "env FOO=push pytest -q",
     "nohup echo merge",
     "git ls-files -z | xargs -0 git add",
+    # xargs with no command runs echo; a wrapper under it reads words from a text with no git word.
+    "echo a | xargs",
+    "ls | xargs -n 1",
+    "ls | xargs env",
 ]
 
 
