@@ -32,6 +32,7 @@ OWNED_PYTHON: dict[str, str] = {
         f"{STANDARD_DIR}/{name}": f"standard/{name}"
         for name in (
             "check.py",
+            "check_mod.py",
             "check_python.py",
             "check_repo.py",
             "check_stages.py",
@@ -340,7 +341,7 @@ def _wiring(check: ModuleType, repo: Path, projects: list[Project]) -> tuple[str
     for project in projects:
         if project.kind == "python":
             lines += _python_wiring(check, repo, project)
-        else:
+        elif project.kind == "typescript":
             lines += _ts_wiring(check, check_ts, repo, project, projects)
     listing = check.check_repo.listing(repo)
     lines += check.check_repo.repo_problems(repo, listing) + check.check_repo.outside_problems(
@@ -364,7 +365,7 @@ def _projects(project: Path) -> tuple[ModuleType, list[Project]]:
     check = _load_check()
     projects: list[Project] = check.check_repo.discover(project)
     if not projects:
-        raise ProjectError(f"no Python or TypeScript project found in {project}")
+        raise ProjectError(f"no Python, TypeScript or Claude Code mod project found in {project}")
     return check, projects
 
 

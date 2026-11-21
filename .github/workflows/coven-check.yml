@@ -11,16 +11,21 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_VERSION: "2.1.325"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: hashFiles('**/package.json') != ''
+        if: hashFiles('**/package.json') != '' || hashFiles('**/.claude-plugin/plugin.json') != ''
         with:
           node-version-file: ${{ hashFiles('.nvmrc') != '' && '.nvmrc' || '' }}
           node-version: ${{ hashFiles('.nvmrc') == '' && 'lts/*' || '' }}
+      - name: Install Claude Code
+        if: hashFiles('**/.claude-plugin/plugin.json') != ''
+        run: npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Install locked dependencies
         run: python3 .coven/check.py install
       - name: Run the full check

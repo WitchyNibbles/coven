@@ -30,7 +30,14 @@ SHIPPED_SKILLS = frozenset(
 )
 CHECK = REPO / "standard/check.py"
 # The standard's Python modules: `check.py` and the siblings it loads from its own directory.
-CHECK_MODULES = ("check.py", "check_python.py", "check_repo.py", "check_stages.py", "check_ts.py")
+CHECK_MODULES = (
+    "check.py",
+    "check_mod.py",
+    "check_python.py",
+    "check_repo.py",
+    "check_stages.py",
+    "check_ts.py",
+)
 
 
 # The `check_env` a module returns to run the real runner: `run_check` copies it, never edits it.

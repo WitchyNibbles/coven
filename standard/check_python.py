@@ -26,7 +26,7 @@ else:
     check_stages = importlib.import_module("coven_check_stages")
 
 # The standard's version: the same in every module of it (check.py refuses a mismatch).
-STANDARD_VERSION = 5
+STANDARD_VERSION = 6
 
 
 PY_SUPPRESSIONS: tuple[re.Pattern[str], ...] = tuple(

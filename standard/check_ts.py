@@ -25,7 +25,7 @@ else:
     check_stages = importlib.import_module("coven_check_stages")
 
 # The standard's version: the same in every module of it (check.py refuses a mismatch).
-STANDARD_VERSION = 5
+STANDARD_VERSION = 6
 
 # Lines end where ESLint and TypeScript end them: CR, LF, CRLF, U+2028 and U+2029. Unlike
 # `str.splitlines()`, \x0b, \x0c and \x85 stay inside a line, as they do for those tools.

@@ -37,5 +37,10 @@ First version.
 - Code standard for Python and TypeScript repos, installed by `coven project`, with a GitHub
   Actions workflow.
 - Shared memory store with a pre-commit hook that refuses token-like text.
+- aquelarre, a second plugin in the marketplace and a Claude Code mod: `/aquelarre` opens a pane
+  with one card per live project manager, a band above the prompt counts the ones working or
+  waiting, and toasts say when one asks, needs a production step, finishes or dies. Settings
+  (`language`, `band`, `toasts`) are in `/config`. coven installs it as a dependency, and
+  `coven doctor` has an `aquelarre plugin` line (it needs Claude Code 2.1.325 or newer).
 - `examples/toy`, a tiny project for the README walkthrough.
 - Not in this version: Codex or OpenCode support, and native Windows.

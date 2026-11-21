@@ -1,0 +1,30 @@
+{
+  "name": "aquelarre",
+  "version": "0.1.0",
+  "description": "A pane, a band and toasts that show the live coven project managers and what each one is doing",
+  "author": { "name": "WitchyNibbles" },
+  "license": "MIT",
+  "homepage": "https://github.com/WitchyNibbles/coven",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "The language of the pane, the band and the toasts: en (English) or es (Spanish).",
+      "default": "en",
+      "options": ["en", "es"]
+    },
+    "band": {
+      "type": "boolean",
+      "title": "Band",
+      "description": "Show the one-line band above the prompt that sums up the project managers.",
+      "default": true
+    },
+    "toasts": {
+      "type": "boolean",
+      "title": "Toasts",
+      "description": "Show a toast when a project manager asks a question, needs a production step, finishes or dies.",
+      "default": true
+    }
+  }
+}

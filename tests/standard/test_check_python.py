@@ -13,6 +13,7 @@ DELETE = object()
 INSTALLS_ONLY = "the standard installs only " + ", ".join(
     (
         "check.py",
+        "check_mod.py",
         "check_python.py",
         "check_repo.py",
         "check_stages.py",

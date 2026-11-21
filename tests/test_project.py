@@ -14,7 +14,14 @@ TOOLS = ("ruff", "mypy", "pytest", "pytest-cov", "diff-cover", "pytest-xdist")
 WORKFLOW = ".github/workflows/coven-check.yml"
 SCRIPTS = tuple(
     f".coven/{name}"
-    for name in ("check.py", "check_python.py", "check_repo.py", "check_stages.py", "check_ts.py")
+    for name in (
+        "check.py",
+        "check_mod.py",
+        "check_python.py",
+        "check_repo.py",
+        "check_stages.py",
+        "check_ts.py",
+    )
 )
 PYTHON_FILES = {*SCRIPTS, ".coven/ruff.toml", WORKFLOW}
 TS_FILES = {*SCRIPTS, ".coven/tsconfig.base.json", ".coven/eslint.config.mjs", WORKFLOW}
@@ -173,7 +180,9 @@ def test_drift_refuses_a_subdirectory_of_the_repo(bare_repo: Path):
 
 
 def test_no_project(git_repo: Path):
-    with pytest.raises(ProjectError, match="no Python or TypeScript project found in") as error:
+    with pytest.raises(
+        ProjectError, match="no Python, TypeScript or Claude Code mod project found in"
+    ) as error:
         setup(git_repo)
     assert str(git_repo) in str(error.value)
 
@@ -248,6 +257,23 @@ def test_setup_ts_only_writes_ts_files_not_ruff(git_repo: Path):
     assert not (git_repo / ".coven/ruff.toml").exists()
     for rel in TS_FILES:
         assert (git_repo / rel).read_bytes() == (REPO / SOURCES[rel]).read_bytes()
+    assert drift(git_repo) == []
+
+
+def test_setup_and_drift_accept_a_mod_only_repo(git_repo: Path):
+    mod = git_repo / "plugins/mod"
+    (mod / ".claude-plugin").mkdir(parents=True)
+    (mod / "hooks").mkdir()
+    (mod / ".claude-plugin/plugin.json").write_text("{}")
+    (mod / "hooks/hooks.json").write_text('{"modules": ["./register.ts"]}')
+    (mod / "hooks/register.ts").write_text("export function register(): void {}\n")
+    result = setup(git_repo)
+    assert set(result.written) == {*SCRIPTS, WORKFLOW}
+    assert result.wiring == ()
+    for rel in result.written:
+        assert (git_repo / rel).read_bytes() == (REPO / SOURCES[rel]).read_bytes()
+    assert (git_repo / ".coven/check_mod.py").is_file()
+    assert not (git_repo / ".coven/ruff.toml").exists()
     assert drift(git_repo) == []
 
 

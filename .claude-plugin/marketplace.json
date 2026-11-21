@@ -8,6 +8,11 @@
       "name": "coven",
       "source": "./",
       "description": "Run work through a general manager and background project managers, with shared memory, routing instructions and a code standard."
+    },
+    {
+      "name": "aquelarre",
+      "source": "./plugins/aquelarre",
+      "description": "A pane, a band and toasts that show the live coven project managers and what each one is doing."
     }
   ]
 }

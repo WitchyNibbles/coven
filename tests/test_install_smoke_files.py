@@ -108,6 +108,35 @@ def test_run_sh_is_posix_and_set_eu() -> None:
         assert step in text, step
 
 
+def test_run_sh_validates_aquelarre_strictly() -> None:
+    text = RUN_SH.read_text(encoding="utf-8")
+    assert re.search(
+        r'^claude plugin validate --strict "\$SRC/plugins/aquelarre" \|\| fail ',
+        text,
+        re.MULTILINE,
+    )
+
+
+def test_run_sh_checks_that_installing_coven_enabled_aquelarre() -> None:
+    text = RUN_SH.read_text(encoding="utf-8")
+    # The check sits in the installed branch, after the install and before the doctor run.
+    check = text.split('if [ "$mode" = installed ]; then', 1)[1]
+    assert "claude plugin list" in text
+    assert "aquelarre@coven" in check.split("coven doctor", 1)[0]
+    assert "enabled" in check.split("coven doctor", 1)[0]
+    # A fallback run installs nothing, so it makes no claim about aquelarre.
+    assert text.index("claude plugin list") > text.index("FALLBACK: using the checkout")
+
+
+def test_run_sh_allows_the_aquelarre_doctor_line_and_requires_it_when_installed() -> None:
+    text = RUN_SH.read_text(encoding="utf-8")
+    assert "grep -q '^ok aquelarre plugin:'" in text
+    allowed = text.split("case $line in", 1)[1].split("esac", 1)[0]
+    # Only the fallback, which installed nothing, may warn that aquelarre is missing.
+    assert '"warn aquelarre plugin:"*' in allowed
+    assert 'if [ "$mode" = installed ]' in allowed.split('"warn aquelarre plugin:"*', 1)[1]
+
+
 def test_run_sh_marketplace_add_of_the_checkout_is_fatal_not_a_fallback() -> None:
     text = RUN_SH.read_text(encoding="utf-8")
     assert re.search(r'^claude plugin marketplace add "\$SRC" \|\| fail ', text, re.MULTILINE)
@@ -223,3 +252,57 @@ def test_known_gaps_describes_the_smoke_job_and_its_limits() -> None:
 def test_readme_says_what_to_do_when_the_official_marketplace_is_unknown() -> None:
     text = " ".join((REPO / "README.md").read_text(encoding="utf-8").split())
     assert "claude plugin marketplace add anthropics/claude-plugins-official" in text
+
+
+def readme_section(heading: str) -> str:
+    text = (REPO / "README.md").read_text(encoding="utf-8")
+    return text.split(f"\n## {heading}", 1)[1].split("\n## ", 1)[0]
+
+
+def test_readme_has_a_section_on_the_aquelarre_pane() -> None:
+    body = " ".join(readme_section("Aquelarre").split())
+    for needle in (
+        "/aquelarre",
+        "band",
+        "toasts",
+        "/config",
+        "language",
+        "coven pm status",
+        "~/.cache/aquelarre",
+        "installs with coven",
+    ):
+        assert needle in body, needle
+
+
+def test_readme_uninstall_names_prune_for_the_auto_installed_aquelarre() -> None:
+    body = " ".join(readme_section("Uninstall").split())
+    assert "claude plugin prune" in body
+    assert "aquelarre" in body
+
+
+def test_known_gaps_covers_the_mod() -> None:
+    text = " ".join((REPO / "docs" / "known-gaps.md").read_text(encoding="utf-8").split())
+    section = text.split("## aquelarre", 1)[1].split(" ## ", 1)[0]
+    for needle in (
+        "early access",
+        "claude plugin validate --strict",
+        "tsc",
+        "2.1.325",
+        "format, lint and coverage",
+        "n/a",
+        "claude plugin test",
+    ):
+        assert needle in section, needle
+
+
+def test_changelog_lists_aquelarre_under_the_first_release() -> None:
+    text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = text.split("## 0.1.0 (unreleased)", 1)[1]
+    for needle in ("aquelarre", "/aquelarre", "`coven doctor`"):
+        assert needle in entry, needle
+
+
+def test_aquelarre_readme_does_not_promise_a_live_reload() -> None:
+    text = " ".join((REPO / "plugins" / "aquelarre" / "README.md").read_text().split())
+    assert "reloads the mod" not in text
+    assert "takes effect when the mod reloads" in text

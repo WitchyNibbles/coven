@@ -21,6 +21,7 @@ from coven.memory import store
 NOW = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 FAKE = "#!{python}\nimport sys\n\nsys.stdout.write({out!r})\nsys.exit({code})\n"
 SUPERPOWERS = "superpowers@claude-plugins-official"
+AQUELARRE = "aquelarre@coven"
 NAMES = [
     "claude code",
     "python3",
@@ -28,6 +29,7 @@ NAMES = [
     "uv",
     "gh",
     "superpowers plugin",
+    "aquelarre plugin",
     "config",
     "memory store",
     "memory hook",
@@ -89,12 +91,18 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     git = shutil.which("git")
     assert git
     (world.bin / "git").symlink_to(git)
-    world.tool("claude", "2.1.300 (Claude Code)\n")
+    world.tool("claude", "2.1.325 (Claude Code)\n")
     world.tool("python3", "Python 3.12.4\n")
     world.tool("uv", "uv 0.5.1\n")
     world.tool("gh")
     world.plugins(
-        {"version": 2, "plugins": {SUPERPOWERS: [{"scope": "user", "installPath": "/x"}]}}
+        {
+            "version": 2,
+            "plugins": {
+                SUPERPOWERS: [{"scope": "user", "installPath": "/x"}],
+                AQUELARRE: [{"scope": "user", "installPath": "/y"}],
+            },
+        }
     )
     world.settings({"crossSessionInbound": "accept"})
     monkeypatch.setenv("PATH", str(world.bin))  # the real claude, gh and uv are out of reach
@@ -240,6 +248,92 @@ def test_superpowers_absent_or_unreadable_fails(world, content):
 def test_superpowers_with_no_plugin_file_fails(world):
     paths.installed_plugins_file().unlink()
     assert status("superpowers plugin") == "fail"
+
+
+def test_aquelarre_installed_is_ok(world):
+    assert results()["aquelarre plugin"] == ("ok", AQUELARRE)
+
+
+def test_aquelarre_in_the_object_form_is_ok(world):
+    world.plugins({"plugins": {AQUELARRE: {"installPath": "/y"}}})
+    assert status("aquelarre plugin") == "ok"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        {"plugins": {SUPERPOWERS: [{"scope": "user", "installPath": "/x"}]}},
+        {"plugins": {AQUELARRE: []}},
+        {"plugins": {AQUELARRE: [{"scope": "user"}]}},
+        {"plugins": []},
+    ],
+    ids=["other plugin only", "empty list", "entry without installPath", "plugins a list"],
+)
+def test_aquelarre_absent_from_a_readable_file_warns_and_says_how_to_install(world, content):
+    world.plugins(content)
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert detail == f"not installed; run claude plugin install {AQUELARRE}"
+
+
+def test_aquelarre_in_a_file_that_is_not_json_warns_that_it_cannot_be_read(world):
+    world.plugins("{not json")
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert detail.startswith(f"{paths.installed_plugins_file()} cannot be read: ")
+    assert "not installed" not in detail
+    assert "\n" not in detail
+
+
+def test_aquelarre_in_a_plugin_file_that_cannot_be_opened_warns_that_it_cannot_be_read(world):
+    file = paths.installed_plugins_file()
+    file.unlink()
+    file.mkdir()  # reading a directory raises OSError, not FileNotFoundError
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert detail.startswith(f"{file} cannot be read: ")
+    assert detail == results()["superpowers plugin"][1]
+
+
+def test_aquelarre_with_no_plugin_file_warns(world):
+    paths.installed_plugins_file().unlink()
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert "not installed" in detail
+
+
+def test_aquelarre_on_a_claude_code_older_than_2_1_325_warns(world):
+    world.tool("claude", "2.1.324 (Claude Code)\n")
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert detail == "needs Claude Code 2.1.325 or newer"
+
+
+def test_aquelarre_at_exactly_2_1_325_is_ok(world):
+    assert doctor.AQUELARRE_TESTED_FROM == (2, 1, 325)
+    world.tool("claude", "2.1.325 (Claude Code)\n")
+    assert status("aquelarre plugin") == "ok"
+
+
+def test_aquelarre_does_not_repeat_a_missing_claude(world):
+    world.remove("claude")
+    assert status("claude code") == "fail"
+    assert results()["aquelarre plugin"] == ("ok", AQUELARRE)
+
+
+@pytest.mark.parametrize(
+    "output",
+    ["not a version at all\n", "2.1.223 (Claude Code)\n"],
+    ids=["unreadable version", "below the coven minimum"],
+)
+def test_aquelarre_reports_the_plugin_when_the_claude_version_cannot_be_used(world, output):
+    world.tool("claude", output)
+    assert status("claude code") == "fail"  # the one line that owns the version problem
+    assert results()["aquelarre plugin"] == ("ok", AQUELARRE)
+    paths.installed_plugins_file().unlink()
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert "not installed" in detail
 
 
 def test_an_invalid_config_fails(world):
@@ -446,7 +540,12 @@ def test_one_crashing_check_fails_alone_and_the_rest_still_run(world, monkeypatc
     monkeypatch.setattr(claude_version, "installed", boom)
     found = results()
     assert found["claude code"] == ("fail", "RuntimeError: boom")
-    assert [found[name][0] for name in NAMES if name != "claude code"] == ["ok"] * (len(NAMES) - 1)
+    # The aquelarre line reads the same version, so it crashes too, at its own (warn) level.
+    assert found["aquelarre plugin"] == ("warn", "RuntimeError: boom")
+    sharing = {"claude code", "aquelarre plugin"}
+    assert [found[name][0] for name in NAMES if name not in sharing] == ["ok"] * (
+        len(NAMES) - len(sharing)
+    )
 
 
 def test_doctor_exit_1_on_any_fail(world, capsys):

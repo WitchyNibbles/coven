@@ -92,9 +92,16 @@ If superpowers is installed but disabled, Claude Code refuses to load coven. Ena
 - The deny-secrets hook blocks reads and copies of `.env` files and of the key folders (`~/.ssh`
   and the like), everywhere.
 - The project manager hooks do something only in PM sessions; in your own sessions they stay quiet.
+- aquelarre, the mod that installs with coven, draws a band above the prompt that sums up the live
+  project managers. To fill it, each session that is not a PM runs `coven pm status` every 5 seconds
+  while the aquelarre pane is open and about every 10 seconds otherwise. When `coven` is missing or
+  fails, the band shows a read error in every session.
 
-To switch it off, run `claude plugin disable coven@coven` (`claude plugin enable coven@coven`
-brings it back), and `coven setup --undo` to restore the settings that setup changed.
+To switch it off, run `claude plugin disable coven@coven` and
+`claude plugin disable aquelarre@coven` (`claude plugin enable` on each brings them back), and
+`coven setup --undo` to restore the settings that setup changed. Disabling only coven leaves
+aquelarre running. To keep aquelarre but hide the band, switch `band` off in `/config`; the polling
+goes on, for the pane and the toasts.
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
@@ -250,6 +257,25 @@ outside Claude Code. See [known gaps](docs/known-gaps.md).
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
+## Aquelarre
+
+☾ A second plugin in the same marketplace that installs with coven (coven lists it as a
+dependency): a mod that shows your live project managers. It needs Claude Code 2.1.325 or newer;
+`coven doctor` warns on an older one.
+
+- **Pane.** `/aquelarre` opens a pane beside the chat with one card per live PM: its state, how
+  long it has been in it, its plan, what it waits on and its last messages.
+- **Band.** One row above the prompt that counts the PMs working or waiting.
+- **Toasts.** One when a PM asks a question, needs a production step, finishes or dies.
+- **Settings.** Three rows in `/config`: `language` (`en` or `es`, default `en`), `band` and
+  `toasts` (both on by default). A change takes effect when the mod reloads, for example in the
+  next session.
+
+It reads `coven pm status` and writes only `~/.cache/aquelarre/`. See
+[plugins/aquelarre](plugins/aquelarre/README.md).
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Uninstall
 
 1. ⋆ `coven setup --undo` shows what it would restore; add `--yes` to do it. It restores only the keys
@@ -258,7 +284,9 @@ outside Claude Code. See [known gaps](docs/known-gaps.md).
    timestamped backups beside `~/.claude/settings.json` are for you to read; coven never restores
    one over later changes.
 2. Remove the plugin and its marketplace:
-   `claude plugin uninstall coven@coven` and `claude plugin marketplace remove coven`.
+   `claude plugin uninstall coven@coven` and `claude plugin marketplace remove coven`. The uninstall
+   leaves aquelarre, which Claude Code installed as its dependency, on and showing its band;
+   `claude plugin prune` removes it, or switch the band off in `/config` (`band`).
 3. Delete what is left of `~/.config/coven` and, if you want, the memory store (`~/coven-memory` or
    the path you chose). The store is your notes: copy out what you keep first. Logs live in
    `${XDG_CACHE_HOME:-~/.cache}/coven`.
