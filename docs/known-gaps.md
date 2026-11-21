@@ -62,14 +62,18 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   is a word, not a separator) and runs the same check on a `gh` command or a git `push`, `merge` or
   `send-pack`, also inside `$(...)`, backticks and `<(...)`, behind wrappers such as `env`, `nice`,
   `timeout` or `sudo`, inside a `bash -c` or `make` that names one, and in a heredoc fed to a
-  shell; and on any text it cannot read that mentions `git` or `gh`. Words in a commit message, a
-  quoted string, a file name or a heredoc fed to `cat` do not trigger it, and `make push-docs`
-  does, on purpose. What still gets through:
+  shell; and on any text it cannot read that mentions `git`, `gh` or a push. Words in a commit
+  message, a quoted string, a file name or a heredoc fed to `cat` do not trigger it, and
+  `make push-docs` does, on purpose. What still gets through:
   - git aliases (`git config alias.p push`, or `-c alias.p=push`, then `git p`), and any shell
     function or script that pushes;
+  - a script file written now and run later, even in the same command: `tee f <<'EOF'`, a push in
+    the body, `EOF`, then `bash f`. The body is data to tee, and the guard does not read files;
   - a push built at run time from a variable (`c="git push"; $c`) that the guard cannot see, and
-    commands it does not know run others (`find -exec`, `watch`, `setsid`, an interpreter's
-    `os.system`);
+    commands it does not know run others (an interpreter's `os.system`, `docker exec`, or any
+    wrapper not in its list);
+  - zsh-only syntax, such as `=git push` (zsh expands `=git` to git's path). The guard reads the
+    command as bash does;
   - on Python older than 3.12 the git-push guard fails open: the shell fallback in `fail-closed.sh`
     cannot see the session role, so only deny-secrets still runs for that guard. The production
     guard has a degraded mode there: the fallback refuses Bash and MCP tool calls while the guard
