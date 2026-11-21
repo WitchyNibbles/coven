@@ -3696,6 +3696,10 @@ PIPES_INTO_A_WRAPPED_SHELL = [
     "echo 'git push -f' | setsid -w sh",
     "busybox sh <<EOF\ngit push -f\nEOF",
     "echo 'gh pr merge 1' | busybox sh",
+    # The shell find runs reads find's stdin.
+    "echo 'git push -f' | find . -maxdepth 0 -exec sh \\;",
+    "find . -maxdepth 0 -exec bash \\; <<EOF\ngit push -f\nEOF",
+    "echo 'gh pr merge 1' | find . -maxdepth 0 -exec find . -maxdepth 0 -exec sh",
 ]
 
 

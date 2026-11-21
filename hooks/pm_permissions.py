@@ -1920,15 +1920,20 @@ def _receiver(words: Sequence[str]) -> str:
     return NO_COMMAND if name in COMPOUND_ENDS else name
 
 
-def _reads_commands(command: SimpleCommand, receiver: str) -> bool:
+def _reads_commands(words: Sequence[str], receiver: str, depth: int = 0) -> bool:
     """Whether a command may run what it reads on stdin: a shell, `source`, `.` or `eval`, an
-    unknown one, or a wrapper with options the guard does not follow that names a shell, `source`
-    or `eval` among its words (`stdbuf -oL bash`). Another command's words are its own data
-    (`grep -c bash`)."""
+    unknown one, a wrapper with options the guard does not follow that names a shell, `source`
+    or `eval` among its words (`stdbuf -oL bash`), or a find whose exec action is one of these
+    (it inherits find's stdin). Another command's words are its own data (`grep -c bash`)."""
     if receiver in COMMAND_READERS or receiver == UNKNOWN_COMMAND:
         return True
+    if receiver == "find" and depth < MAX_NESTING:
+        actions = _find_actions(_unwrapped(words).command)
+        return any(_reads_commands(action, _receiver(action), depth + 1) for action in actions)
+    if receiver == "find":  # a find in a find's action, past MAX_NESTING
+        return True
     return receiver in EXEC_WRAPPERS and any(
-        os.path.basename(word) in WORD_READERS for word in command.words
+        os.path.basename(word) in WORD_READERS for word in words
     )
 
 
@@ -1941,7 +1946,7 @@ def _expands_into_commands(heredoc: Heredoc) -> bool:
 
 def _command_runs_its_input(command: SimpleCommand, source: str, depth: int) -> bool:
     receiver = _receiver(command.words)
-    runs = _reads_commands(command, receiver)
+    runs = _reads_commands(command.words, receiver)
     # A pipe or a file gives text the guard cannot see: the line's own words must not mention git.
     if runs and (command.piped or command.fed) and _mentions_a_guarded_word(source):
         return True
