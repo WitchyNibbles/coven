@@ -12,7 +12,16 @@ second plugin in the coven marketplace and installs with coven.
   waiting, dim when no one is working.
 - **Toasts** when a project manager asks a question, needs a production step, finishes or dies.
 
-The text is Spanish for now; an English default and a language setting come later.
+## Settings
+
+Three options, each a row in `/config` (a change reloads the mod):
+
+- `language`: `en` (the default) or `es`. The language of the pane, the band, the toasts and the
+  `/aquelarre` command.
+- `band`: on by default. Off draws no band above the prompt; the pane and the toasts keep working.
+- `toasts`: on by default. Off raises no toast; the pane and the band keep working.
+
+aquelarre installs with coven, so these switches are how to turn the band or the toasts off.
 
 ## Where it reads from
 

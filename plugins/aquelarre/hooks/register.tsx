@@ -22,7 +22,6 @@ const CLAIM_VOID_MS = STATUS_TIMEOUT_MS + 5_000
 const CACHE_VERSION = 1
 const CACHE_FILE = 'status.json'
 const CLAIM_FILE = 'reading.json'
-const UNKNOWN_ERROR = 'no se pudo leer'
 const STATUS_COMMAND = ['coven', 'pm', 'status'] as const
 
 const EMPTY: Circle = { witches: [], checkedAt: '', error: '' }
@@ -40,32 +39,156 @@ const lastRead = atom(
 
 // Colours are theme keys only, so the pane follows the user's Claude Code theme.
 const GROUPS = {
-  waits: { glyph: '◆', color: 'permission', summary: ['espera', 'esperan'] },
-  problem: { glyph: '✕', color: 'error', summary: ['problema', 'problemas'] },
-  working: { glyph: '✦', color: 'claude', summary: ['trabajando', 'trabajando'] },
-  idle: { glyph: '○', color: 'inactive', summary: ['en pausa', 'en pausa'] },
+  waits: { glyph: '◆', color: 'permission' },
+  problem: { glyph: '✕', color: 'error' },
+  working: { glyph: '✦', color: 'claude' },
+  idle: { glyph: '○', color: 'inactive' },
 } as const
 type Group = keyof typeof GROUPS
 const URGENCY: readonly Group[] = ['waits', 'problem', 'working', 'idle']
 
-const WAITS_WORD = 'espera al GM'
-const STATE_WORDS: Record<string, string> = {
-  working: 'trabajando',
-  idle: 'en pausa',
-  blocked: WAITS_WORD,
-  stale: 'proceso muerto',
-  duplicate: 'duplicado',
-  failed: 'falló',
+type Plural = readonly [one: string, many: string]
+
+/** Every word the mod shows, in one language. Glyphs, times and PM names are not words and stay in the code. */
+type Text = Readonly<{
+  /** Each group's label in the summary, singular then plural. */
+  summary: Readonly<Record<Group, Plural>>
+  waitsWord: string
+  /** A PM's state as a word, by the state `coven pm status` prints. A state not listed is unknown. */
+  stateWords: Readonly<Record<string, string>>
+  unknownState: string
+  noMessages: string
+  awaitingReply: string
+  /** The mark on a card that changed lately. */
+  fresh: string
+  notDelivered: string
+  /** The tag on the current step of a card that waits. */
+  waitTag: string
+  noPlan: string
+  since: (time: string) => string
+  more: (count: number) => string
+  doneSteps: (count: number) => string
+  done: Plural
+  stopped: Plural
+  finished: string
+  nobody: string
+  reading: string
+  paneFailed: string
+  retrying: (seconds: number) => string
+  noPms: string
+  noPmsHint: string
+  rolePane: string
+  bandWaits: string
+  bandNobody: string
+  bandReading: string
+  bandFailed: string
+  exited: (command: string, code: number) => string
+  noAnswer: (command: string, seconds: number) => string
+  unknownError: string
+  commandDescription: string
+  opened: string
+  noSurface: string
+}>
+
+const TEXT: Record<'en' | 'es', Text> = {
+  en: {
+    summary: { waits: ['waits', 'wait'], problem: ['problem', 'problems'], working: ['working', 'working'], idle: ['paused', 'paused'] },
+    waitsWord: 'waits on the GM',
+    stateWords: {
+      working: 'working',
+      idle: 'paused',
+      blocked: 'waits on the GM',
+      stale: 'process dead',
+      duplicate: 'duplicate',
+      failed: 'failed',
+    },
+    unknownState: 'no data',
+    noMessages: 'no messages yet',
+    awaitingReply: 'waiting for an answer',
+    fresh: 'new',
+    notDelivered: 'not delivered',
+    waitTag: 'waits for your answer',
+    noPlan: 'no plan yet',
+    since: time => `since ${time}`,
+    more: count => `+${count} more`,
+    doneSteps: count => `${count} done`,
+    done: ['done', 'done'],
+    stopped: ['stopped', 'stopped'],
+    finished: 'finished',
+    nobody: 'No one working right now.',
+    reading: 'Reading the PMs…',
+    paneFailed: "Couldn't read the PMs",
+    retrying: seconds => `retrying in ${seconds} s`,
+    noPms: 'No PMs this week.',
+    noPmsHint: 'They show up here when one is launched from the GM.',
+    rolePane: "This pane only reads PMs in the GM's session.",
+    bandWaits: 'waits: ',
+    bandNobody: 'no one working right now',
+    bandReading: 'reading the PMs…',
+    bandFailed: "✕ couldn't read the PMs",
+    exited: (command, code) => `${command} exited with ${code}`,
+    noAnswer: (command, seconds) => `${command} did not answer in ${seconds} s`,
+    unknownError: 'could not read',
+    commandDescription: 'Open the aquelarre pane: the active PMs and what each one is doing',
+    opened: 'The aquelarre is open.',
+    noSurface: 'There is no surface for the pane right now.',
+  },
+  es: {
+    summary: { waits: ['espera', 'esperan'], problem: ['problema', 'problemas'], working: ['trabajando', 'trabajando'], idle: ['en pausa', 'en pausa'] },
+    waitsWord: 'espera al GM',
+    stateWords: {
+      working: 'trabajando',
+      idle: 'en pausa',
+      blocked: 'espera al GM',
+      stale: 'proceso muerto',
+      duplicate: 'duplicado',
+      failed: 'falló',
+    },
+    unknownState: 'sin datos',
+    noMessages: 'sin mensajes todavía',
+    awaitingReply: 'esperando respuesta',
+    fresh: 'nuevo',
+    notDelivered: 'no entregado',
+    waitTag: 'espera tu respuesta',
+    noPlan: 'sin plan todavía',
+    since: time => `desde ${time}`,
+    more: count => `+${count} más`,
+    doneSteps: count => `${count} hechas`,
+    done: ['terminada', 'terminadas'],
+    stopped: ['parada', 'paradas'],
+    finished: 'terminó',
+    nobody: 'Nadie trabajando ahora.',
+    reading: 'Leyendo los PMs…',
+    paneFailed: 'No pude leer los PMs',
+    retrying: seconds => `reintento en ${seconds} s`,
+    noPms: 'No hay PMs esta semana.',
+    noPmsHint: 'Aparecen aquí al lanzar uno desde el GM.',
+    rolePane: 'Este panel solo lee PMs en la sesión del GM.',
+    bandWaits: 'espera: ',
+    bandNobody: 'nadie trabajando ahora',
+    bandReading: 'leyendo los PMs…',
+    bandFailed: '✕ no pude leer los PMs',
+    exited: (command, code) => `${command} salió con ${code}`,
+    noAnswer: (command, seconds) => `${command} no respondió en ${seconds} s`,
+    unknownError: 'no se pudo leer',
+    commandDescription: 'Abre el panel del aquelarre: los PMs activos y qué hace cada uno',
+    opened: 'El aquelarre está abierto.',
+    noSurface: 'No hay superficie para el panel ahora.',
+  },
 }
-const UNKNOWN_STATE_WORD = 'sin datos'
-const NO_MESSAGES = 'sin mensajes todavía'
-const AWAITING_REPLY = 'esperando respuesta'
-const FRESH_MARK = '  • nuevo'
+
+/** What the person set in the mod's `userConfig`: the words, and whether the band and the toasts are on. */
+type Settings = Readonly<{ t: Text; hasBand: boolean; hasToasts: boolean }>
+
+/** The settings from the options `register` gets: a language other than Spanish is English, and a switch is on unless it is false. */
+function settingsFrom(options: Readonly<Record<string, unknown>>): Settings {
+  return { t: TEXT[options.language === 'es' ? 'es' : 'en'], hasBand: options.band !== false, hasToasts: options.toasts !== false }
+}
+
 const SUMMARY_JOINER = ' ⋆ '
 const NAME_GAP = 2
 const MAX_NAME_COLUMN = 16
 const INDENT = '  '
-const NOT_DELIVERED = 'no entregado'
 const MIN_WORD = 2
 const MIN_NAME = 2
 
@@ -218,13 +341,12 @@ function countByState(witches: readonly Witch[], state: string): number {
   return witches.filter(witch => witch.state === state).length
 }
 
-function restingLine(witches: readonly Witch[]): string {
+const plural = (count: number, [one, many]: Plural): string => `${count} ${count === 1 ? one : many}`
+
+function restingLine(witches: readonly Witch[], t: Text): string {
   const done = countByState(witches, 'done')
   const stopped = countByState(witches, 'stopped')
-  const parts = [
-    done > 0 && `${done} ${done === 1 ? 'terminada' : 'terminadas'}`,
-    stopped > 0 && `${stopped} ${stopped === 1 ? 'parada' : 'paradas'}`,
-  ].filter(Boolean)
+  const parts = [done > 0 && plural(done, t.done), stopped > 0 && plural(stopped, t.stopped)].filter(Boolean)
   return parts.length > 0 ? `⋆ ${parts.join(' · ')}` : ''
 }
 
@@ -259,18 +381,18 @@ function errorLine(err: unknown): string {
 
 type Attempt = { kind: 'read'; stdout: string } | { kind: 'failed'; error: string }
 
-async function attempt($: EngineInterface, argv: readonly string[]): Promise<Attempt> {
+async function attempt($: EngineInterface, argv: readonly string[], t: Text): Promise<Attempt> {
   const startedAt = await $.clock.now()
   try {
     const { exitCode, stdout, stderr } = await $.process.run(argv, { timeoutMs: STATUS_TIMEOUT_MS })
     if (exitCode === 0) return { kind: 'read', stdout }
-    const error = firstLine(stderr) || `${argv[0]} salió con ${exitCode}`
+    const error = firstLine(stderr) || t.exited(argv[0] ?? '', exitCode)
     return { kind: 'failed', error }
   } catch (err) {
     // `process.run` rejects both when the command cannot start and when it outlives its timeout, with
     // nothing to tell them apart: a rejection that came after the full timeout is the hung one.
     const isTimeout = (await $.clock.now()) - startedAt >= STATUS_TIMEOUT_MS
-    if (isTimeout) return { kind: 'failed', error: `${argv[0]} no respondió en ${STATUS_TIMEOUT_MS / 1000} s` }
+    if (isTimeout) return { kind: 'failed', error: t.noAnswer(argv[0] ?? '', STATUS_TIMEOUT_MS / 1000) }
     return { kind: 'failed', error: errorLine(err) }
   }
 }
@@ -363,30 +485,30 @@ function entryText(head: string, message: string, suffix = ''): string {
 }
 
 /** The message a toast for a PM that waits carries: what its card shows, as plain text. */
-function awaitedMessage(witch: Witch): string {
+function awaitedMessage(witch: Witch, t: Text): string {
   if (witch.asks.length === 0) return ''
   const item = awaitedItem(witch)
   if (!item) return plainMessage(witch.lastOut, witch.name)
-  return [item.ask.kind, item.ask.ref && shortRef(item.ask.ref, witch.name), AWAITING_REPLY].filter(Boolean).join(' ')
+  return [item.ask.kind, item.ask.ref && shortRef(item.ask.ref, witch.name), t.awaitingReply].filter(Boolean).join(' ')
 }
 
 const isDeadState = (witch: Witch) => classify(witch) === 'problem' && !LIVE_STATES.has(witch.state)
 
 /** The first entry that matches one PM in this read, or none. `before` is undefined for a PM new since the last read. */
-function entryFor(before: Witch | undefined, witch: Witch): Entry | undefined {
+function entryFor(before: Witch | undefined, witch: Witch, t: Text): Entry | undefined {
   const { name } = witch
   if (before && isDeadState(witch) && before.state !== witch.state) {
-    return { text: `✕ ${name} ${STATE_WORDS[witch.state] ?? UNKNOWN_STATE_WORD}`, isUrgent: true }
+    return { text: `✕ ${name} ${t.stateWords[witch.state] ?? t.unknownState}`, isUrgent: true }
   }
   if (classify(witch) === 'waits' && (!before || classify(before) !== 'waits')) {
-    return { text: entryText(`◆ ${name} ${WAITS_WORD}`, awaitedMessage(witch)), isUrgent: true }
+    return { text: entryText(`◆ ${name} ${t.waitsWord}`, awaitedMessage(witch, t)), isUrgent: true }
   }
   const isDoneOut = parseMessage(witch.lastOut)?.kind === 'DONE'
   const isFinished = witch.state === 'done' ? before?.state !== 'done' : isDoneOut && before?.lastOut !== witch.lastOut
   if (before && isFinished) {
     const message = isDoneOut ? plainMessage(witch.lastOut, name) : ''
-    const flag = isDoneOut && witch.isUndelivered ? ` · ${NOT_DELIVERED}` : ''
-    return { text: entryText(`✓ ${name} terminó`, message, flag), isUrgent: false }
+    const flag = isDoneOut && witch.isUndelivered ? ` · ${t.notDelivered}` : ''
+    return { text: entryText(`✓ ${name} ${t.finished}`, message, flag), isUrgent: false }
   }
   return undefined
 }
@@ -395,8 +517,9 @@ function entryFor(before: Witch | undefined, witch: Witch): Entry | undefined {
 export function toastFor(
   previous: readonly Witch[],
   current: readonly Witch[],
+  t: Text,
 ): { text: string; timeoutMs: number } | undefined {
-  const entries = current.flatMap(witch => entryFor(previous.find(old => old.name === witch.name), witch) ?? [])
+  const entries = current.flatMap(witch => entryFor(previous.find(old => old.name === witch.name), witch, t) ?? [])
   if (entries.length === 0) return undefined
   return {
     text: entries.map(entry => entry.text).join(TOAST_JOINER),
@@ -560,7 +683,7 @@ async function clearClaim($: EngineInterface, by: string): Promise<void> {
  * Takes a read, this window's own or one from the cache: parses it, reads the plans, marks what changed,
  * remembers it and raises the toast. A failed read sets the error and keeps the last good cards.
  */
-async function takeRead($: EngineInterface, shared: SharedRead): Promise<void> {
+async function takeRead($: EngineInterface, shared: SharedRead, { t, hasToasts }: Settings): Promise<void> {
   const isFailed = shared.error !== ''
   const parsed = isFailed ? [] : await readPlans($, parseStatus(shared.stdout))
   const now = await $.clock.now()
@@ -570,7 +693,7 @@ async function takeRead($: EngineInterface, shared: SharedRead): Promise<void> {
     toast = undefined
     if (isFailed) return { ...previous, error: shared.error }
     // The first good read has nothing to compare with, so it is never news.
-    if (previous.checkedAt !== '') toast = toastFor(previous.witches, parsed)
+    if (hasToasts && previous.checkedAt !== '') toast = toastFor(previous.witches, parsed, t)
     return {
       witches: markChanges(previous.witches, parsed, now),
       checkedAt: clockTime(now),
@@ -587,8 +710,8 @@ const isNewRead = (now: number, shared: SharedRead, last: ReadStamp): boolean =>
   shared.at <= now && (last.at > now || shared.at > last.at)
 
 /** Takes the cache when this window has not taken a read as new as it. */
-async function takeCached($: EngineInterface, now: number, cached: SharedRead | undefined): Promise<void> {
-  if (cached && isNewRead(now, cached, await read($, lastRead))) await takeRead($, cached)
+async function takeCached($: EngineInterface, now: number, cached: SharedRead | undefined, settings: Settings): Promise<void> {
+  if (cached && isNewRead(now, cached, await read($, lastRead))) await takeRead($, cached, settings)
 }
 
 const stampOf = ({ at, fingerprint, error }: SharedRead): ReadStamp => ({ at, fingerprint, isFailed: error !== '' })
@@ -607,7 +730,7 @@ function isShared(now: number, shared: SharedRead): boolean {
 }
 
 /** The status command's result in the shape the windows share. */
-function sharedRead(result: Attempt, began: number, at: number, fingerprint: string | undefined): SharedRead {
+function sharedRead(result: Attempt, began: number, at: number, fingerprint: string | undefined, t: Text): SharedRead {
   const isRead = result.kind === 'read'
   return {
     version: CACHE_VERSION,
@@ -616,7 +739,7 @@ function sharedRead(result: Attempt, began: number, at: number, fingerprint: str
     fingerprint: fingerprint ?? null,
     stdout: isRead ? result.stdout : '',
     // A failure always has a reason: an empty one would read back as a good read.
-    error: isRead ? '' : result.error || UNKNOWN_ERROR,
+    error: isRead ? '' : result.error || t.unknownError,
   }
 }
 
@@ -627,7 +750,7 @@ function sharedRead(result: Attempt, began: number, at: number, fingerprint: str
  * cache if there is one and leaves the rest to the next due tick.
  * `isAsked` is `/aquelarre`: it skips the change check and takes a cache only when it is newer than its last read.
  */
-async function look($: EngineInterface, startedAt: number, isAsked: boolean): Promise<void> {
+async function look($: EngineInterface, startedAt: number, isAsked: boolean, settings: Settings): Promise<void> {
   // Taken before the command: a job that changes while it runs is read again on the next due tick.
   const fingerprint = await jobsFingerprint($)
   const cached = await readCache($)
@@ -635,24 +758,24 @@ async function look($: EngineInterface, startedAt: number, isAsked: boolean): Pr
   const isUsable = isAsked
     ? cached && isNewRead(startedAt, cached, last)
     : cached && (isShared(startedAt, cached) || !isReadNeeded(startedAt, stampOf(cached), fingerprint))
-  if (cached && isUsable) return takeCached($, startedAt, cached)
+  if (cached && isUsable) return takeCached($, startedAt, cached, settings)
   if (!isAsked && !isReadNeeded(startedAt, last, fingerprint)) {
     // A failed read newer than this window's own is news, even when its own jobs are unchanged.
-    if (cached?.error) await takeCached($, startedAt, cached)
+    if (cached?.error) await takeCached($, startedAt, cached, settings)
     return
   }
   const by = await $.session.id().catch(() => '')
-  if (by !== '' && !(await claimRead($, by, startedAt))) return takeCached($, startedAt, cached)
+  if (by !== '' && !(await claimRead($, by, startedAt))) return takeCached($, startedAt, cached, settings)
   const began = await $.clock.now()
-  const result = await attempt($, STATUS_COMMAND)
-  const shared = sharedRead(result, began, await $.clock.now(), fingerprint)
+  const result = await attempt($, STATUS_COMMAND, settings.t)
+  const shared = sharedRead(result, began, await $.clock.now(), fingerprint, settings.t)
   await writeCache($, shared)
   await clearClaim($, by)
-  await takeRead($, shared)
+  await takeRead($, shared, settings)
 }
 
 /** A look that sets the read flag for its length, so that no second one runs beside it. */
-async function readCircle($: EngineInterface, isAsked = false): Promise<void> {
+async function readCircle($: EngineInterface, settings: Settings, isAsked = false): Promise<void> {
   let isClaimed = false
   const startedAt = await $.clock.now()
   await update($, isReading, was => {
@@ -662,7 +785,7 @@ async function readCircle($: EngineInterface, isAsked = false): Promise<void> {
   if (!isClaimed) return
   try {
     await update($, readStartedAt, () => startedAt)
-    await look($, startedAt, isAsked)
+    await look($, startedAt, isAsked, settings)
   } finally {
     await update($, isReading, () => false)
   }
@@ -684,9 +807,9 @@ async function isReadDue($: EngineInterface): Promise<boolean> {
 }
 
 /** One timer period: reads when one is due. A failure becomes the circle's error, never a loose rejection. */
-async function tick($: EngineInterface): Promise<void> {
+async function tick($: EngineInterface, settings: Settings): Promise<void> {
   try {
-    if (await isReadDue($)) await readCircle($)
+    if (await isReadDue($)) await readCircle($, settings)
   } catch (err) {
     const error = errorLine(err)
     // The timer must go on and there is no one left to tell: if even recording the failure throws, drop it.
@@ -694,7 +817,8 @@ async function tick($: EngineInterface): Promise<void> {
   }
 }
 
-type Parts = Pick<ReturnType<EngineInterface['ui']['resolve']>, 'Box' | 'Text'>
+/** What the draw functions share: the engine's `Box` and `Text`, and the words to print. */
+type Parts = Pick<ReturnType<EngineInterface['ui']['resolve']>, 'Box' | 'Text'> & { t: Text }
 
 // shortcut: widths are string lengths, right for the single-width glyphs and Latin names a PM has; upgrade when a name is wide text.
 /** `text` cut to `width`, with `…` as its last character when something went. */
@@ -709,13 +833,13 @@ function gapBetween(usedWidth: number, columns: number): string {
 }
 
 /** Words and counts per group when they fit `columns`, else glyph and count only: the cards carry the words. */
-function summaryLine({ Text }: Parts, live: readonly Live[], columns: number) {
-  if (live.length === 0) return <Text color="inactive">Nadie trabajando ahora.</Text>
+function summaryLine({ Text, t }: Parts, live: readonly Live[], columns: number) {
+  if (live.length === 0) return <Text color="inactive">{t.nobody}</Text>
   const present = URGENCY.flatMap(group => {
     const count = live.filter(one => one.group === group).length
     if (count === 0) return []
-    const { glyph, color, summary } = GROUPS[group]
-    return [{ color, short: `${glyph} ${count}`, long: `${glyph} ${count} ${summary[count === 1 ? 0 : 1]}` }]
+    const { glyph, color } = GROUPS[group]
+    return [{ color, short: `${glyph} ${count}`, long: `${glyph} ${plural(count, t.summary[group])}` }]
   })
   const isWide = present.map(({ long }) => long).join(SUMMARY_JOINER).length <= columns
   return (
@@ -734,13 +858,13 @@ function shortRef(ref: string, own: string): string {
 }
 
 /** What the card's right edge says: since when it waits, else how long the PM has been in its state. */
-function rightEdge({ witch, group }: Live): string {
+function rightEdge({ witch, group }: Live, t: Text): string {
   const since = group === 'waits' ? witch.asks[0]?.time : undefined
-  return since && since !== '?' ? `desde ${since}` : witch.age
+  return since && since !== '?' ? t.since(since) : witch.age
 }
 
-function stateWord({ witch, group }: Live): string {
-  return group === 'waits' ? WAITS_WORD : (STATE_WORDS[witch.state] ?? UNKNOWN_STATE_WORD)
+function stateWord({ witch, group }: Live, t: Text): string {
+  return group === 'waits' ? t.waitsWord : (t.stateWords[witch.state] ?? t.unknownState)
 }
 
 /** The longest live name plus a gap, at most MAX_NAME_COLUMN. */
@@ -764,14 +888,14 @@ function fitLeft(name: string, word: string, mark: string, nameWidth: number, ro
   return { name: cut(name, Math.max(MIN_NAME, Math.min(room, nameRoom))), word: '', mark: '' }
 }
 
-function headline({ Text }: Parts, one: Live, now: number, columns: number, nameWidth: number) {
+function headline({ Text, t }: Parts, one: Live, now: number, columns: number, nameWidth: number) {
   const { witch, group } = one
   const look = GROUPS[group]
   const glyph = `${look.glyph} `
-  const edge = rightEdge(one)
+  const edge = rightEdge(one, t)
   // The glyph and its space, and a gap of at least one space before the right edge, are always kept.
   const room = columns - glyph.length - edge.length - 1
-  const left = fitLeft(witch.name, stateWord(one), witch.freshUntil > now ? FRESH_MARK : '', nameWidth, room)
+  const left = fitLeft(witch.name, stateWord(one, t), witch.freshUntil > now ? `  • ${t.fresh}` : '', nameWidth, room)
   const leftWidth = glyph.length + left.name.length + left.word.length + left.mark.length
   return (
     <Text wrap="truncate-end">
@@ -787,26 +911,26 @@ function headline({ Text }: Parts, one: Live, now: number, columns: number, name
   )
 }
 
-/** `KIND refs · no entregado  `: the kind in its colour, the refs in `subtle`, the flag right after them. */
-function messageHead({ Text }: Parts, kind: string, refs: readonly string[], own: string, isUndelivered: boolean) {
+/** `KIND refs · not delivered  `: the kind in its colour, the refs in `subtle`, the flag right after them. */
+function messageHead({ Text, t }: Parts, kind: string, refs: readonly string[], own: string, isUndelivered: boolean) {
   return [
     <Text bold color={KIND_COLORS[kind] ?? 'inactive'}>
       {kind}
     </Text>,
     ...(refs.length > 0 ? [' ', <Text color="subtle">{refs.map(ref => shortRef(ref, own)).join(' ')}</Text>] : []),
-    isUndelivered && <Text color="error">{` · ${NOT_DELIVERED}`}</Text>,
+    isUndelivered && <Text color="error">{` · ${t.notDelivered}`}</Text>,
     '  ',
   ]
 }
 
 /** A message line as a card shows it: parsed into its parts, or as written when it does not parse. */
 function printed(parts: Parts, line: string, own: string, isUndelivered: boolean) {
-  const { Text } = parts
+  const { Text, t } = parts
   const message = parseMessage(line)
   if (message) {
     return [...messageHead(parts, message.kind, message.refs, own, isUndelivered), <Text color="inactive">{message.text}</Text>]
   }
-  return [isUndelivered && <Text color="error">{`${NOT_DELIVERED}  `}</Text>, <Text color="inactive">{line}</Text>]
+  return [isUndelivered && <Text color="error">{`${t.notDelivered}  `}</Text>, <Text color="inactive">{line}</Text>]
 }
 
 /**
@@ -827,18 +951,18 @@ function awaitedItem(witch: Witch): { ask: Ask; others: number } | undefined {
  * last out, else its last in. The not-delivered flag belongs to the last out, so only that line carries it.
  */
 function messageBody(parts: Parts, { witch }: Live) {
-  const { Text } = parts
+  const { Text, t } = parts
   const item = awaitedItem(witch)
   if (item) {
     return [
       ...messageHead(parts, item.ask.kind, [item.ask.ref], witch.name, false),
-      <Text color="inactive">{AWAITING_REPLY}</Text>,
-      item.others > 0 && <Text color="inactive">{` +${item.others} más`}</Text>,
+      <Text color="inactive">{t.awaitingReply}</Text>,
+      item.others > 0 && <Text color="inactive">{` ${t.more(item.others)}`}</Text>,
     ]
   }
   if (witch.lastOut) return printed(parts, witch.lastOut, witch.name, witch.isUndelivered)
   if (witch.lastIn) return printed(parts, witch.lastIn, witch.name, false)
-  const fallback = STATE_WORDS[witch.state] === undefined ? witch.state : NO_MESSAGES
+  const fallback = t.stateWords[witch.state] === undefined ? witch.state : t.noMessages
   return [<Text color="inactive">{fallback}</Text>]
 }
 
@@ -857,14 +981,13 @@ const STEP_MARKS = { done: '✓', now: '▸', next: '·' } as const
 const SUBJECT_COLUMN = `${INDENT}${STEP_MARKS.now} `.length
 const MAX_DONE_SHOWN = 2
 const MAX_NEXT_SHOWN = 3
-const WAIT_TAG = `${INDENT}◆ espera tu respuesta`
 const SHORT_WAIT_TAG = `${INDENT}◆`
 const MIN_SUBJECT = 20
-const NO_PLAN = 'sin plan todavía'
 
 /** The tag on a waiting card's first current step; the short one when the full tag leaves the subject too little. */
-function waitTag(columns: number): string {
-  return columns - SUBJECT_COLUMN - WAIT_TAG.length >= MIN_SUBJECT ? WAIT_TAG : SHORT_WAIT_TAG
+function waitTag(columns: number, t: Text): string {
+  const whole = `${INDENT}◆ ${t.waitTag}`
+  return columns - SUBJECT_COLUMN - whole.length >= MIN_SUBJECT ? whole : SHORT_WAIT_TAG
 }
 
 function stepLine({ Text }: Parts, step: Step, columns: number, tag = '') {
@@ -888,17 +1011,17 @@ function stepLine({ Text }: Parts, step: Step, columns: number, tag = '') {
 
 /** The plan's rows: done steps (folded past two), the current ones, the next three and how many more. */
 function planLines(parts: Parts, { witch, group }: Live, columns: number) {
-  const { Text } = parts
+  const { Text, t } = parts
   const byStatus = (status: Step['status']) => witch.plan.filter(step => step.status === status)
   const finished = byStatus('done')
   const nowSteps = byStatus('now')
   const upcoming = byStatus('next')
-  const tag = group === 'waits' ? waitTag(columns) : ''
+  const tag = group === 'waits' ? waitTag(columns, t) : ''
   const folded = finished.length > MAX_DONE_SHOWN
   return [
     folded ? (
       <Text color="subtle" wrap="truncate-end">
-        {cut(`${INDENT}${STEP_MARKS.done} ${finished.length} hechas`, columns)}
+        {cut(`${INDENT}${STEP_MARKS.done} ${t.doneSteps(finished.length)}`, columns)}
       </Text>
     ) : (
       finished.map(step => stepLine(parts, step, columns))
@@ -907,21 +1030,21 @@ function planLines(parts: Parts, { witch, group }: Live, columns: number) {
     upcoming.slice(0, MAX_NEXT_SHOWN).map(step => stepLine(parts, step, columns)),
     upcoming.length > MAX_NEXT_SHOWN && (
       <Text color="suggestion" wrap="truncate-end">
-        {cut(`${' '.repeat(SUBJECT_COLUMN)}+${upcoming.length - MAX_NEXT_SHOWN} más`, columns)}
+        {cut(`${' '.repeat(SUBJECT_COLUMN)}${t.more(upcoming.length - MAX_NEXT_SHOWN)}`, columns)}
       </Text>
     ),
   ]
 }
 
-/** A card's body: its plan, or `sin plan todavía`; then the message line when there is no plan, it waits or it has asks. */
+/** A card's body: its plan, or its `noPlan` text; then the message line when there is no plan, it waits or it has asks. */
 function cardBody(parts: Parts, one: Live, columns: number) {
-  const { Text } = parts
+  const { Text, t } = parts
   const hasPlan = one.witch.plan.length > 0
   const hasMessage = !hasPlan || one.group === 'waits' || one.witch.asks.length > 0
   return [
     hasPlan ? planLines(parts, one, columns) : (
       <Text color="subtle" wrap="truncate-end">
-        {`${INDENT}${NO_PLAN}`}
+        {`${INDENT}${t.noPlan}`}
       </Text>
     ),
     hasMessage && detailLine(parts, one),
@@ -963,37 +1086,37 @@ function footerLine({ Text }: Parts, resting: string, checkedAt: string, columns
   )
 }
 
-function errorBlock({ Box, Text }: Parts, error: string) {
+function errorBlock({ Box, Text, t }: Parts, error: string) {
   return (
     <Box flexDirection="column">
-      <Text color="error">✕ No pude leer los PMs</Text>
+      <Text color="error">{`✕ ${t.paneFailed}`}</Text>
       <Text color="inactive" wrap="truncate-end">
         {error}
       </Text>
-      <Text color="subtle">{`reintento en ${REFRESH_MS / 1000} s`}</Text>
+      <Text color="subtle">{t.retrying(REFRESH_MS / 1000)}</Text>
     </Box>
   )
 }
 
-function emptyBlock({ Box, Text }: Parts) {
+function emptyBlock({ Box, Text, t }: Parts) {
   return (
     <Box flexDirection="column">
-      <Text color="inactive">No hay PMs esta semana.</Text>
-      <Text color="inactive">Aparecen aquí al lanzar uno desde el GM.</Text>
+      <Text color="inactive">{t.noPms}</Text>
+      <Text color="inactive">{t.noPmsHint}</Text>
     </Box>
   )
 }
 
 /** The pane's dock and inline view: summary, cards by urgency, then the footer with the resting counts. */
 function fullView(parts: Parts, { witches, checkedAt, error }: Circle, now: number, columns: number) {
-  const { Box, Text } = parts
+  const { Box, Text, t } = parts
   const live = liveByUrgency(witches)
-  const resting = restingLine(witches)
+  const resting = restingLine(witches, t)
   const hasRead = checkedAt !== ''
   return (
     <Box flexDirection="column">
       {error && errorBlock(parts, error)}
-      {!hasRead && !error && <Text color="inactive">Leyendo los PMs…</Text>}
+      {!hasRead && !error && <Text color="inactive">{t.reading}</Text>}
       {hasRead && witches.length === 0 && emptyBlock(parts)}
       {witches.length > 0 && <Box marginTop={error ? 1 : 0}>{summaryLine(parts, live, columns)}</Box>}
       {live.length > 0 && (
@@ -1008,13 +1131,13 @@ function fullView(parts: Parts, { witches, checkedAt, error }: Circle, now: numb
 
 /** The desktop widget: only the summary and the time of the last read, or why there is none. */
 function widgetView(parts: Parts, { witches, checkedAt, error }: Circle, columns: number) {
-  const { Box, Text } = parts
+  const { Box, Text, t } = parts
   const hasRead = checkedAt !== ''
   return (
     <Box flexDirection="column">
-      {error && <Text color="error">✕ No pude leer los PMs</Text>}
-      {!hasRead && !error && <Text color="inactive">Leyendo los PMs…</Text>}
-      {hasRead && witches.length === 0 && <Text color="inactive">No hay PMs esta semana.</Text>}
+      {error && <Text color="error">{`✕ ${t.paneFailed}`}</Text>}
+      {!hasRead && !error && <Text color="inactive">{t.reading}</Text>}
+      {hasRead && witches.length === 0 && <Text color="inactive">{t.noPms}</Text>}
       {witches.length > 0 && summaryLine(parts, liveByUrgency(witches), columns)}
       {hasRead && <Text color="subtle">{`↻ ${checkedAt}`}</Text>}
     </Box>
@@ -1026,32 +1149,29 @@ type Piece = { text: string; color: string; isBold?: boolean }
 
 const BAND_MARK = '☾ '
 const BAND_JOINER = '  '
-const BAND_READING = 'leyendo los PMs…'
-const BAND_NOBODY = 'nadie trabajando ahora'
-const BAND_FAILED = '✕ no pude leer los PMs'
 
 const piecesWidth = (pieces: readonly Piece[]): number => pieces.reduce((sum, { text }) => sum + text.length, 0)
 
 /** One group's entry: the names for who waits or has a problem, the count for the rest. */
-function bandEntry(group: Group, live: readonly Live[], isWide: boolean): Piece {
-  const { glyph, color, summary } = GROUPS[group]
+function bandEntry(group: Group, live: readonly Live[], isWide: boolean, t: Text): Piece {
+  const { glyph, color } = GROUPS[group]
   const inGroup = live.filter(one => one.group === group)
   const names = inGroup.map(({ witch }) => witch.name).join(', ')
-  if (group === 'waits') return { text: `${glyph} ${isWide ? 'espera: ' : ''}${names}`, color, isBold: true }
+  if (group === 'waits') return { text: `${glyph} ${isWide ? t.bandWaits : ''}${names}`, color, isBold: true }
   if (isWide && group === 'problem') return { text: `${glyph} ${names}`, color }
   const count = inGroup.length
-  return { text: `${glyph} ${count}${isWide ? ` ${summary[count === 1 ? 0 : 1]}` : ''}`, color }
+  return { text: `${glyph} ${isWide ? plural(count, t.summary[group]) : count}`, color }
 }
 
 /** The left side of the band: the mark, then what the circle says, in the wide or the compact form. */
-function bandLeft({ witches, checkedAt, error }: Circle, isWide: boolean): Piece[] {
+function bandLeft({ witches, checkedAt, error }: Circle, isWide: boolean, t: Text): Piece[] {
   const mark: Piece = { text: BAND_MARK, color: 'suggestion' }
-  if (checkedAt === '') return [mark, error ? { text: BAND_FAILED, color: 'error' } : { text: BAND_READING, color: 'subtle' }]
+  if (checkedAt === '') return [mark, error ? { text: t.bandFailed, color: 'error' } : { text: t.bandReading, color: 'subtle' }]
   const live = liveByUrgency(witches)
-  if (live.length === 0) return [mark, { text: BAND_NOBODY, color: 'subtle' }]
+  if (live.length === 0) return [mark, { text: t.bandNobody, color: 'subtle' }]
   const groups = URGENCY.filter(group => live.some(one => one.group === group))
   const joiner: Piece = { text: isWide ? SUMMARY_JOINER : BAND_JOINER, color: 'subtle' }
-  return [mark, ...groups.flatMap((group, index) => [...(index > 0 ? [joiner] : []), bandEntry(group, live, isWide)])]
+  return [mark, ...groups.flatMap((group, index) => [...(index > 0 ? [joiner] : []), bandEntry(group, live, isWide, t)])]
 }
 
 /** The time of the last good read; `✕` in place of `↻` when the read after it failed. HH:MM when compact. */
@@ -1081,8 +1201,8 @@ const formWidth = ({ left, time }: Form): number => piecesWidth(left) + (time ? 
  * The band's one row. The wide form is used when it and its time fit `columns`, else the compact one;
  * when the compact one does not fit with its time the time goes, and when it does not fit alone it is cut.
  */
-function bandView({ Text }: Parts, state: Circle, columns: number) {
-  const formOf = (isWide: boolean): Form => ({ left: bandLeft(state, isWide), time: bandTime(state, isWide) })
+function bandView({ Text, t }: Parts, state: Circle, columns: number) {
+  const formOf = (isWide: boolean): Form => ({ left: bandLeft(state, isWide, t), time: bandTime(state, isWide) })
   const wide = formOf(true)
   const form = formWidth(wide) <= columns ? wide : formOf(false)
   const time = formWidth(form) <= columns ? form.time : undefined
@@ -1101,20 +1221,20 @@ function bandView({ Text }: Parts, state: Circle, columns: number) {
   )
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const settings = settingsFrom(options)
+  const { t } = settings
+
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'aquelarre',
-      description: 'Abre el panel del aquelarre: los PMs activos y qué hace cada uno',
-    })
+    await $.command.register({ name: 'aquelarre', description: t.commandDescription })
     // A reload can leave isReading set with no read behind it.
     await update($, isReading, () => false)
     // A role session cannot run `pm status`: it never polls.
     if (!(await isRoleSession($))) {
-      $.clock.every(REFRESH_MS, () => tick($))
+      $.clock.every(REFRESH_MS, () => tick($, settings))
       // The band should not say it is reading for a whole period. Not awaited: `tick` never rejects, and
       // the session does not wait for the read.
-      void tick($)
+      void tick($, settings)
     }
     return next(e)
   })
@@ -1122,20 +1242,21 @@ export const register: Register = on => {
   on('command.run', { command: 'aquelarre' }, async $ => {
     // Open first: the pane says it is reading at once instead of after the whole read.
     const opened = await $.ui.open({ id: PANE, title: TITLE, backgroundColor: 'transparent', columns: PANE_COLUMNS })
-    if (!(await isRoleSession($))) await readCircle($, true)
-    return { text: opened.isPlaced ? 'El aquelarre está abierto.' : 'No hay superficie para el panel ahora.' }
+    if (!(await isRoleSession($))) await readCircle($, settings, true)
+    return { text: opened.isPlaced ? t.opened : t.noSurface }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Another plugin's row, a survey, and a role session (which never reads) are not the band's to draw.
-    if (e.plugin !== 'aquelarre' || e.props.hasSurvey || (await isRoleSession($))) return next(e)
-    return bandView($.ui.resolve(e), await read($, circle), e.props.bodyColumns)
+    // The band switched off, another plugin's row, a survey, and a role session (which never reads) are not the band's to draw.
+    if (!settings.hasBand || e.plugin !== 'aquelarre' || e.props.hasSurvey || (await isRoleSession($))) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return bandView({ Box, Text, t }, await read($, circle), e.props.bodyColumns)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const parts = $.ui.resolve(e)
-    const { Text } = parts
-    if (await isRoleSession($)) return <Text color="inactive">Este panel solo lee PMs en la sesión del GM.</Text>
+    const { Box, Text } = $.ui.resolve(e)
+    const parts: Parts = { Box, Text, t }
+    if (await isRoleSession($)) return <Text color="inactive">{t.rolePane}</Text>
     const state = await read($, circle)
     const now = await $.clock.now()
     const { placement, bodyColumns } = e.props

@@ -383,7 +383,7 @@ const MIXED = status(
   pm({ name: 'napper', state: 'stopped', age: '5d' }),
 )
 
-test('the summary counts the live PMs by what they are doing', async ($, on) => {
+test('the summary counts the live PMs by what they are doing', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: MIXED })
   await started($)
 
@@ -409,7 +409,7 @@ test('PMs are ordered waits-on-GM, problems, working, idle', async ($, on) => {
   await ui.unmount()
 })
 
-test('a working PM that waits on the GM is listed with the ones waiting', async ($, on) => {
+test('a working PM that waits on the GM is listed with the ones waiting', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -464,7 +464,7 @@ test('the pm- prefix is dropped from names', async ($, on) => {
 
 const waitsOn = (...asks: string[]) => `waits on GM: ${asks.join(', ')}`
 
-test('a card that waits shows its last message when that message is the first thing it waits on', async ($, on) => {
+test('a card that waits shows its last message when that message is the first thing it waits on', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -493,7 +493,7 @@ const NOT_THE_FIRST_ASK = [
 ]
 
 for (const [name, out] of NOT_THE_FIRST_ASK) {
-  test(`a card that waits names what it awaits when its last message is not it (${name})`, async ($, on) => {
+  test(`a card that waits names what it awaits when its last message is not it (${name})`, { options: { language: 'es' } }, async ($, on) => {
     const lines = out ? [waitsOn('QUESTION coven/6 since 01:43'), lastOut(out)] : [waitsOn('QUESTION coven/6 since 01:43')]
     stage(on, { stdout: status(pm({ name: 'coven', state: 'blocked', lines })) })
     await started($)
@@ -508,7 +508,7 @@ for (const [name, out] of NOT_THE_FIRST_ASK) {
   })
 }
 
-test('a card that waits on several things adds how many more', async ($, on) => {
+test('a card that waits on several things adds how many more', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -531,7 +531,7 @@ test('a card that waits on several things adds how many more', async ($, on) => 
   await ui.unmount()
 })
 
-test('a matching last message is shown without a count of the other things it waits on', async ($, on) => {
+test('a matching last message is shown without a count of the other things it waits on', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -553,7 +553,7 @@ test('a matching last message is shown without a count of the other things it wa
   await ui.unmount()
 })
 
-test('a dead PM stays a problem even with a waits line, and names what it waited on like a waits card', async ($, on) => {
+test('a dead PM stays a problem even with a waits line, and names what it waited on like a waits card', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -765,7 +765,7 @@ test('only an APPROVED message has an approval id after its ref', async ($, on) 
   await ui.unmount()
 })
 
-test('a waits card compares its last message with the first key of the message', async ($, on) => {
+test('a waits card compares its last message with the first key of the message', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -808,7 +808,7 @@ test('a message cut to 200 characters by coven keeps its text and its ellipsis',
   await ui.unmount()
 })
 
-test('a message not delivered carries its flag right after the ref, so a long text cannot push it off', async ($, on) => {
+test('a message not delivered carries its flag right after the ref, so a long text cannot push it off', { options: { language: 'es' } }, async ($, on) => {
   const long = 'long '.repeat(60)
   stage(on, { stdout: status(pm({ name: 'magic', state: 'working', lines: [`last out: 00:10 BLOCKED magic/1: ${long}  [NOT DELIVERED: x]`] })) })
   await started($)
@@ -819,7 +819,7 @@ test('a message not delivered carries its flag right after the ref, so a long te
   await ui.unmount()
 })
 
-test('the not-delivered flag shows on a waits card only when the card shows that last message', async ($, on) => {
+test('the not-delivered flag shows on a waits card only when the card shows that last message', { options: { language: 'es' } }, async ($, on) => {
   const undelivered = (out: string) => `last out: ${out}   [NOT DELIVERED: never sent]`
   stage(
     on,
@@ -851,7 +851,7 @@ test('the not-delivered flag shows on a waits card only when the card shows that
   await ui.unmount()
 })
 
-test('a last message that does not parse shows the not-delivered flag in front, where it cannot be cut off', async ($, on) => {
+test('a last message that does not parse shows the not-delivered flag in front, where it cannot be cut off', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(pm({ name: 'coven', state: 'working', lines: ['last out: something odd happened   [NOT DELIVERED: x]'] })) })
   await started($)
 
@@ -892,7 +892,7 @@ for (const line of NOT_A_MESSAGE) {
   })
 }
 
-test('a message not delivered keeps its text and adds the flag in error', async ($, on) => {
+test('a message not delivered keeps its text and adds the flag in error', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     { stdout: status(pm({ name: 'magic', state: 'working', lines: ['last out: 00:10 BLOCKED magic/1: no repo access   [NOT DELIVERED: never sent]'] })) },
@@ -907,7 +907,7 @@ test('a message not delivered keeps its text and adds the flag in error', async 
   await ui.unmount()
 })
 
-test('a message that only quotes a NOT DELIVERED flag is not marked as undelivered', async ($, on) => {
+test('a message that only quotes a NOT DELIVERED flag is not marked as undelivered', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     { stdout: status(pm({ name: 'coven', state: 'working', lines: [lastOut('10:00 DONE coven/1: saw [NOT DELIVERED: old] earlier')] })) },
@@ -923,7 +923,7 @@ test('a message that only quotes a NOT DELIVERED flag is not marked as undeliver
   await ui.unmount()
 })
 
-test('a NOT DELIVERED reason that contains a bracket is still cut off the message', async ($, on) => {
+test('a NOT DELIVERED reason that contains a bracket is still cut off the message', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     { stdout: status(pm({ name: 'lost', state: 'idle', lines: ['last out: 10:00 DONE x/1: thing   [NOT DELIVERED: bad [x] thing]'] })) },
@@ -939,7 +939,7 @@ test('a NOT DELIVERED reason that contains a bracket is still cut off the messag
   await ui.unmount()
 })
 
-test('a line that is not indented and not a header does not feed the PM above it', async ($, on) => {
+test('a line that is not indented and not a header does not feed the PM above it', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -961,7 +961,7 @@ test('a line that is not indented and not a header does not feed the PM above it
   await ui.unmount()
 })
 
-test('a card without messages says so', async ($, on) => {
+test('a card without messages says so', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   await started($)
 
@@ -985,7 +985,7 @@ test('the detail line is cut at the pane width, not wrapped', async ($, on) => {
   await ui.unmount()
 })
 
-test('a message that was not delivered says "no entregado" and counts as a problem', async ($, on) => {
+test('a message that was not delivered says "no entregado" and counts as a problem', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -1008,7 +1008,7 @@ test('a message that was not delivered says "no entregado" and counts as a probl
   await ui.unmount()
 })
 
-test('a state the pane does not know shows as "sin datos" with the raw state as detail', async ($, on) => {
+test('a state the pane does not know shows as "sin datos" with the raw state as detail', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(pm({ name: 'ghost', state: 'unknown (no transcript)', age: '' })) })
   await started($)
 
@@ -1020,7 +1020,7 @@ test('a state the pane does not know shows as "sin datos" with the raw state as 
   await ui.unmount()
 })
 
-test('lines the pane has no use for do not break the cards', async ($, on) => {
+test('lines the pane has no use for do not break the cards', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -1037,7 +1037,7 @@ test('lines the pane has no use for do not break the cards', async ($, on) => {
   await ui.unmount()
 })
 
-test('done and stopped PMs show only as counts', async ($, on) => {
+test('done and stopped PMs show only as counts', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: MIXED })
   await started($)
 
@@ -1065,7 +1065,7 @@ const ONE_OF_EACH = status(
   pm({ name: 'nap', state: 'idle' }),
 )
 
-test('the summary spells the words out, joined by a subtle ⋆, when they fit the pane', async ($, on) => {
+test('the summary spells the words out, joined by a subtle ⋆, when they fit the pane', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: ONE_OF_EACH })
   await started($)
 
@@ -1079,7 +1079,7 @@ test('the summary spells the words out, joined by a subtle ⋆, when they fit th
   await ui.unmount()
 })
 
-test('the summary uses the plural labels for more than one', async ($, on) => {
+test('the summary uses the plural labels for more than one', { options: { language: 'es' } }, async ($, on) => {
   const two = (name: string, state: string) => [pm({ name: `${name}1`, state }), pm({ name: `${name}2`, state })]
   stage(on, { stdout: status(...two('asks', 'blocked'), ...two('dead', 'stale'), ...two('busy', 'working'), ...two('nap', 'idle')) })
   await started($)
@@ -1104,7 +1104,7 @@ test('the summary shrinks to glyph and count, in its colours, when the words do 
   await ui.unmount()
 })
 
-test('the summary keeps its words at exactly the width they take, and shrinks one column below', async ($, on) => {
+test('the summary keeps its words at exactly the width they take, and shrinks one column below', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: ONE_OF_EACH })
   await started($)
 
@@ -1117,7 +1117,7 @@ test('the summary keeps its words at exactly the width they take, and shrinks on
   await narrower.unmount()
 })
 
-test('with nobody live the summary says nobody works', async ($, on) => {
+test('with nobody live the summary says nobody works', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(pm({ name: 'lilthop', state: 'done', age: '1d' })) })
   await started($)
 
@@ -1140,7 +1140,7 @@ const NAME_COLUMN = (name: string) => `${name.padEnd(13)}`
 const starRule = (width: number) => `⋆${'─'.repeat(width - 2)}⋆`
 
 for (const width of [61, 40, 100]) {
-  test(`the name column and the right edge line up at ${width} columns`, async ($, on) => {
+  test(`the name column and the right edge line up at ${width} columns`, { options: { language: 'es' } }, async ($, on) => {
     stage(
       on,
       {
@@ -1168,7 +1168,7 @@ for (const width of [61, 40, 100]) {
   })
 }
 
-test('a name longer than the name column is cut with an ellipsis', async ($, on) => {
+test('a name longer than the name column is cut with an ellipsis', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     { stdout: status(pm({ name: 'a-very-long-project-name', state: 'working', age: '3m' }), pm({ name: 'ab', state: 'working', age: '9m' })) },
@@ -1183,7 +1183,7 @@ test('a name longer than the name column is cut with an ellipsis', async ($, on)
   await ui.unmount()
 })
 
-test('when the row does not fit the gap shrinks to one space and the state word is cut first', async ($, on) => {
+test('when the row does not fit the gap shrinks to one space and the state word is cut first', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(pm({ name: 'coven', state: 'blocked', lines: [waitsOn('QUESTION coven/6 since 09:00')] })) })
   await started($)
 
@@ -1202,7 +1202,7 @@ async function makeNew(world: Stage, stdout: string) {
   await world.clock.advance(READ_MS)
 }
 
-test('at 24 columns the time stays whole and the state word goes', async ($, on) => {
+test('at 24 columns the time stays whole and the state word goes', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(ASKING('aquelarre')) })
   await started($)
 
@@ -1212,7 +1212,7 @@ test('at 24 columns the time stays whole and the state word goes', async ($, on)
   await ui.unmount()
 })
 
-test('at 24 columns a new mark goes too, and the time still stays whole', async ($, on) => {
+test('at 24 columns a new mark goes too, and the time still stays whole', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(ASKING('aquelarre', [lastOut('01:00 DONE aquelarre/1: one')])) })
   await started($)
   const ui = await mountPane($, 'dock', 24)
@@ -1225,7 +1225,7 @@ test('at 24 columns a new mark goes too, and the time still stays whole', async 
   await ui.unmount()
 })
 
-test('a row that is too tight cuts the state word first, then the new mark, then the name', async ($, on) => {
+test('a row that is too tight cuts the state word first, then the new mark, then the name', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(ASKING('aquelarre', [lastOut('01:00 DONE aquelarre/1: one')])) })
   await started($)
   await makeNew(world, status(ASKING('aquelarre', [lastOut('01:10 DONE aquelarre/2: two')])))
@@ -1244,7 +1244,7 @@ test('a row that is too tight cuts the state word first, then the new mark, then
   expect(await rowAt(31)).toBe(edges('◆ aquelarre', 'desde 01:43', 31))
 })
 
-test('a long name is cut last, down to one character and an ellipsis, and the time is never cut', async ($, on) => {
+test('a long name is cut last, down to one character and an ellipsis, and the time is never cut', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(ASKING('a-very-long-project-name')) })
   await started($)
   const rowAt = async (width: number) => {
@@ -1259,7 +1259,7 @@ test('a long name is cut last, down to one character and an ellipsis, and the ti
   expect(await rowAt(16)).toBe(edges('◆ a…', 'desde 01:43', 16))
 })
 
-test('at 100 columns the card keeps its layout, with the time at the right edge', async ($, on) => {
+test('at 100 columns the card keeps its layout, with the time at the right edge', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: status(ASKING('coven', [lastOut('01:43 QUESTION coven/6: which logo?')]), pm({ name: 'north-tower', state: 'stale', age: '2h' })) })
   await started($)
 
@@ -1284,7 +1284,7 @@ function crowded(tag: string): string {
 }
 
 for (const width of NARROW_WIDTHS) {
-  test(`no row of the pane is wider than ${width} columns, new marks and long names included`, async ($, on) => {
+  test(`no row of the pane is wider than ${width} columns, new marks and long names included`, { options: { language: 'es' } }, async ($, on) => {
     const world = stage(on, { stdout: crowded('one') })
     await started($)
     const ui = await mountPane($, 'dock', width)
@@ -1301,7 +1301,7 @@ for (const width of NARROW_WIDTHS) {
   })
 }
 
-test('the footer clips the resting counts first and keeps the time whole', async ($, on) => {
+test('the footer clips the resting counts first and keeps the time whole', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: MIXED })
   await started($)
 
@@ -1311,7 +1311,7 @@ test('the footer clips the resting counts first and keeps the time whole', async
   await ui.unmount()
 })
 
-test('a waits card shows since when on the right, and every other card its age', async ($, on) => {
+test('a waits card shows since when on the right, and every other card its age', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -1338,7 +1338,7 @@ test('a waits card shows since when on the right, and every other card its age',
   await ui.unmount()
 })
 
-test('a card that is new says so after its state word, in the candle colour', async ($, on) => {
+test('a card that is new says so after its state word, in the candle colour', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working', age: '1m' })) })
   await started($)
   const ui = await mountPane($, 'dock', 61)
@@ -1350,7 +1350,7 @@ test('a card that is new says so after its state word, in the candle colour', as
   await ui.unmount()
 })
 
-test('the footer has the resting counts on the left and the time of the last read on the right', async ($, on) => {
+test('the footer has the resting counts on the left and the time of the last read on the right', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: MIXED })
   await started($)
 
@@ -1374,7 +1374,7 @@ test('with nothing resting the footer is the time alone, at the right edge', asy
   await ui.unmount()
 })
 
-test('the pane reads as a summary, cards between star rules and a footer, with a blank row around the cards', async ($, on) => {
+test('the pane reads as a summary, cards between star rules and a footer, with a blank row around the cards', { options: { language: 'es' } }, async ($, on) => {
   stage(
     on,
     {
@@ -1538,7 +1538,7 @@ test('the plan shows done steps gray, the current one gold and the next ones pur
   await ui.unmount()
 })
 
-test('more than two done steps fold into a count', async ($, on) => {
+test('more than two done steps fold into a count', { options: { language: 'es' } }, async ($, on) => {
   stage(on, {
     stdout: WORKING(),
     files: plan([done('a'), done('b'), done('c'), done('d'), done('e'), current('Build')]),
@@ -1552,7 +1552,7 @@ test('more than two done steps fold into a count', async ($, on) => {
   await ui.unmount()
 })
 
-test('two done steps show one by one, and three fold', async ($, on) => {
+test('two done steps show one by one, and three fold', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: WORKING(), files: plan([done('a'), done('b'), current('Build')]) })
   await started($)
   const ui = await mountPane($)
@@ -1565,7 +1565,7 @@ test('two done steps show one by one, and three fold', async ($, on) => {
   await ui.unmount()
 })
 
-test('only the next three steps show, then how many more', async ($, on) => {
+test('only the next three steps show, then how many more', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, {
     stdout: WORKING(),
     files: plan([next('one'), next('two'), next('three'), next('four'), next('five')]),
@@ -1601,7 +1601,7 @@ test('steps follow the task numbers', async ($, on) => {
   await ui.unmount()
 })
 
-test("a waiting PM's current step carries the pink tag, and its message line still shows", async ($, on) => {
+test("a waiting PM's current step carries the pink tag, and its message line still shows", { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: WAITING, files: plan([done('Spec'), current('Ask the user'), next('Write it')]) })
   await started($)
 
@@ -1622,7 +1622,7 @@ test("a waiting PM's current step carries the pink tag, and its message line sti
   await ui.unmount()
 })
 
-test('a card that does not wait has no tag on its current step', async ($, on) => {
+test('a card that does not wait has no tag on its current step', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: WORKING(), files: plan([current('Build')]) })
   await started($)
 
@@ -1649,7 +1649,7 @@ test('at a narrow dock the wait tag shrinks and every row fits', async ($, on) =
   await ui.unmount()
 })
 
-test('the wait tag stays whole while the subject keeps 20 columns, and shrinks below that', async ($, on) => {
+test('the wait tag stays whole while the subject keeps 20 columns, and shrinks below that', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: WAITING, files: plan([current(LONG_SUBJECT)]) })
   await started($)
 
@@ -1701,7 +1701,7 @@ test('a problem PM with a plan and nothing it waits on shows no message line', a
   await ui.unmount()
 })
 
-test('a dead PM that waited on something keeps its message line under the plan', async ($, on) => {
+test('a dead PM that waited on something keeps its message line under the plan', { options: { language: 'es' } }, async ($, on) => {
   stage(on, {
     stdout: status(pm({ name: 'coven', state: 'stale', lines: [waitsOn('QUESTION coven/4 since 09:00')] })),
     files: plan([current('Build')]),
@@ -1714,7 +1714,7 @@ test('a dead PM that waited on something keeps its message line under the plan',
   await ui.unmount()
 })
 
-test('a PM with no plan shows sin plan todavía and its last message', async ($, on) => {
+test('a PM with no plan shows sin plan todavía and its last message', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: WORKING([lastOut('00:14 DONE coven/3: one')]) })
   await started($)
 
@@ -1727,7 +1727,7 @@ test('a PM with no plan shows sin plan todavía and its last message', async ($,
   await ui.unmount()
 })
 
-test('a waiting PM with no plan shows sin plan todavía above its message line', async ($, on) => {
+test('a waiting PM with no plan shows sin plan todavía above its message line', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: WAITING })
   await started($)
 
@@ -1762,7 +1762,7 @@ test('a broken or unknown task file is skipped', async ($, on) => {
   await ui.unmount()
 })
 
-test('a plan that cannot be read is no plan and no error', async ($, on) => {
+test('a plan that cannot be read is no plan and no error', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: WORKING(), files: plan([current('Build')]) })
   world.broken.add(`${HOME}/.claude/tasks`)
   await started($)
@@ -1774,7 +1774,7 @@ test('a plan that cannot be read is no plan and no error', async ($, on) => {
   await ui.unmount()
 })
 
-test('a folder that cannot be listed gives that PM no plan, and a task that cannot be read is skipped, the others keep theirs', async ($, on) => {
+test('a folder that cannot be listed gives that PM no plan, and a task that cannot be read is skipped, the others keep theirs', { options: { language: 'es' } }, async ($, on) => {
   const other = `${HOME}/.claude/tasks/2222bbbb-0000-4000-8000-000000000000`
   const third = `${HOME}/.claude/tasks/3333cccc-0000-4000-8000-000000000000`
   const world = stage(on, {
@@ -1874,7 +1874,7 @@ test('without CLAUDE_CONFIG_DIR the plans come from .claude under HOME', async (
   await ui.unmount()
 })
 
-test('with neither CLAUDE_CONFIG_DIR nor HOME no plan is read', async ($, on) => {
+test('with neither CLAUDE_CONFIG_DIR nor HOME no plan is read', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: WORKING(), home: '', files: plan([current('Never')]) })
   await started($)
 
@@ -1909,7 +1909,7 @@ test('nothing is listed when no PM is live', async ($, on) => {
   expect(world.touched).toEqual([])
 })
 
-test('a new current step marks the PM nuevo', async ($, on) => {
+test('a new current step marks the PM nuevo', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: WORKING(), files: plan([current('One'), next('Two')]) })
   await started($)
   const ui = await mountPane($)
@@ -1922,7 +1922,7 @@ test('a new current step marks the PM nuevo', async ($, on) => {
   await ui.unmount()
 })
 
-test('a plan that changes but keeps its current step does not mark the PM nuevo', async ($, on) => {
+test('a plan that changes but keeps its current step does not mark the PM nuevo', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: WORKING(), files: plan([current('One'), next('Two')]) })
   await started($)
   const ui = await mountPane($)
@@ -1935,7 +1935,7 @@ test('a plan that changes but keeps its current step does not mark the PM nuevo'
   await ui.unmount()
 })
 
-test('several current steps all show gold, the tag on the first', async ($, on) => {
+test('several current steps all show gold, the tag on the first', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: WAITING, files: plan([current('Ask'), current('Draft'), next('Write')]) })
   await started($)
 
@@ -1951,7 +1951,7 @@ test('several current steps all show gold, the tag on the first', async ($, on) 
   await ui.unmount()
 })
 
-test('the plan is drawn between the headline and the closing rule of each card', async ($, on) => {
+test('the plan is drawn between the headline and the closing rule of each card', { options: { language: 'es' } }, async ($, on) => {
   stage(on, {
     stdout: status(pm({ name: 'coven', state: 'working' }), pm({ name: 'cauldron', state: 'idle', age: '9m', id: '2222bbbb' })),
     files: plan([current('Build')]),
@@ -1977,7 +1977,7 @@ test('the plan is drawn between the headline and the closing rule of each card',
   await ui.unmount()
 })
 
-test('a timer tick reads again and the pane shows the new state', async ($, on) => {
+test('a timer tick reads again and the pane shows the new state', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   // No cache, so no window shares a read: the cadence is the pane's own, and the command count shows it.
   world.broken.add(CACHE_FILE)
@@ -2053,7 +2053,7 @@ test('a pane opened by something other than /aquelarre is refreshed too', { plug
   expect(world.calls).toEqual([['coven', 'pm', 'status']])
 })
 
-test('a pane that stays open across a reload keeps refreshing', async ($, on) => {
+test('a pane that stays open across a reload keeps refreshing', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   // No cache, so no window shares a read: the cadence is the pane's own, and the command count shows it.
   world.broken.add(CACHE_FILE)
@@ -2138,7 +2138,7 @@ test('a tick that fires while a read is still pending does not start a second on
   expect(world.calls).toHaveLength(2)
 })
 
-test('a PM whose state changed between reads is marked nuevo, and the mark fades', async ($, on) => {
+test('a PM whose state changed between reads is marked nuevo, and the mark fades', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(
     on,
     { stdout: status(pm({ name: 'coven', state: 'working' }), pm({ name: 'steady', state: 'working' })) },
@@ -2159,7 +2159,7 @@ test('a PM whose state changed between reads is marked nuevo, and the mark fades
   await ui.unmount()
 })
 
-test('a new last message out marks the PM nuevo', async ($, on) => {
+test('a new last message out marks the PM nuevo', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working', lines: [lastOut('00:14 DONE coven/3: one')] })) })
   await started($)
   const ui = await mountPane($)
@@ -2171,7 +2171,7 @@ test('a new last message out marks the PM nuevo', async ($, on) => {
   await ui.unmount()
 })
 
-test('a PM that is new since the previous read is marked nuevo, and the one already there is not', async ($, on) => {
+test('a PM that is new since the previous read is marked nuevo, and the one already there is not', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   await started($)
   const ui = await mountPane($)
@@ -2185,7 +2185,7 @@ test('a PM that is new since the previous read is marked nuevo, and the one alre
   await ui.unmount()
 })
 
-test('a PM that shows up after an empty read is not marked nuevo', async ($, on) => {
+test('a PM that shows up after an empty read is not marked nuevo', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: 'no project-manager sessions\n' })
   await started($)
   const ui = await mountPane($)
@@ -2199,7 +2199,7 @@ test('a PM that shows up after an empty read is not marked nuevo', async ($, on)
   await ui.unmount()
 })
 
-test('a role session never runs a command and says the pane is for the GM', async ($, on) => {
+test('a role session never runs a command and says the pane is for the GM', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: MIXED, role: 'pm' })
   await started($)
   const ui = await mountPane($)
@@ -2211,7 +2211,7 @@ test('a role session never runs a command and says the pane is for the GM', asyn
   await ui.unmount()
 })
 
-test('a failed read shows the error and keeps the cards of the last good read', async ($, on) => {
+test('a failed read shows the error and keeps the cards of the last good read', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   await started($)
   const ui = await mountPane($)
@@ -2230,7 +2230,7 @@ test('a failed read shows the error and keeps the cards of the last good read', 
   await ui.unmount()
 })
 
-test('a failed first read shows the error and no cards', async ($, on) => {
+test('a failed first read shows the error and no cards', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on)
   world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
   await started($)
@@ -2244,7 +2244,7 @@ test('a failed first read shows the error and no cards', async ($, on) => {
   await ui.unmount()
 })
 
-test('the next good read clears the error', async ($, on) => {
+test('the next good read clears the error', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on)
   world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
   await started($)
@@ -2260,7 +2260,7 @@ test('the next good read clears the error', async ($, on) => {
 })
 
 for (const output of ['no project-manager sessions\n', '']) {
-  test(`no PMs this week says so and tells how to start one (output ${JSON.stringify(output)})`, async ($, on) => {
+  test(`no PMs this week says so and tells how to start one (output ${JSON.stringify(output)})`, { options: { language: 'es' } }, async ($, on) => {
     stage(on, { stdout: output })
     await started($)
 
@@ -2273,7 +2273,7 @@ for (const output of ['no project-manager sessions\n', '']) {
   })
 }
 
-test('before the first read the pane says it is reading', async ($, on) => {
+test('before the first read the pane says it is reading', { options: { language: 'es' } }, async ($, on) => {
   stage(on)
   const ui = await mountPane($)
 
@@ -2281,7 +2281,7 @@ test('before the first read the pane says it is reading', async ($, on) => {
   await ui.unmount()
 })
 
-test('the widget shows only the summary and the time', async ($, on) => {
+test('the widget shows only the summary and the time', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: MIXED })
   await started($)
 
@@ -2296,7 +2296,7 @@ test('the widget shows only the summary and the time', async ($, on) => {
   await ui.unmount()
 })
 
-test('the widget shows the read error instead of reading forever', async ($, on) => {
+test('the widget shows the read error instead of reading forever', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on)
   world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
   await started($)
@@ -2323,7 +2323,7 @@ test('a pane the engine already holds when the mod starts is refreshed', async (
   expect(world.calls).toEqual([['coven', 'pm', 'status']])
 })
 
-test('a tick that fails outright shows as a read error instead of vanishing', async ($, on) => {
+test('a tick that fails outright shows as a read error instead of vanishing', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   await started($)
   const ui = await mountPane($)
@@ -2344,7 +2344,7 @@ test('coven pm status is the only command run when it works', async ($, on) => {
   expect(world.calls).toEqual([['coven', 'pm', 'status']])
 })
 
-test('a coven that hangs until its timeout shows the error and runs nothing else', async ($, on) => {
+test('a coven that hangs until its timeout shows the error and runs nothing else', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'covenant', state: 'working' })) })
   world.hangs.add('coven')
   await start($)
@@ -2363,7 +2363,7 @@ test('a coven that hangs until its timeout shows the error and runs nothing else
   await ui.unmount()
 })
 
-test('when coven is missing the error is shown', async ($, on) => {
+test('when coven is missing the error is shown', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on)
   world.missing.add('coven')
   await started($)
@@ -2440,7 +2440,7 @@ const BANDED = status(
 const WIDE_BAND = '☾ ◆ espera: coven, tower ⋆ ✕ magic ⋆ ✦ 2 trabajando ⋆ ○ 1 en pausa'
 const COMPACT_BAND = '☾ ◆ coven, tower  ✕ 1  ✦ 2  ○ 1'
 
-test('the band names who waits and counts the rest, with the time of the last read at the right', async ($, on) => {
+test('the band names who waits and counts the rest, with the time of the last read at the right', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: BANDED })
   await started($)
   const ui = await mountBand($)
@@ -2449,7 +2449,7 @@ test('the band names who waits and counts the rest, with the time of the last re
   await ui.unmount()
 })
 
-test('each part of the wide band has its own colour', async ($, on) => {
+test('each part of the wide band has its own colour', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: BANDED })
   await started($)
   const ui = await mountBand($)
@@ -2509,7 +2509,7 @@ test('the band never draws past bodyColumns, from 20 to 120 columns', async ($, 
   await ui.unmount()
 })
 
-test('before the first read the band says it is reading the PMs', async ($, on) => {
+test('before the first read the band says it is reading the PMs', { options: { language: 'es' } }, async ($, on) => {
   stage(on, { stdout: BANDED })
   const ui = await mountBand($)
 
@@ -2523,7 +2523,7 @@ for (const [why, output] of [
   ['every PM is done', status(pm({ name: 'old', state: 'done', age: '2d' }), pm({ name: 'napper', state: 'stopped' }))],
   ['there is no PM at all', ''],
 ] as const) {
-  test(`the band says nobody is working when ${why}`, async ($, on) => {
+  test(`the band says nobody is working when ${why}`, { options: { language: 'es' } }, async ($, on) => {
     stage(on, { stdout: output })
     await started($)
     const ui = await mountBand($)
@@ -2535,7 +2535,7 @@ for (const [why, output] of [
   })
 }
 
-test('a read error with no good read before it fills the band with the error', async ($, on) => {
+test('a read error with no good read before it fills the band with the error', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on)
   world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
   await started($)
@@ -2547,7 +2547,7 @@ test('a read error with no good read before it fills the band with the error', a
   await ui.unmount()
 })
 
-test('a read error after a good read keeps the counts and shows when the last good read was', async ($, on) => {
+test('a read error after a good read keeps the counts and shows when the last good read was', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: BANDED })
   await started($)
   const ui = await mountBand($)
@@ -2561,7 +2561,7 @@ test('a read error after a good read keeps the counts and shows when the last go
   await ui.unmount()
 })
 
-test('the band follows each read', async ($, on) => {
+test('the band follows each read', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: BANDED })
   await started($)
   const ui = await mountBand($)
@@ -2631,26 +2631,26 @@ test('the first read raises no toast, though a PM already waits', async ($, on) 
   expect(world.toasts).toEqual([])
 })
 
-test('a PM that starts waiting raises a toast with the question it waits on', async ($, on) => {
+test('a PM that starts waiting raises a toast with the question it waits on', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(WAITING_ON_LOGO()))
 
   expect(toasts).toEqual([{ text: '◆ coven espera al GM  QUESTION #6 which logo?', timeoutMs: 8000 }])
 })
 
-test('a toast for a PM that waits on an item it did not send says it awaits a reply', async ($, on) => {
+test('a toast for a PM that waits on an item it did not send says it awaits a reply', { options: { language: 'es' } }, async ($, on) => {
   const asking = pm({ name: 'coven', state: 'blocked', lines: [lastOut('00:14 DONE coven/5: old'), waitsOn('QUESTION coven/6 since 00:14')] })
   const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(asking))
 
   expect(toasts).toEqual([{ text: '◆ coven espera al GM  QUESTION #6 esperando respuesta', timeoutMs: 8000 }])
 })
 
-test('a PM blocked with nothing it waits on raises a toast without a message', async ($, on) => {
+test('a PM blocked with nothing it waits on raises a toast without a message', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(pm({ name: 'coven', state: 'blocked' })))
 
   expect(toasts).toEqual([{ text: '◆ coven espera al GM', timeoutMs: 8000 }])
 })
 
-test('a PM new since the last read and already waiting raises a toast', async ($, on) => {
+test('a PM new since the last read and already waiting raises a toast', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2678,7 +2678,7 @@ test('a PM new since the last read and not waiting raises no toast', async ($, o
   expect(toasts).toEqual([])
 })
 
-test('a live PM whose last message out becomes a DONE raises a short toast', async ($, on) => {
+test('a live PM whose last message out becomes a DONE raises a short toast', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2689,13 +2689,13 @@ test('a live PM whose last message out becomes a DONE raises a short toast', asy
   expect(toasts).toEqual([{ text: '✓ coven terminó  DONE #7 shipped', timeoutMs: 4000 }])
 })
 
-test('a PM that becomes done raises a toast', async ($, on) => {
+test('a PM that becomes done raises a toast', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(pm({ name: 'coven', state: 'done' })))
 
   expect(toasts).toEqual([{ text: '✓ coven terminó', timeoutMs: 4000 }])
 })
 
-test('a PM that becomes done after a DONE message carries the message', async ($, on) => {
+test('a PM that becomes done after a DONE message carries the message', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2706,7 +2706,7 @@ test('a PM that becomes done after a DONE message carries the message', async ($
   expect(toasts).toEqual([{ text: '✓ coven terminó  DONE #7 shipped', timeoutMs: 4000 }])
 })
 
-test('a PM that dies raises a toast', async ($, on) => {
+test('a PM that dies raises a toast', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(pm({ name: 'coven', state: 'stale' })))
 
   expect(toasts).toEqual([{ text: '✕ coven proceso muerto', timeoutMs: 8000 }])
@@ -2717,7 +2717,7 @@ for (const [state, word] of [
   ['duplicate', 'duplicado'],
   ['zombie', 'sin datos'],
 ] as const) {
-  test(`a PM in state ${state} raises a toast saying ${word}`, async ($, on) => {
+  test(`a PM in state ${state} raises a toast saying ${word}`, { options: { language: 'es' } }, async ($, on) => {
     const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(pm({ name: 'coven', state })))
 
     expect(toasts).toEqual([{ text: `✕ coven ${word}`, timeoutMs: 8000 }])
@@ -2730,7 +2730,7 @@ test('a PM that stays stale raises no second toast', async ($, on) => {
   expect(toasts).toEqual([])
 })
 
-test('a PM that goes from stale to failed raises a toast', async ($, on) => {
+test('a PM that goes from stale to failed raises a toast', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'stale' })), status(pm({ name: 'coven', state: 'failed' })))
 
   expect(toasts).toEqual([{ text: '✕ coven falló', timeoutMs: 8000 }])
@@ -2750,7 +2750,7 @@ test('a PM that goes idle, or sends another message than a DONE, raises no toast
   expect(toasts).toEqual([])
 })
 
-test('two PMs changing in one read raise one toast, as long as the longer one', async ($, on) => {
+test('two PMs changing in one read raise one toast, as long as the longer one', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2761,7 +2761,7 @@ test('two PMs changing in one read raise one toast, as long as the longer one', 
   expect(toasts).toEqual([{ text: '✓ coven terminó ⋆ ✕ tower proceso muerto', timeoutMs: 8000 }])
 })
 
-test('two PMs that finish raise one short toast', async ($, on) => {
+test('two PMs that finish raise one short toast', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2772,7 +2772,7 @@ test('two PMs that finish raise one short toast', async ($, on) => {
   expect(toasts).toEqual([{ text: '✓ coven terminó ⋆ ✓ tower terminó', timeoutMs: 4000 }])
 })
 
-test('a PM that dies and also finishes gives one entry, the dying one', async ($, on) => {
+test('a PM that dies and also finishes gives one entry, the dying one', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2783,7 +2783,7 @@ test('a PM that dies and also finishes gives one entry, the dying one', async ($
   expect(toasts).toEqual([{ text: '✕ coven proceso muerto', timeoutMs: 8000 }])
 })
 
-test('the message part of an entry is cut to 60 characters', async ($, on) => {
+test('the message part of an entry is cut to 60 characters', { options: { language: 'es' } }, async ($, on) => {
   const long = 'x'.repeat(80)
   const asking = pm({
     name: 'coven',
@@ -2795,7 +2795,7 @@ test('the message part of an entry is cut to 60 characters', async ($, on) => {
   expect(toasts).toEqual([{ text: `◆ coven espera al GM  ${`QUESTION #6 ${long}`.slice(0, 59)}…`, timeoutMs: 8000 }])
 })
 
-test('a failed read raises no toast, and the next good read compares with the last good one', async ($, on) => {
+test('a failed read raises no toast, and the next good read compares with the last good one', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
   await started($)
 
@@ -2873,7 +2873,7 @@ test('a role session reads nothing at start', async ($, on) => {
   expectNothingTouched(world)
 })
 
-test('a DONE that was not delivered says so at the end of its toast entry', async ($, on) => {
+test('a DONE that was not delivered says so at the end of its toast entry', { options: { language: 'es' } }, async ($, on) => {
   const undelivered = (text: string) => `last out: ${text}   [NOT DELIVERED: no route to the GM]`
   const toasts = await toastsAfter(
     $,
@@ -2885,7 +2885,7 @@ test('a DONE that was not delivered says so at the end of its toast entry', asyn
   expect(toasts).toEqual([{ text: '✓ coven terminó  DONE #7 shipped · no entregado', timeoutMs: 4000 }])
 })
 
-test('the cut to 60 characters comes before the not-delivered suffix', async ($, on) => {
+test('the cut to 60 characters comes before the not-delivered suffix', { options: { language: 'es' } }, async ($, on) => {
   const long = 'x'.repeat(80)
   const toasts = await toastsAfter(
     $,
@@ -2905,7 +2905,7 @@ test('the cut to 60 characters comes before the not-delivered suffix', async ($,
   ])
 })
 
-test('a PM that is done with an undelivered DONE carries the suffix too', async ($, on) => {
+test('a PM that is done with an undelivered DONE carries the suffix too', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter(
     $,
     on,
@@ -2931,7 +2931,7 @@ test('a session with COVEN_SESSION_ROLE set to an empty value is a role session'
   expectNothingTouched(world)
 })
 
-test('a PM that waits and then goes stale raises only the dying entry', async ($, on) => {
+test('a PM that waits and then goes stale raises only the dying entry', { options: { language: 'es' } }, async ($, on) => {
   const toasts = await toastsAfter($, on, status(WAITING_ON_LOGO()), status(WAITING_ON_LOGO().replace('state=blocked', 'state=stale')))
 
   expect(toasts).toEqual([{ text: '✕ coven proceso muerto', timeoutMs: 8000 }])
@@ -3040,7 +3040,7 @@ test('CLAUDE_CONFIG_DIR is the folder whose jobs are checked', async ($, on) => 
   expect(world.looked.some(path => path.startsWith(HOME))).toBe(false)
 })
 
-test('a jobs listing that fails counts as changed and is never the pane error', async ($, on) => {
+test('a jobs listing that fails counts as changed and is never the pane error', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })), files: jobs('a') })
   world.broken.add(JOBS)
   await quiet($, world)
@@ -3171,7 +3171,7 @@ function otherWindowClaims(world: Stage, ago = 0, by = 'window-2') {
 
 const cacheFile = (world: Stage): Shared => JSON.parse(world.files[CACHE_FILE] ?? 'null')
 
-test('a window that finds a fresh cache of the same jobs runs no command and draws that read', async ($, on) => {
+test('a window that finds a fresh cache of the same jobs runs no command and draws that read', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: 'this window must not read', files: jobs('a') })
   otherWindowRead(world)
 
@@ -3185,7 +3185,7 @@ test('a window that finds a fresh cache of the same jobs runs no command and dra
   await ui.unmount()
 })
 
-test('a read that fails before it is drawn is not counted as taken: the next due tick takes it again', async ($, on) => {
+test('a read that fails before it is drawn is not counted as taken: the next due tick takes it again', { options: { language: 'es' } }, async ($, on) => {
   let denials = 0
   on('state.set', { plugin: 'aquelarre', key: 'circle' }, (_, e, next) => {
     if (denials === 0) return next(e)
@@ -3213,7 +3213,7 @@ test('a read that fails before it is drawn is not counted as taken: the next due
   await ui.unmount()
 })
 
-test('a toast fires once per window for a cached read, and taking the same cache again fires nothing', async ($, on) => {
+test('a toast fires once per window for a cached read, and taking the same cache again fires nothing', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: CACHED_WORKING, files: jobs('a') })
   await quiet($, world)
 
@@ -3519,7 +3519,7 @@ test('a window whose own last read is an hour ahead of the clock still takes a n
 // The engine puts `aquelarre: $.process.run:` before a refusal's reason, so a refusal with none reaches the mod with
 // a message that is never empty, and the `no se pudo leer` fallback for an empty one cannot be reached from here.
 // What this pins is what it guards: a failed read always has a reason, because an empty one reads back as a good read.
-test('a command refused with no reason is a failed read with an error: in the pane, in the cache, and the cards stay', async ($, on) => {
+test('a command refused with no reason is a failed read with an error: in the pane, in the cache, and the cards stay', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: CACHED_WORKING, files: jobs('a') })
   await started($)
   world.calls.splice(0)
@@ -3540,7 +3540,7 @@ test('a command refused with no reason is a failed read with an error: in the pa
   await ui.unmount()
 })
 
-test('a window that takes a cached error shows it and keeps the cards of its last good read', async ($, on) => {
+test('a window that takes a cached error shows it and keeps the cards of its last good read', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: CACHED_WORKING, files: jobs('a') })
   await started($)
   world.calls.splice(0)
@@ -3568,7 +3568,7 @@ for (const [name, broken] of [
   ['cannot be written', (world: Stage) => world.broken.add(CACHE_FILE)],
   ['has a claim that cannot be written', (world: Stage) => world.broken.add(CLAIM_FILE)],
 ] as const) {
-  test(`a cache that ${name}: the window reads by itself, with no pane error`, async ($, on) => {
+  test(`a cache that ${name}: the window reads by itself, with no pane error`, { options: { language: 'es' } }, async ($, on) => {
     const world = stage(on, { stdout: MIXED, files: jobs('a') })
     broken(world)
 
@@ -3743,7 +3743,7 @@ test('a cache with no began is shared from when it finished', async ($, on) => {
   expect(world.calls).toEqual([])
 })
 
-test('a window takes a failed shared read that is 4 s old, though its own jobs are unchanged: it shows the error and keeps its cards', async ($, on) => {
+test('a window takes a failed shared read that is 4 s old, though its own jobs are unchanged: it shows the error and keeps its cards', { options: { language: 'es' } }, async ($, on) => {
   const world = stage(on, { stdout: CACHED_WORKING, files: jobs('a') })
   await quiet($, world)
   const ui = await mountPane($)
@@ -3789,4 +3789,515 @@ test('/aquelarre does not take a cache stamped an hour ahead', async ($, on) => 
   await openPane($)
 
   expect(world.calls).toEqual(COVEN_STATUS)
+})
+
+// Settings: the language, the band and the toasts. English is the default; Spanish is `language: es`.
+
+const EN_FULL_SUMMARY = '◆ 1 waits ⋆ ✕ 1 problem ⋆ ✦ 1 working ⋆ ○ 1 paused'
+const EN_WAIT_TAG = '  ◆ waits for your answer'
+const EN_WIDE_BAND = '☾ ◆ waits: coven, tower ⋆ ✕ magic ⋆ ✦ 2 working ⋆ ○ 1 paused'
+
+test('the pane draws English by default: summary, state words and the time since', async ($, on) => {
+  stage(
+    on,
+    {
+      stdout: status(
+        ASKING('tower', [lastOut('01:43 QUESTION tower/6: which logo?')]),
+        pm({ name: 'magic', state: 'stale', age: '2h' }),
+        pm({ name: 'coven', state: 'working', age: '12m' }),
+        pm({ name: 'sleepy', state: 'idle', age: '14m' }),
+      ),
+    },
+  )
+  await started($)
+
+  const ui = await mountPane($)
+  const shown = await rows(ui)
+
+  expect(shown[0]).toBe(EN_FULL_SUMMARY)
+  // The name column is the longest name, sleepy, and two spaces.
+  const named = (name: string) => name.padEnd('sleepy'.length + 2)
+  expect(shown).toContain(edges(`◆ ${named('tower')}waits on the GM`, 'since 01:43', 80))
+  expect(shown).toContain(edges(`✕ ${named('magic')}process dead`, '2h', 80))
+  expect(shown).toContain(edges(`✦ ${named('coven')}working`, '12m', 80))
+  expect(shown).toContain(edges(`○ ${named('sleepy')}paused`, '14m', 80))
+  expect(shown.join('\n')).not.toMatch(/espera|trabajando|desde|pausa/)
+  await ui.unmount()
+})
+
+test('the English summary uses the plural labels for more than one', async ($, on) => {
+  const two = (name: string, state: string) => [pm({ name: `${name}1`, state }), pm({ name: `${name}2`, state })]
+  stage(on, { stdout: status(...two('asks', 'blocked'), ...two('dead', 'stale'), ...two('busy', 'working'), ...two('nap', 'idle')) })
+  await started($)
+
+  const ui = await mountPane($, 'dock', 80)
+
+  expect((await rows(ui))[0]).toBe('◆ 2 wait ⋆ ✕ 2 problems ⋆ ✦ 2 working ⋆ ○ 2 paused')
+  await ui.unmount()
+})
+
+test('the English summary shrinks to glyph and count at exactly one column below its words', async ($, on) => {
+  stage(on, { stdout: ONE_OF_EACH })
+  await started($)
+
+  const exact = await mountPane($, 'dock', EN_FULL_SUMMARY.length)
+  expect((await rows(exact))[0]).toBe(EN_FULL_SUMMARY)
+  await exact.unmount()
+
+  const narrower = await mountPane($, 'dock', EN_FULL_SUMMARY.length - 1)
+  expect((await rows(narrower))[0]).toBe(COMPACT_SUMMARY)
+  await narrower.unmount()
+})
+
+test('an English card says what it waits on and has no message or plan to show', async ($, on) => {
+  stage(
+    on,
+    {
+      stdout: status(
+        pm({
+          name: 'coven',
+          state: 'blocked',
+          lines: [lastOut('09:00 BLOCKED coven/1: stuck'), waitsOn('QUESTION coven/4 since 09:00', 'PROD-STEP coven/5 since 09:10')],
+        }),
+        pm({ name: 'quiet', state: 'working', age: '1m' }),
+      ),
+    },
+  )
+  await started($)
+
+  const ui = await mountPane($)
+  const shown = (await rows(ui)).join('\n')
+
+  expect(shown).toContain('  QUESTION #4  waiting for an answer +1 more')
+  expect(shown).toContain('  no plan yet')
+  expect(shown).toContain('  no messages yet')
+  await ui.unmount()
+})
+
+test('an English waiting card carries the wait tag on its current step', async ($, on) => {
+  stage(on, { stdout: WAITING, files: plan([current('Ask the user')]) })
+  await started($)
+
+  const ui = await mountPane($)
+
+  expect(await firstCard(ui)).toContain(`  ▸ Ask the user${EN_WAIT_TAG}`)
+  const tag = await ui.find({ type: 'Text', text: exactly(EN_WAIT_TAG) })
+  expect(tag?.props.color).toBe('permission')
+  await ui.unmount()
+})
+
+test('the English wait tag stays whole while the subject keeps 20 columns, and shrinks below that', async ($, on) => {
+  stage(on, { stdout: WAITING, files: plan([current(LONG_SUBJECT)]) })
+  await started($)
+  const wholeWidth = 4 + EN_WAIT_TAG.length + 20
+
+  const roomy = await mountPane($, 'dock', wholeWidth)
+  const [whole] = await firstCard(roomy, wholeWidth)
+  expect(whole).toBe(`  ▸ ${LONG_SUBJECT.slice(0, 19)}…${EN_WAIT_TAG}`)
+  expect(whole?.length).toBe(wholeWidth)
+  await roomy.unmount()
+
+  const tight = await mountPane($, 'dock', wholeWidth - 1)
+  const [short] = await firstCard(tight, wholeWidth - 1)
+  expect(short).toBe(`  ▸ ${LONG_SUBJECT.slice(0, wholeWidth - 1 - 3 - 4 - 1)}…  ◆`)
+  expect(short?.length).toBe(wholeWidth - 1)
+  await tight.unmount()
+})
+
+test('English plan rows fold done steps and count the steps not shown', async ($, on) => {
+  stage(
+    on,
+    {
+      stdout: WORKING(),
+      files: plan([done('A'), done('B'), done('C'), current('D'), next('E'), next('F'), next('G'), next('H'), next('I')]),
+    },
+  )
+  await started($)
+
+  const ui = await mountPane($)
+
+  expect(await firstCard(ui)).toEqual(['  ✓ 3 done', '  ▸ D', '  · E', '  · F', '  · G', '    +2 more'])
+  await ui.unmount()
+})
+
+test('the English footer counts the PMs that rest', async ($, on) => {
+  stage(
+    on,
+    {
+      stdout: status(
+        pm({ name: 'busy', state: 'working' }),
+        pm({ name: 'one', state: 'done', age: '1d' }),
+        pm({ name: 'two', state: 'done', age: '2d' }),
+        pm({ name: 'napper', state: 'stopped', age: '5d' }),
+      ),
+    },
+  )
+  await started($)
+
+  const ui = await mountPane($)
+
+  expect((await rows(ui)).some(row => row.startsWith('⋆ 2 done · 1 stopped'))).toBe(true)
+  await ui.unmount()
+})
+
+test('with nobody live, and with no PMs at all, the English pane says so', async ($, on) => {
+  const world = stage(on, { stdout: status(pm({ name: 'old', state: 'done', age: '2d' })) })
+  await started($)
+  const ui = await mountPane($)
+  expect(await rows(ui)).toContain('No one working right now.')
+
+  world.reply.stdout = 'no project-manager sessions\n'
+  await world.clock.advance(READ_MS)
+  expect(await rows(ui)).toEqual(expect.arrayContaining(['No PMs this week.', 'They show up here when one is launched from the GM.']))
+  await ui.unmount()
+})
+
+test('the English pane says it is reading, and then shows the error and its retry', async ($, on) => {
+  const world = stage(on)
+  const release = world.hold()
+  await start($)
+  const ui = await mountPane($)
+  expect(await screen(ui)).toMatch(/Reading the PMs…/)
+  release()
+  await world.clock.settle()
+
+  world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
+  await world.clock.advance(READ_MS)
+
+  const shown = await screen(ui)
+  const headline = await ui.find({ type: 'Text', text: /Couldn't read the PMs/ })
+  expect(headline?.text).toBe('✕ Couldn\'t read the PMs')
+  expect(headline?.props.color).toBe('error')
+  expect(shown).toMatch(/boom/)
+  expect(shown).toMatch(/retrying in 5 s/)
+  expect(shown).not.toMatch(/Reading the PMs/)
+  await ui.unmount()
+})
+
+test('coven exiting non-zero with nothing on stderr shows the read error and keeps the cards', async ($, on) => {
+  const world = stage(on, { stdout: status(pm({ name: 'coven', state: 'working' })) })
+  await started($)
+  const ui = await mountPane($)
+
+  world.reply = { exitCode: 127, stdout: '', stderr: '' }
+  await world.clock.advance(READ_MS)
+
+  const shown = await screen(ui)
+  expect(shown).toMatch(/Couldn't read the PMs/)
+  expect(shown).toMatch(/coven exited with 127/)
+  expect(shown).toMatch(/✦ 1 working/)
+  expect(shown).toMatch(/✦ coven\s+working/)
+  expect(shown).toMatch(/↻ 12:00:05/)
+  await ui.unmount()
+})
+
+test('a coven that hangs shows the English timeout', async ($, on) => {
+  const world = stage(on)
+  world.hangs.add('coven')
+  await started($)
+  const ui = await mountPane($)
+  await world.clock.advance(STATUS_TIMEOUT_MS)
+  expect(await screen(ui)).toMatch(/coven did not answer in 20 s/)
+  await ui.unmount()
+})
+
+test('an English card is marked new, and a PM that dies or finishes keeps its English state word', async ($, on) => {
+  const world = stage(on, { stdout: status(ASKING('aquelarre', [lastOut('01:00 DONE aquelarre/1: one')])) })
+  await started($)
+  const ui = await mountPane($)
+
+  await makeNew(world, status(ASKING('aquelarre', [lastOut('01:10 DONE aquelarre/2: two')])))
+
+  const marks = (await ui.findAll({ type: 'Text', text: /new/ })).filter(mark => mark.props.color === 'claude')
+  expect(marks.map(mark => mark.text)).toEqual(['  • new'])
+  await ui.unmount()
+})
+
+test('an English message not delivered carries its English flag', async ($, on) => {
+  stage(
+    on,
+    { stdout: status(pm({ name: 'coven', state: 'working', lines: ['last out: 00:14 DONE coven/3: one   [NOT DELIVERED: no session]'] })) },
+  )
+  await started($)
+
+  const ui = await mountPane($)
+
+  expect((await rows(ui)).join('\n')).toContain('DONE #3 · not delivered  one')
+  await ui.unmount()
+})
+
+test('a role session says in English that the pane is for the GM', async ($, on) => {
+  stage(on, { stdout: MIXED, role: 'pm' })
+  await started($)
+  const ui = await mountPane($)
+
+  expect(await screen(ui)).toMatch(/This pane only reads PMs in the GM's session\./)
+  await ui.unmount()
+})
+
+// The narrow cut order of a card in English: the state word first, then the new mark, then the name.
+
+test('an English row that is too tight cuts the state word first, then the new mark, then the name', async ($, on) => {
+  const world = stage(on, { stdout: status(ASKING('aquelarre', [lastOut('01:00 DONE aquelarre/1: one')])) })
+  await started($)
+  await makeNew(world, status(ASKING('aquelarre', [lastOut('01:10 DONE aquelarre/2: two')])))
+  const rowAt = async (width: number) => {
+    const narrow = await mountPane($, 'dock', width)
+    const found = (await rows(narrow)).find(row => row.endsWith('since 01:43'))
+    await narrow.unmount()
+    return found
+  }
+
+  expect(await rowAt(47)).toBe(edges('◆ aquelarre  waits on the GM  • new', 'since 01:43', 47))
+  expect(await rowAt(46)).toBe(edges('◆ aquelarre  waits on the …  • new', 'since 01:43', 46))
+  expect(await rowAt(34)).toBe(edges('◆ aquelarre  w…  • new', 'since 01:43', 34))
+  expect(await rowAt(33)).toBe(edges('◆ aquelarre  • new', 'since 01:43', 33))
+  expect(await rowAt(30)).toBe(edges('◆ aquelarre  • new', 'since 01:43', 30))
+  expect(await rowAt(29)).toBe(edges('◆ aquelarre', 'since 01:43', 29))
+})
+
+test('at 24 columns an English card keeps the time whole and drops the state word and the new mark', async ($, on) => {
+  const world = stage(on, { stdout: status(ASKING('aquelarre', [lastOut('01:00 DONE aquelarre/1: one')])) })
+  await started($)
+  const ui = await mountPane($, 'dock', 24)
+
+  await makeNew(world, status(ASKING('aquelarre', [lastOut('01:10 DONE aquelarre/2: two')])))
+
+  const shown = await rows(ui)
+  expect(shown).toContain(edges('◆ aquelarre', 'since 01:43', 24))
+  expect(shown.join('\n')).not.toMatch(/new/)
+  await ui.unmount()
+})
+
+for (const width of NARROW_WIDTHS) {
+  test(`no row of the English pane is wider than ${width} columns, new marks and long names included`, async ($, on) => {
+    const world = stage(on, { stdout: crowded('one') })
+    await started($)
+    const ui = await mountPane($, 'dock', width)
+    await makeNew(world, crowded('two'))
+
+    const shown = await rows(ui)
+    const fixed = shown.filter(row => !row.startsWith('  '))
+    if (width >= 40) expect(shown.join('\n')).toMatch(/• new/)
+    expect(fixed.some(row => row.includes('a-very'))).toBe(true)
+    for (const row of fixed) expect(row.length).toBeLessThanOrEqual(width)
+    await ui.unmount()
+  })
+}
+
+// The band in English.
+
+test('the English band names who waits and counts the rest, with the time of the last read', async ($, on) => {
+  stage(on, { stdout: BANDED })
+  await started($)
+  const ui = await mountBand($)
+
+  expect(await bandRow(ui)).toBe(edges(EN_WIDE_BAND, '↻ 12:00:05', 80))
+  const look = async (text: string) => (await ui.find({ type: 'Text', text: exactly(text) }))?.props.color
+  expect(await look('◆ waits: coven, tower')).toBe('permission')
+  expect(await look('✦ 2 working')).toBe('claude')
+  expect(await look('○ 1 paused')).toBe('inactive')
+  await ui.unmount()
+})
+
+test('the English band keeps its compact form when narrow, and never draws past bodyColumns', async ($, on) => {
+  stage(on, { stdout: BANDED })
+  await started($)
+  const ui = await mountBand($, 46)
+
+  expect(await bandRow(ui)).toBe(edges(COMPACT_BAND, '12:00', 46))
+  for (let columns = 20; columns <= 120; columns += 1) {
+    await ui.redraw({ ...BAND.props, bodyColumns: columns })
+    expect((await bandRow(ui)).length, `at ${columns} columns`).toBeLessThanOrEqual(columns)
+  }
+  await ui.unmount()
+})
+
+test('the English band keeps the wide form at exactly the width it takes, and goes compact one column below', async ($, on) => {
+  stage(on, { stdout: BANDED })
+  await started($)
+  const wideWidth = EN_WIDE_BAND.length + 1 + '↻ 12:00:05'.length
+  const ui = await mountBand($, wideWidth)
+
+  expect(await bandRow(ui)).toBe(edges(EN_WIDE_BAND, '↻ 12:00:05', wideWidth))
+  await ui.redraw({ ...BAND.props, bodyColumns: wideWidth - 1 })
+  expect(await bandRow(ui)).toBe(edges(COMPACT_BAND, '12:00', wideWidth - 1))
+  await ui.unmount()
+})
+
+test('the empty English band keeps its dim line', async ($, on) => {
+  stage(on, { stdout: status(pm({ name: 'old', state: 'done', age: '2d' })) })
+  await started($)
+  const ui = await mountBand($)
+
+  expect(await bandRow(ui)).toBe(edges('☾ no one working right now', '↻ 12:00:05', 80))
+  const line = await ui.find({ type: 'Text', text: exactly('no one working right now') })
+  expect(line?.props.color).toBe('subtle')
+  await ui.unmount()
+})
+
+test('the English band says it is reading', async ($, on) => {
+  const world = stage(on)
+  const release = world.hold()
+  await start($)
+  const ui = await mountBand($)
+
+  expect(await bandRow(ui)).toBe('☾ reading the PMs…')
+  release()
+  await world.clock.settle()
+  await ui.unmount()
+})
+
+test('the English band says it could not read, when the first read fails', async ($, on) => {
+  const world = stage(on)
+  world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
+  await started($)
+  const ui = await mountBand($)
+
+  expect(await bandRow(ui)).toBe('☾ ✕ couldn\'t read the PMs')
+  await ui.unmount()
+})
+
+test('the Spanish band, reading and empty, is as it was with language es', { options: { language: 'es' } }, async ($, on) => {
+  const world = stage(on)
+  const release = world.hold()
+  await start($)
+  const reading = await mountBand($)
+  expect(await bandRow(reading)).toBe('☾ leyendo los PMs…')
+  await reading.unmount()
+  release()
+  await world.clock.settle()
+
+  world.reply.stdout = status(pm({ name: 'old', state: 'done', age: '2d' }))
+  await world.clock.advance(READ_MS)
+  const empty = await mountBand($)
+  expect(await bandRow(empty)).toMatch(/^☾ nadie trabajando ahora {2,}↻ \d\d:\d\d:\d\d$/)
+  await empty.unmount()
+})
+
+test('the Spanish band says it could not read, when the first read fails', { options: { language: 'es' } }, async ($, on) => {
+  const world = stage(on)
+  world.reply = { exitCode: 1, stdout: '', stderr: 'boom' }
+  await started($)
+  const ui = await mountBand($)
+
+  expect(await bandRow(ui)).toBe('☾ ✕ no pude leer los PMs')
+  await ui.unmount()
+})
+
+test('with band off the band draws nothing and passes, while the pane still reads and shows the PMs', { options: { band: false } }, async ($, on) => {
+  const world = stage(on, { stdout: BANDED })
+  await started($)
+
+  const band = await mountBand($)
+  expect(await band.find({ type: 'Text', text: /☾/ })).toBeUndefined()
+  expect(await band.keepsBeneath()).toBe(true)
+  await band.unmount()
+
+  await world.clock.advance(READ_MS)
+  const ui = await mountPane($)
+  expect((await rows(ui))[0]).toBe('◆ 2 wait ⋆ ✕ 1 problem ⋆ ✦ 2 working ⋆ ○ 1 paused')
+  expect(world.calls.length).toBeGreaterThan(0)
+  await ui.unmount()
+})
+
+test('with band on, the default, the band is drawn', async ($, on) => {
+  stage(on, { stdout: BANDED })
+  await started($)
+  const band = await mountBand($)
+
+  expect(await band.find({ type: 'Text', text: /☾/ })).toBeDefined()
+  await band.unmount()
+})
+
+// Toasts in English, and off.
+
+test('an English toast for a PM that starts waiting carries the question it waits on', async ($, on) => {
+  const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(WAITING_ON_LOGO()))
+
+  expect(toasts).toEqual([{ text: '◆ coven waits on the GM  QUESTION #6 which logo?', timeoutMs: 8000 }])
+})
+
+test('an English toast for a PM that waits on an item it did not send says it awaits an answer', async ($, on) => {
+  const asking = pm({
+    name: 'coven',
+    state: 'blocked',
+    lines: [lastOut('00:14 DONE coven/3: one'), waitsOn('QUESTION coven/6 since 00:14')],
+  })
+  const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(asking))
+
+  expect(toasts).toEqual([{ text: '◆ coven waits on the GM  QUESTION #6 waiting for an answer', timeoutMs: 8000 }])
+})
+
+test('an English toast for a PM that finishes says finished, with its DONE message', async ($, on) => {
+  const toasts = await toastsAfter(
+    $,
+    on,
+    status(pm({ name: 'coven', state: 'working' })),
+    status(pm({ name: 'coven', state: 'done', lines: [lastOut('00:20 DONE coven/7: shipped')] })),
+  )
+
+  expect(toasts).toEqual([{ text: '✓ coven finished  DONE #7 shipped', timeoutMs: 4000 }])
+})
+
+test('an English toast for a DONE message not delivered carries the English flag', async ($, on) => {
+  const toasts = await toastsAfter(
+    $,
+    on,
+    status(pm({ name: 'coven', state: 'working' })),
+    status(pm({ name: 'coven', state: 'working', lines: ['last out: 00:20 DONE coven/7: shipped   [NOT DELIVERED: no session]'] })),
+  )
+
+  expect(toasts).toEqual([{ text: '✓ coven finished  DONE #7 shipped · not delivered', timeoutMs: 4000 }])
+})
+
+for (const [state, word] of [
+  ['stale', 'process dead'],
+  ['failed', 'failed'],
+  ['duplicate', 'duplicate'],
+  ['zombie', 'no data'],
+] as const) {
+  test(`an English toast for a PM in state ${state} says ${word}`, async ($, on) => {
+    const toasts = await toastsAfter($, on, status(pm({ name: 'coven', state: 'working' })), status(pm({ name: 'coven', state })))
+
+    expect(toasts).toEqual([{ text: `✕ coven ${word}`, timeoutMs: 8000 }])
+  })
+}
+
+test('toasts in Spanish still say terminó with language es', { options: { language: 'es' } }, async ($, on) => {
+  const toasts = await toastsAfter(
+    $,
+    on,
+    status(pm({ name: 'coven', state: 'working' })),
+    status(pm({ name: 'coven', state: 'done', lines: [lastOut('00:20 DONE coven/7: shipped')] })),
+  )
+
+  expect(toasts).toEqual([{ text: '✓ coven terminó  DONE #7 shipped', timeoutMs: 4000 }])
+})
+
+test('with toasts off no toast is raised for a PM that starts waiting, finishes or dies', { options: { toasts: false } }, async ($, on) => {
+  const world = stage(on, { stdout: status(pm({ name: 'asker', state: 'working' }), pm({ name: 'doer', state: 'working' }), pm({ name: 'victim', state: 'working' })) })
+  await started($)
+
+  world.reply.stdout = status(
+    WAITING_ON_LOGO().replace('pm-coven', 'pm-asker'),
+    pm({ name: 'doer', state: 'done', lines: [lastOut('00:20 DONE doer/7: shipped')] }),
+    pm({ name: 'victim', state: 'stale' }),
+  )
+  await world.clock.advance(READ_MS)
+
+  expect(world.calls.length).toBeGreaterThan(1)
+  expect(world.toasts).toEqual([])
+  const ui = await mountPane($)
+  expect((await rows(ui))[0]).toBe('◆ 1 waits ⋆ ✕ 1 problem')
+  await ui.unmount()
+})
+
+test('with toasts off the band still shows', { options: { toasts: false } }, async ($, on) => {
+  stage(on, { stdout: BANDED })
+  await started($)
+  const band = await mountBand($)
+
+  expect(await band.find({ type: 'Text', text: /☾/ })).toBeDefined()
+  await band.unmount()
 })
