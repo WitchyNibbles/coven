@@ -3788,3 +3788,75 @@ def test_a_pipe_into_a_group_past_an_inner_group_is_guarded(repo, command):
 )
 def test_a_group_form_with_no_push_stays_unguarded(repo, command):
     assert_unguarded(command, repo)
+
+
+# A quoted word is never reserved: a quoted closer is a command, and the group a pipe feeds stays
+# fed past it. So is a quoted `!`, after which a `}` is a plain word.
+QUOTED_CLOSERS = [
+    "echo 'git push -f' | { \"}\"; sh; }",
+    "echo 'git push -f' | { \\}; sh; }",
+    "echo 'git push -f' | { '}' 2>/dev/null; sh; }",
+    "echo 'git push -f' | if :; then 'fi'; sh; fi",
+    "echo 'git push -f' | while :; do \"done\"; sh; break; done",
+    "echo 'git push -f' | case a in a) \"esac\"; sh;; esac",
+    "echo 'git push -f' | { \"!\" }; sh; }",
+    "echo 'gh pr merge 1' | { \\! }; sh; }",
+]
+
+
+@pytest.mark.parametrize("command", QUOTED_CLOSERS)
+def test_a_pipe_into_a_group_past_a_quoted_closer_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# bash reads no reserved word after a quoted opener or prefix: `"{"` opens nothing, and a case
+# after `\time` or `time "-p"` is a word, so its `)` ends the `$(`.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -1 | { \"{\"; cat; }; sh -n x.sh",
+        "git log -1 | { '{' 2>/dev/null; cat; }; bash scripts/check.sh",
+        'echo "$(\\time case a in a) git push -f;; esac)"',
+        'echo "$(time "-p" case a in a) git push -f;; esac)"',
+    ],
+)
+def test_a_quoted_opener_or_prefix_is_not_reserved(repo, command):
+    assert_unguarded(command, repo)
+
+
+# parallel runs each line it reads as a command when it has none of its own, and adds what it
+# reads to a git, gh, shell or wrapper command's words; `make -f -` reads its makefile there.
+STDIN_RUNNERS = [
+    "echo 'all:; git push -f' | make -f -",
+    "echo 'all:; gh pr merge 1' | make --file=- all",
+    "echo 'all:; git push -f' | make -sf-",
+    "make -f - <<EOF\nall:\n\tgit push -f\nEOF",
+    "echo 'git push -f' | parallel",
+    "echo 'gh pr merge 1' | parallel -j 4",
+    "echo push | parallel git",
+    "echo 'git push -f' | parallel --pipe sh",
+    "echo 'git push -f' | parallel --no-such-option wc",
+    "parallel <<EOF\ngit push -f\nEOF",
+    "parallel git <<EOF\npush\nEOF",
+    "parallel -j 2 sh -c <<<'git push -f'",
+]
+
+
+@pytest.mark.parametrize("command", STDIN_RUNNERS)
+def test_a_pipe_or_heredoc_into_a_stdin_command_runner_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "make test | tail -n 5",
+        "git ls-files | parallel wc -l",
+        "git ls-files | parallel -j 4 wc -l",
+        "git ls-files '*.py' | parallel --pipe wc -l",
+        "git log -1 | make check",
+        "parallel wc -l ::: a b",
+    ],
+)
+def test_a_stdin_runner_with_a_harmless_command_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)

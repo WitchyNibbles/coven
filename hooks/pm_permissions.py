@@ -131,7 +131,7 @@ import signal
 import stat
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -268,6 +268,9 @@ GROUP_CLOSERS = {
 }
 # Reserved words bash reads after `time` (and `time -p`) and `coproc` (and `coproc NAME`).
 RESERVED_PREFIXES = frozenset({"time", "coproc"})
+TIME = frozenset({"time"})
+TIME_OPTIONS = frozenset({"-p"})
+COPROC = frozenset({"coproc"})
 # `NAME=`, `NAME+=`, `NAME[index]=` and `NAME[index]+=`.
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 QUOTE_CHARS = re.compile(r"['\"\\]")
@@ -1206,12 +1209,18 @@ class Heredoc:
 @dataclass(frozen=True)
 class Token:
     """A word (its text with the quotes removed; a substitution in it stays as written), or an
-    operator. Only unquoted text forms an operator, so a quoted `;` or `>` is a word. A heredoc
-    operator carries its heredoc, delimiter and body."""
+    operator. Only unquoted text forms an operator, so a quoted `;` or `>` is a word, and only an
+    unquoted word can be a reserved word (`"}"` and `\\}` are commands). A heredoc operator carries
+    its heredoc, delimiter and body."""
 
     kind: TokenKind
     text: str
     heredoc: Heredoc | None = None
+    quoted: bool = False  # any part of the word was quoted
+
+    def is_reserved(self, words: Collection[str]) -> bool:
+        """Whether the token is an unquoted word among `words`."""
+        return self.kind is TokenKind.WORD and not self.quoted and self.text in words
 
 
 @dataclass(frozen=True)
@@ -1385,7 +1394,7 @@ class _Scanner:
         at = self.text[self.pos : self.pos + 1]
         descriptor = not quoted and at in ("<", ">") and DESCRIPTOR.fullmatch(text)
         if not (descriptor and not self._at_process_substitution()):
-            self.tokens.append(Token(TokenKind.WORD, text))
+            self.tokens.append(Token(TokenKind.WORD, text, quoted=quoted))
         if starts_a_command and not quoted:
             if text == "case":
                 self.cases += 1
@@ -1395,7 +1404,8 @@ class _Scanner:
     def _at_command_start(self) -> bool:
         """Whether the next word starts a command: first, after an operator (`(` too), or after
         `!`, `{`, `then`, `do` and the like, or `time`, `time -p`, `coproc` and `coproc NAME`
-        there. A reserved word counts only there. Each index is decided once (`time time ...`)."""
+        there. A reserved word counts only there, and only unquoted (`\\time` and `time "-p"` are
+        commands; coproc's NAME may be quoted). Each index is decided once (`time time ...`)."""
         index = len(self.tokens)
         walked: list[int] = []
         starts = True
@@ -1404,13 +1414,16 @@ class _Scanner:
                 starts = self.starts[index]
                 break
             last = self.tokens[index - 1]
-            if last.kind is TokenKind.SEPARATOR or last.text in SHELL_PREFIXES:
+            if last.kind is TokenKind.SEPARATOR or last.is_reserved(SHELL_PREFIXES):
                 break
             walked.append(index)
-            before = self.tokens[index - 2].text if index > 1 else None
-            if last.text in RESERVED_PREFIXES:
+            before = self.tokens[index - 2] if index > 1 else None
+            if last.is_reserved(RESERVED_PREFIXES):
                 index -= 1
-            elif (before, last.text) == ("time", "-p") or before == "coproc":
+            elif before and (
+                (before.is_reserved(TIME) and last.is_reserved(TIME_OPTIONS))
+                or before.is_reserved(COPROC)
+            ):
                 index -= 2
             else:
                 starts = False
@@ -1633,20 +1646,22 @@ class _CommandStart:
             _Position.AFTER_COPROC,
         )
 
-    def read(self, word: str) -> None:
+    def read(self, word: Token) -> None:
+        """Moves past `word`. A quoted word is never reserved, but it may be a NAME."""
         position = self.position
+        opener = word.is_reserved(RESERVED_OPENERS)
         named = position is _Position.AFTER_FUNCTION or (
-            position is _Position.AFTER_COPROC and word not in RESERVED_OPENERS
+            position is _Position.AFTER_COPROC and not opener
         )
-        if named or (position is _Position.AFTER_TIME and word == "-p"):
+        if named or (position is _Position.AFTER_TIME and word.is_reserved(TIME_OPTIONS)):
             self.position = _Position.RESERVED
-        elif self.opens() and word in RESERVED_OPENERS:
+        elif self.opens() and opener:
             self.position = _Position.RESERVED
-        elif self.opens():
-            self.position = NEXT_POSITION.get(word, _Position.PAST)
+        elif self.opens() and not word.quoted:
+            self.position = NEXT_POSITION.get(word.text, _Position.PAST)
         else:
             self.position = _Position.PAST
-        self.prefixes_only = self.prefixes_only and word in RESERVED_OPENERS
+        self.prefixes_only = self.prefixes_only and opener
 
 
 class _CommandList:
@@ -1661,7 +1676,7 @@ class _CommandList:
     def read(self, tokens: Sequence[Token]) -> list[SimpleCommand]:
         for token in tokens:
             if token.kind is TokenKind.WORD:
-                self._word(token.text)
+                self._word(token)
             elif token.kind is TokenKind.REDIRECT:
                 self._redirect(token)
             else:
@@ -1671,24 +1686,24 @@ class _CommandList:
     def _in_a_piped_group(self) -> bool:
         return any(piped for _, piped in self.groups)
 
-    def _word(self, text: str) -> None:
+    def _word(self, word: Token) -> None:
         current = self.commands[-1]
         target, self.target = self.target, None
         if target == "<<<":
             # The outer shell expands it as an unquoted body (its substitutions are read already).
-            current.heredocs.append(Heredoc("", quoted=False, strip_tabs=False, body=text))
+            current.heredocs.append(Heredoc("", quoted=False, strip_tabs=False, body=word.text))
         elif target is None:
-            self._open_or_close(current, text)
-            self.start.read(text)
-            current.words.append(text)
+            self._open_or_close(current, word)
+            self.start.read(word)
+            current.words.append(word.text)
 
-    def _open_or_close(self, current: SimpleCommand, text: str) -> None:
-        """A reserved word at the start of a command opens or closes a group. A closer ends only
-        the open group it matches: otherwise every group stays open, and a pipe into one still
-        feeds the commands after it."""
-        if text in GROUP_OPENERS and self.start.opens():
-            self.groups.append((text, current.piped))
-        elif text in GROUP_CLOSERS and self._closes(text):
+    def _open_or_close(self, current: SimpleCommand, word: Token) -> None:
+        """An unquoted reserved word at the start of a command opens or closes a group. A closer
+        ends only the open group it matches: otherwise every group stays open, and a pipe into
+        one still feeds the commands after it."""
+        if word.is_reserved(GROUP_OPENERS) and self.start.opens():
+            self.groups.append((word.text, current.piped))
+        elif word.is_reserved(GROUP_CLOSERS) and self._closes(word.text):
             self.groups.pop()
 
     def _closes(self, closer: str) -> bool:
@@ -1794,6 +1809,29 @@ WRAPPER_SYNTAX = {
     ),
 }
 NUMERIC_OPTION = re.compile(r"-\d+")
+# GNU parallel's options, to find the command it adds what it reads to. An option not listed means
+# the guard cannot tell where that command is.
+PARALLEL_SYNTAX = WrapperSyntax(
+    flags=frozenset(
+        {
+            *("-0", "-k", "-u", "-v", "-t", "-q", "-r", "-X", "-m", "-g", "--null"),
+            *("--keep-order", "--ungroup", "--group", "--verbose", "--quote", "--dry-run"),
+            *("--no-run-if-empty", "--progress", "--bar", "--eta", "--xargs", "--tag"),
+            *("--line-buffer", "--lb", "--pipe", "--shuf", "--will-cite", "--plain"),
+        }
+    ),
+    valued=frozenset(
+        {
+            *("-j", "-P", "-n", "-N", "-L", "-l", "-s", "-d", "-a", "-C", "-E", "-I", "-S"),
+            *("--jobs", "--max-args", "--max-lines", "--max-chars", "--delimiter"),
+            *("--arg-file", "--colsep", "--sshlogin", "--joblog", "--results", "--halt"),
+            *("--timeout", "--delay", "--retries", "--tmpdir", "--workdir", "--wd", "--block"),
+            *("--tagstring", "--header", "--env", "--memfree", "--load"),
+        }
+    ),
+)
+# The words after which parallel's arguments come, not its command.
+PARALLEL_SOURCES = frozenset({":::", "::::", ":::+", "::::+"})
 
 
 def _option_words(syntax: WrapperSyntax, word: str, following: int) -> int | None:
@@ -1975,8 +2013,33 @@ def _reads_commands(words: Sequence[str], receiver: str, depth: int = 0) -> bool
         return any(_reads_commands(action, _receiver(action), depth + 1) for action in actions)
     if receiver == "find":  # a find in a find's action, past MAX_NESTING
         return True
+    if receiver == "parallel":
+        return _parallel_runs_its_input(_unwrapped(words).command)
+    if receiver == "make":
+        return _make_reads_its_makefile(_unwrapped(words).command)
     return receiver in EXEC_WRAPPERS and any(
         os.path.basename(word) in WORD_READERS for word in words
+    )
+
+
+def _parallel_runs_its_input(command: Sequence[str]) -> bool:
+    """parallel runs each line it reads as a command when it has none of its own (or options the
+    guard cannot follow), and adds what it reads to its command's words: a git, gh, shell,
+    eval, wrapper or expanding command then runs it, as under xargs."""
+    start = _wrapped_start(PARALLEL_SYNTAX, command, 1)
+    if start is None or start == len(command) or command[start] in PARALLEL_SOURCES:
+        return True
+    name = os.path.basename(command[start])
+    runs_words = name in WRAPPERS or name in EXEC_WRAPPERS or name in ("git", "gh")
+    return runs_words or name in COMMAND_READERS or _expands(command[start])
+
+
+def _make_reads_its_makefile(command: Sequence[str]) -> bool:
+    """make reads its makefile from stdin, and runs its recipes, with `-f -`, `-f-`, `-sf-` or
+    `--file=-` (a `-` word counts wherever it is)."""
+    return any(
+        word == "-" or (word.startswith("-") and word.endswith(("f-", "=-")))
+        for word in command[1:]
     )
 
 
