@@ -13,6 +13,8 @@ from support import REPO, commit_all, git
 
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = REPO / ".claude-plugin" / "marketplace.json"
+AQUELARRE = REPO / "plugins" / "aquelarre"
+AQUELARRE_JSON = AQUELARRE / ".claude-plugin" / "plugin.json"
 HOOKS_JSON = REPO / "hooks" / "hooks.json"
 AGENTS = REPO / "agents"
 SKILLS = REPO / "skills"
@@ -86,9 +88,23 @@ def test_manifests_parse_and_match_docs_fields() -> None:
     assert marketplace["name"] == "coven"
     assert marketplace["owner"] == {"name": "WitchyNibbles"}
     assert marketplace["allowCrossMarketplaceDependenciesOn"] == ["claude-plugins-official"]
-    (entry,) = marketplace["plugins"]
-    assert entry["name"] == plugin["name"]
-    assert entry["source"] == "./"
+    entries = {entry["name"]: entry for entry in marketplace["plugins"]}
+    assert set(entries) == {"coven", "aquelarre"}
+    assert entries["coven"]["source"] == "./"
+    assert entries["aquelarre"]["source"] == "./plugins/aquelarre"
+
+
+def test_aquelarre_manifest_matches_coven() -> None:
+    mod = load(AQUELARRE_JSON)
+    assert set(mod) <= PLUGIN_KEYS | {"types"}
+    assert mod["name"] == "aquelarre"
+    assert mod["version"] == load(PLUGIN_JSON)["version"]
+    assert mod["description"].strip()
+    assert mod["author"] == {"name": "WitchyNibbles"}
+    assert mod["license"] == "MIT"
+    assert mod["homepage"] == load(PLUGIN_JSON)["homepage"]
+    assert mod["types"] == "./types/index.d.ts"
+    assert (AQUELARRE / "hooks" / "hooks.json").is_file()
 
 
 def test_hooks_json_uses_plugin_root_paths() -> None:
@@ -326,5 +342,25 @@ def test_claude_plugin_validate() -> None:
         text=True,
         check=False,
         timeout=120,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.claude
+def test_aquelarre_validates_strictly(tmp_path: Path) -> None:
+    """The CLI's own validator, strictly (warnings fail, TypeScript errors among them), on the mod."""
+    claude = shutil.which("claude")
+    assert claude is not None, "claude is not on PATH"
+    home = tmp_path / "claude-home"
+    config = tmp_path / "claude-config"
+    home.mkdir()
+    config.mkdir()
+    done = subprocess.run(
+        [claude, "plugin", "validate", str(AQUELARRE), "--strict"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+        env={**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(config)},
     )
     assert done.returncode == 0, done.stdout + done.stderr
