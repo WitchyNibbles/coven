@@ -38,7 +38,8 @@ delimiter after backslash-newline joining, as bash does). An unquoted delimiter'
 for substitutions, which always run. A heredoc or here-string body is read as commands when the
 command it feeds reads commands: a shell (bash, sh, zsh, dash, ksh, mksh, ash, fish, csh, tcsh,
 with any arguments), `source`, `.`, `eval`, a shell, `source` or `eval` as a word of an exec
-wrapper (`stdbuf -oL bash`, `busybox sh`), an expansion (`$x`), a wrapper the guard cannot
+wrapper (`stdbuf -oL bash`, `busybox sh`), one in find's exec action (`find . -exec sh \;`, which
+inherits find's stdin), an expansion (`$x`), a wrapper the guard cannot
 unwrap, or a compound command (`} done fi esac )`). The words of any other command are its own
 data: `git diff --name-only | grep bash` and `git status --short | grep -c .` are not guarded. Anything else (cat, tee, python3 -, node,
 perl) is data. Such a command is also guarded when its own words mention a guarded word, as its
