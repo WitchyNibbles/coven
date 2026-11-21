@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import CodeType, ModuleType
@@ -406,6 +405,17 @@ def load_ts() -> ModuleType:
     return _load("check_ts", needs=("suppression_lines", "settings_problems"))
 
 
+def _ts_load_problem(*, missing_fails: bool) -> str | None:
+    """Why check_ts.py cannot be used; a missing file only when `missing_fails`."""
+    try:
+        load_ts()
+    except FileNotFoundError:
+        return _ts_missing() if missing_fails else None
+    except LOAD_ERRORS as error:
+        return _load_problem("check_ts", error)
+    return None
+
+
 def _check_ts_problem(projects: list[check_repo.Project]) -> str | None:
     """Why check_ts.py cannot be used, when a TypeScript project needs it.
 
@@ -413,13 +423,7 @@ def _check_ts_problem(projects: list[check_repo.Project]) -> str | None:
     """
     if not any(project.kind == "typescript" for project in projects):
         return None
-    try:
-        load_ts()
-    except FileNotFoundError:
-        return None
-    except LOAD_ERRORS as error:
-        return _load_problem("check_ts", error)
-    return None
+    return _ts_load_problem(missing_fails=False)
 
 
 CHECK_MOD = "check_mod.py"
@@ -436,13 +440,14 @@ def load_mod() -> ModuleType:
     return _load("check_mod", needs=("mod_stages",))
 
 
-def _mod_problem_for(name: str, load: Callable[[], ModuleType]) -> str | None:
+def _mod_load_problem() -> str | None:
+    """Why check_mod.py cannot be used; run after check_ts.py loaded, so a missing file is its own."""
     try:
-        load()
+        load_mod()
     except FileNotFoundError:
-        return f"{check_repo.STANDARD_DIR}/{name}.py is missing (re-run coven project)"
+        return f"{check_repo.STANDARD_DIR}/{CHECK_MOD} is missing (re-run coven project)"
     except LOAD_ERRORS as error:
-        return _load_problem(name, error)
+        return _load_problem("check_mod", error)
     return None
 
 
@@ -454,7 +459,7 @@ def _check_mod_problem(projects: list[check_repo.Project]) -> str | None:
     """
     if not any(project.kind == "mod" for project in projects):
         return None
-    problem = _mod_problem_for("check_ts", load_ts) or _mod_problem_for("check_mod", load_mod)
+    problem = _ts_load_problem(missing_fails=True) or _mod_load_problem()
     if problem is None and shutil.which("claude") is None:
         return "claude not found on PATH"
     return problem
@@ -492,11 +497,14 @@ def _typescript_stages(
 
 
 def _mod_stages(
-    project: check_repo.Project, run: check_stages.Run, paths: list[str]
+    project: check_repo.Project,
+    projects: list[check_repo.Project],
+    run: check_stages.Run,
+    paths: list[str],
 ) -> check_stages.Stages:
     """A mod's stages. Its tests run whole, in full mode or when fast names a path inside it."""
     stages: check_stages.Stages = load_mod().mod_stages(
-        project, run, run_tests=run.mode == "full" or bool(paths)
+        project, projects, run, run_tests=run.mode == "full" or bool(paths)
     )
     return stages
 
@@ -544,7 +552,7 @@ def _run_stages(
                     check_python.python_stages(project, run, paths, out / "coverage.xml")
                 )
             elif project.kind == "mod":
-                results.append(_mod_stages(project, run, paths))
+                results.append(_mod_stages(project, projects, run, paths))
             else:
                 results.append(_typescript_stages(project, run, projects, paths, out))
             if len(projects) > 1:  # each project's own results, before they are folded together

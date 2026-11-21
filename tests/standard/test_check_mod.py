@@ -276,6 +276,18 @@ def test_a_suppression_in_a_mod_fails(run_check, mod_repo, fake_claude):
     assert f"hooks/register.tsx:1: {marker}" in out.stdout
 
 
+def test_a_mod_nested_in_a_root_mod_is_scanned_once(run_check, git_repo, fake_claude):
+    marker = "// @ts" + "-ignore"
+    write_mod(git_repo, ".")
+    nested = write_mod(git_repo, "plugins/x")
+    (nested / "hooks/register.tsx").write_text(f"{marker}\nexport const x: number = 1;\n")
+    commit_all(git_repo)
+    out = run_check(git_repo, "fast", env=fake_claude.env)
+    assert " projects=2 " in receipt(out)
+    assert " suppressions=1 " in receipt(out)
+    assert out.stdout.count(f"hooks/register.tsx:1: {marker}") == 1
+
+
 def test_a_vendored_mod_file_is_not_scanned(run_check, mod_repo, fake_claude):
     marker = "// @ts" + "-ignore"
     (mod_repo / MOD / "hooks/vendor.ts").write_text(f"{marker}\n")

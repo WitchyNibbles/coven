@@ -513,13 +513,13 @@ FRAMEWORK_PROBLEM = (
 
 @dataclass(frozen=True)
 class TsFiles:
-    """The files git lists in a TypeScript project, minus nested projects, `node_modules` and
-    `.coven/`."""
+    """The files git lists in a TypeScript project or mod, minus nested TypeScript projects and
+    mods, `node_modules` and `.coven/`."""
 
     root: Path
     listed: list[Path]  # every such file (absolute)
     skipped: set[Path]  # the vendored and generated ones among them (.gitattributes)
-    nested: list[Path]  # the TypeScript projects inside, checked on their own
+    nested: list[Path]  # the TypeScript projects and mods inside, checked on their own
 
     @classmethod
     def of(cls, project: Project, projects: list[Project]) -> TsFiles:
@@ -527,7 +527,7 @@ class TsFiles:
         nested = [
             p.root
             for p in projects
-            if p.kind == "typescript" and p.root != root and p.root.is_relative_to(root)
+            if p.kind in ("typescript", "mod") and p.root != root and p.root.is_relative_to(root)
         ]
         listed = [
             root / path

@@ -88,7 +88,11 @@ def _tests_stage(project: check_repo.Project, where: str, mode: str) -> check_st
 
 
 def mod_stages(
-    project: check_repo.Project, run: check_stages.Run, *, run_tests: bool = True
+    project: check_repo.Project,
+    projects: list[check_repo.Project],
+    run: check_stages.Run,
+    *,
+    run_tests: bool = True,
 ) -> check_stages.Stages:
     """A mod's stages. `run_tests` False (fast mode, no test of the mod named) counts no tests.
 
@@ -96,7 +100,7 @@ def mod_stages(
     projects' scan. Types and tests: Claude Code's tools. Format, lint and coverage: `n/a`.
     """
     where = check_repo.where(run.repo, project)
-    files = check_repo.TsFiles.of(project, [project])
+    files = check_repo.TsFiles.of(project, projects)
     problems = check_repo.framework_problems(files)
     for problem in problems:
         print(f"settings: {problem}")
