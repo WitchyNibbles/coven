@@ -311,6 +311,21 @@ def test_aquelarre_does_not_repeat_a_missing_claude(world):
     assert results()["aquelarre plugin"] == ("ok", AQUELARRE)
 
 
+@pytest.mark.parametrize(
+    "output",
+    ["not a version at all\n", "2.1.223 (Claude Code)\n"],
+    ids=["unreadable version", "below the coven minimum"],
+)
+def test_aquelarre_reports_the_plugin_when_the_claude_version_cannot_be_used(world, output):
+    world.tool("claude", output)
+    assert status("claude code") == "fail"  # the one line that owns the version problem
+    assert results()["aquelarre plugin"] == ("ok", AQUELARRE)
+    paths.installed_plugins_file().unlink()
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert "not installed" in detail
+
+
 def test_an_invalid_config_fails(world):
     file = paths.config_dir() / "config.json"
     file.parent.mkdir(parents=True)

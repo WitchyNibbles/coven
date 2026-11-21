@@ -248,6 +248,8 @@ approval for the exact command. With no guard set up, nothing changes for you.
 The guard is best effort against a PM that follows its role, and it never covers your own terminal
 outside Claude Code. See [known gaps](docs/known-gaps.md).
 
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 ## Aquelarre
 
 ☾ A second plugin in the same marketplace that installs with coven (coven lists it as a
@@ -264,8 +266,6 @@ dependency): a mod that shows your live project managers. It needs Claude Code 2
 
 It reads `coven pm status` and writes only `~/.cache/aquelarre/`. See
 [plugins/aquelarre](plugins/aquelarre/README.md).
-
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
