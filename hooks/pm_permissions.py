@@ -217,6 +217,8 @@ GIT_VALUED_OPTIONS = frozenset(
 # Shells, and the commands that run text as shell commands: a heredoc fed to one is commands.
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"})
 COMMAND_READERS = SHELLS | {"source", ".", "eval"}
+# The same among a wrapper's words: `.` there is a path (`flock . cat`), not the command.
+WORD_READERS = COMMAND_READERS - {"."}
 # The last word of a compound command (`{ bash; } <<EOF`, `while ...; done <<EOF`): what it runs
 # with a heredoc is not one command the guard can name.
 COMPOUND_ENDS = frozenset({"}", "done", "fi", "esac"})
@@ -248,7 +250,7 @@ EXEC_WRAPPERS = frozenset(
         *("setsid", "stdbuf", "ionice", "flock", "taskset", "chrt", "unshare", "nsenter"),
         *("script", "doas", "su", "runuser", "chroot", "watch", "strace", "ltrace", "nocache"),
         *("unbuffer", "faketime", "firejail", "systemd-run", "sg", "numactl", "cgexec"),
-        *("parallel", "proxychains", "proxychains4", "torsocks", "pkexec", "ssh"),
+        *("parallel", "proxychains", "proxychains4", "torsocks", "pkexec", "ssh", "busybox"),
     }
 )
 FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
@@ -256,7 +258,15 @@ SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "
 # The words that open and close a group or compound command, at the start of a command: a pipe
 # into one feeds every command inside it.
 GROUP_OPENERS = frozenset({"{", "if", "while", "until", "for", "select", "case"})
-GROUP_CLOSERS = frozenset({"}", "fi", "done", "esac"})
+# Each closer, and the openers it ends.
+GROUP_CLOSERS = {
+    "}": frozenset({"{"}),
+    "fi": frozenset({"if"}),
+    "done": frozenset({"while", "until", "for", "select"}),
+    "esac": frozenset({"case"}),
+}
+# Reserved words bash reads after `time` (and `time -p`) and `coproc` (and `coproc NAME`).
+RESERVED_PREFIXES = frozenset({"time", "coproc"})
 # `NAME=`, `NAME+=`, `NAME[index]=` and `NAME[index]+=`.
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 QUOTE_CHARS = re.compile(r"['\"\\]")
@@ -1381,12 +1391,22 @@ class _Scanner:
                 self.cases -= 1
 
     def _at_command_start(self) -> bool:
-        """Whether the next word starts a command: first, after an operator, or after `!`, `{`,
-        `then`, `do` and the like. A reserved word counts only there."""
-        if not self.tokens:
-            return True
-        last = self.tokens[-1]
-        return last.kind is TokenKind.SEPARATOR or last.text in SHELL_PREFIXES
+        """Whether the next word starts a command: first, after an operator (`(` too), or after
+        `!`, `{`, `then`, `do` and the like, or `time`, `time -p`, `coproc` and `coproc NAME`
+        there. A reserved word counts only there."""
+        index = len(self.tokens)
+        while index:
+            last = self.tokens[index - 1]
+            if last.kind is TokenKind.SEPARATOR or last.text in SHELL_PREFIXES:
+                return True
+            before = self.tokens[index - 2].text if index > 1 else None
+            if last.text in RESERVED_PREFIXES:
+                index -= 1
+            elif (before, last.text) == ("time", "-p") or before == "coproc":
+                index -= 2
+            else:
+                return False
+        return True
 
     def _read_word(self) -> tuple[str, bool]:
         """The next word's text, quotes removed, and whether any part of it was quoted."""
@@ -1599,13 +1619,17 @@ class _CommandList:
             current.words.append(text)
 
     def _open_or_close(self, current: SimpleCommand, text: str) -> None:
-        """A reserved word at the start of a command opens or closes a group."""
-        if not all(word in SHELL_PREFIXES or word in GROUP_OPENERS for word in current.words):
-            return
-        if text in GROUP_OPENERS:
+        """A reserved word at the start of a command opens or closes a group. A closer ends only
+        the open group it matches: otherwise every group stays open, and a pipe into one still
+        feeds the commands after it."""
+        if text in GROUP_OPENERS and _reads_a_reserved_word(current.words):
             self.groups.append((text, current.piped))
-        elif text in GROUP_CLOSERS and self.groups:
+        elif text in GROUP_CLOSERS and self._closes(text, current.words):
             self.groups.pop()
+
+    def _closes(self, closer: str, words: Sequence[str]) -> bool:
+        prefixes_only = all(word in SHELL_PREFIXES or word in GROUP_OPENERS for word in words)
+        return prefixes_only and bool(self.groups) and self.groups[-1][0] in GROUP_CLOSERS[closer]
 
     def _redirect(self, token: Token) -> None:
         current = self.commands[-1]
@@ -1621,13 +1645,34 @@ class _CommandList:
         current = self.commands[-1]
         if text == "(":
             self.groups.append((text, current.piped or self._in_a_piped_group()))
-        elif text == ")" and self.groups and self.groups[-1][0] != "case":
+        elif text == ")" and self.groups and self.groups[-1][0] == "(":
             self.groups.pop()  # in a case, a `)` ends a pattern
         if current.words or current.heredocs or current.fed:
             piped = text in PIPES or self._in_a_piped_group()
             self.commands.append(SimpleCommand(piped=piped))
         else:  # an empty command: a newline continues the list, and `| (` still pipes
             current.piped = current.piped or text in PIPES
+
+
+def _reads_a_reserved_word(words: Sequence[str]) -> bool:
+    """Whether bash reads a reserved word after these first words of a command: shell prefixes
+    and openers (`! {`, `if {`), `time`, `time -p`, `function NAME`, `coproc` and `coproc NAME`."""
+    openers = SHELL_PREFIXES | GROUP_OPENERS
+    index = 0
+    while index < len(words):
+        word = words[index]
+        following = words[index + 1 : index + 2]
+        if word in openers:
+            index += 1
+        elif word == "time":
+            index += 2 if following == ["-p"] else 1
+        elif word == "function":
+            index += 2
+        elif word == "coproc":
+            index += 1 if not following or following[0] in openers else 2
+        else:
+            return False
+    return index == len(words)
 
 
 def _simple_commands(tokens: Sequence[Token]) -> list[SimpleCommand]:
@@ -1810,10 +1855,30 @@ def _mentions_a_guarded_word(text: str) -> bool:
     return bool(HOLDS_GIT_OR_GH.search(plain) or HOLDS_GUARDED.search(plain))
 
 
-def _segment_is_guarded(words: Sequence[str]) -> bool:
+def _find_actions(words: Sequence[str]) -> list[list[str]]:
+    """The commands a find runs with -exec, -execdir, -ok or -okdir: each action's words up to its
+    `;`, or a `+` right after `{}`; to the end when neither comes."""
+    actions: list[list[str]] = []
+    index = 0
+    while index < len(words):
+        if words[index] not in FIND_ACTIONS:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(words) and not (
+            words[end] == ";" or (words[end] == "+" and words[end - 1] == "{}")
+        ):
+            end += 1
+        actions.append(list(words[index + 1 : end]))
+        index = end + 1
+    return actions
+
+
+def _segment_is_guarded(words: Sequence[str], depth: int = 0) -> bool:
     """A command that runs gh, or a git push, merge or send-pack, under any wrappers; a wrapper
     the guard cannot unwrap, or a shell, eval or make, whose words hold such a word; a command
-    name that expands, next to such a word or a git word; xargs running git with no subcommand."""
+    name that expands, next to such a word or a git word; xargs running git with no subcommand;
+    a find whose exec action is such a command."""
     inner = _unwrapped(words)
     command = inner.command
     if not command:
@@ -1831,9 +1896,11 @@ def _segment_is_guarded(words: Sequence[str]) -> bool:
         )
     if _expands(command[0]):
         return _mentions_a_guarded_word(" ".join(command))
+    if name == "find" and depth < MAX_NESTING:
+        return any(_segment_is_guarded(action, depth + 1) for action in _find_actions(command))
+    if name == "find":  # a find in a find's action, past MAX_NESTING
+        return _holds_a_guarded_word(command)
     runs_its_words = name in WRAPPERS or name in EXEC_WRAPPERS
-    if name == "find":
-        runs_its_words = not FIND_ACTIONS.isdisjoint(command)
     return runs_its_words and _holds_a_guarded_word(command)
 
 
@@ -1853,11 +1920,15 @@ def _receiver(words: Sequence[str]) -> str:
 
 
 def _reads_commands(command: SimpleCommand, receiver: str) -> bool:
-    """Whether a command may run what it reads on stdin: a shell, `source` or `eval` (also as any
-    word of it, under a wrapper the guard does not know: `stdbuf -oL bash`), or an unknown one."""
+    """Whether a command may run what it reads on stdin: a shell, `source`, `.` or `eval`, an
+    unknown one, or a wrapper with options the guard does not follow that names a shell, `source`
+    or `eval` among its words (`stdbuf -oL bash`). Another command's words are its own data
+    (`grep -c bash`)."""
     if receiver in COMMAND_READERS or receiver == UNKNOWN_COMMAND:
         return True
-    return any(os.path.basename(word) in COMMAND_READERS for word in command.words)
+    return receiver in EXEC_WRAPPERS and any(
+        os.path.basename(word) in WORD_READERS for word in command.words
+    )
 
 
 def _expands_into_commands(heredoc: Heredoc) -> bool:

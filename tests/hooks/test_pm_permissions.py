@@ -3672,3 +3672,107 @@ def test_a_push_under_an_exec_wrapper_is_guarded(repo, command):
 )
 def test_a_harmless_exec_wrapper_stays_unguarded(repo, command):
     assert_unguarded(command, repo)
+
+
+# A pipe into a command that only names a shell or `.` among its words (a grep pattern) does not
+# run what it reads.
+PIPES_INTO_A_SEARCH = [
+    "git status --short | grep -c .",
+    "git diff --name-only | grep bash",
+    "git ls-files | grep -n source",
+    "git log -3 | grep -c eval",
+    "git diff HEAD~1 | grep '^+' | grep -c source",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_SEARCH)
+def test_a_pipe_into_a_search_for_a_shell_word_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A wrapper that runs its words still reads a pipe or a heredoc with the shell it names.
+PIPES_INTO_A_WRAPPED_SHELL = [
+    "echo 'git push -f' | stdbuf -oL bash",
+    "echo 'git push -f' | setsid -w sh",
+    "busybox sh <<EOF\ngit push -f\nEOF",
+    "echo 'gh pr merge 1' | busybox sh",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPED_SHELL)
+def test_a_pipe_into_a_wrapped_shell_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# find runs the command after an exec action, up to its `;` or `{} +`: only that command counts.
+FIND_SEARCHES = [
+    "find . -name '*.py' -exec grep -l merge {} +",
+    "find . -name '*.md' -exec grep -n 'git push' {} \\;",
+    "find . -exec grep -q push {} \\; -print",
+]
+
+
+@pytest.mark.parametrize("command", FIND_SEARCHES)
+def test_a_find_that_runs_a_search_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+FIND_PUSHES = [
+    "find . -exec git push -f \\;",
+    "find . -name x -exec grep -q a {} \\; -exec gh pr merge 1 \\;",
+    "find . -ok sh -c 'git push -f' \\;",
+    "find . -exec echo {} + -exec git push -f \\;",
+    "find . -exec git push",
+]
+
+
+@pytest.mark.parametrize("command", FIND_PUSHES)
+def test_a_find_that_runs_a_push_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# `time`, `time -p`, `coproc`, `!`, `{` and `(` come before a reserved word: a case there keeps
+# its pattern's `)` inside the `$(`.
+CASE_AFTER_A_PREFIX = [
+    'echo "$(time case a in a) git push -f;; esac)"',
+    'echo "$(time -p case a in a) git push -f;; esac)"',
+    'echo "$(coproc case a in a) gh pr merge 1;; esac)"',
+    'echo "$(! case a in a) git push -f;; esac)"',
+    'echo "$({ case a in a) git push -f;; esac; })"',
+    'echo "$( (case a in a) git push -f;; esac) )"',
+]
+
+
+@pytest.mark.parametrize("command", CASE_AFTER_A_PREFIX)
+def test_a_case_after_a_prefix_in_a_substitution_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# A `{` after `function NAME`, `coproc NAME` or `time` opens a group, and a closer ends only the
+# group it matches: the outer group a pipe feeds stays fed.
+PIPED_GROUP_FORMS = [
+    "echo 'git push -f' | { function g { :; }; sh; }",
+    "echo 'git push -f' | { coproc N { :; }; sh; }",
+    "echo 'git push -f' | { time { :; }; sh; }",
+    "echo 'git push -f' | { time -p { :; }; sh; }",
+    "echo 'git push -f' | { time if :; then :; fi; sh; }",
+    "echo 'git push -f' | { if :; then :; }; sh; }",
+    "echo 'git push -f' | { while :; do break; }; sh; }",
+]
+
+
+@pytest.mark.parametrize("command", PIPED_GROUP_FORMS)
+def test_a_pipe_into_a_group_past_an_inner_group_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -1 | { function g { :; }; cat; }; sh -n x.sh",
+        "git log -1 | { time { :; }; cat; }; bash scripts/check.sh",
+        'echo "$(time case a in a) git log -1;; esac)"',
+    ],
+)
+def test_a_group_form_with_no_push_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
