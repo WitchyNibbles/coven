@@ -58,14 +58,29 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   credentials you are happy for an automated session to use.
 - The `ask` and `deny` rules on `git push`, `git merge` and `gh` match a command by its start, so
   `git -C . push --force` or `command git push` matches none of them. A PreToolUse guard in
-  the same hook script catches those forms: it splits the command into parts (quotes resolved, a
-  newline counted as `;`) and runs the same check on a `gh` command, a git `push`, `merge` or
-  `send-pack`, a wrapper such as `bash -c`, `env`, `sudo` or `make` that names one, and any text it
-  cannot read that mentions `git` or `gh`. Words in a commit message or a file name do not trigger
-  it, and `make push-docs` does, on purpose. What still gets through:
+  the same hook script catches those forms: it reads the command as bash splits it (a quoted `;`
+  is a word, not a separator) and runs the same check on a `gh` command or a git `push`, `merge` or
+  `send-pack`, also inside `$(...)`, backticks and `<(...)`, behind wrappers such as `env`, `nice`,
+  `timeout` or `sudo`, inside a `bash -c` or `make` that names one, and in a heredoc fed to a
+  shell; and on any text it cannot read that mentions `git`, `gh` or a push. Words in a commit
+  message, a quoted string, a file name or a heredoc fed to `cat` do not trigger it, and
+  `make push-docs` does, on purpose. Some harmless forms are guarded because the guard fails
+  closed: `echo $(( $(git rev-list --count HEAD) + 1 ))` (it does not read a substitution inside
+  arithmetic, so it guards one that mentions git), and a pipe from git into any shell, even one
+  whose `-c` script ignores stdin (`git log --oneline | sh -c 'head -2'`). Write the count as
+  `n=$(git rev-list --count HEAD); echo $((n + 1))` and drop the `sh -c`. A pipe from git into
+  parallel with a git, shell or wrapper command (`git ls-files | parallel git log -1`) or into
+  `make -f -` is guarded too, as parallel adds what it reads to that command's words; use
+  a `for` loop over `$(git ls-files)` instead. What still gets through:
   - git aliases (`git config alias.p push`, or `-c alias.p=push`, then `git p`), and any shell
     function or script that pushes;
-  - a push built at run time by a variable or command substitution that the guard cannot see;
+  - a script file written now and run later, even in the same command: `tee f <<'EOF'`, a push in
+    the body, `EOF`, then `bash f`. The body is data to tee, and the guard does not read files;
+  - a push built at run time from a variable (`c="git push"; $c`) that the guard cannot see, and
+    commands it does not know run others (an interpreter's `os.system`, `docker exec`, or any
+    wrapper not in its list);
+  - zsh-only syntax, such as `=git push` (zsh expands `=git` to git's path). The guard reads the
+    command as bash does;
   - on Python older than 3.12 the git-push guard fails open: the shell fallback in `fail-closed.sh`
     cannot see the session role, so only deny-secrets still runs for that guard. The production
     guard has a degraded mode there: the fallback refuses Bash and MCP tool calls while the guard

@@ -1894,15 +1894,18 @@ def test_the_permission_request_for_a_harmless_command_with_empty_quotes_is_stil
     assert "not allowed" in denied("echo ''", repo)
 
 
-@pytest.mark.parametrize("lenient", [False, True])
-def test_an_empty_token_is_a_word_in_a_segment(lenient):
-    segments = pm._segments(["echo", "", "a"], lenient=lenient)
+def test_an_empty_token_is_a_word_in_a_segment():
+    segments = pm._segments(["echo", "", "a"])
     assert [segment.words for segment in segments] == [["echo", "", "a"]]
 
 
-@pytest.mark.parametrize("lenient", [False, True])
-def test_a_lone_empty_token_is_a_segment_of_its_own(lenient):
-    assert [segment.words for segment in pm._segments([""], lenient=lenient)] == [[""]]
+def test_a_lone_empty_token_is_a_segment_of_its_own():
+    assert [segment.words for segment in pm._segments([""])] == [[""]]
+
+
+@pytest.mark.parametrize(("text", "words"), [("echo '' a", ["echo", "", "a"]), ("''", [""])])
+def test_an_empty_word_is_a_word_to_the_guard(text, words):
+    assert [command.words for command in guard_commands(text)] == [words]
 
 
 # A quoted word that merely starts with an operator character is a word, not an operator: the
@@ -1925,10 +1928,13 @@ def test_the_guard_reads_a_wrapper_text_that_starts_with_an_operator_character(r
     assert err.startswith(PREFIX)
 
 
-def test_a_real_operator_still_splits_in_the_lenient_reading():
-    tokens = pm._tokens("echo a && git push -f ; ls | tail", lenient=True)
-    segments = pm._segments(tokens, lenient=True)
-    assert [segment.words for segment in segments] == [
+def guard_commands(text):
+    """The simple commands the guard reads in a command."""
+    return pm._simple_commands(pm._scan(text).tokens)
+
+
+def test_a_real_operator_still_splits_for_the_guard():
+    assert [command.words for command in guard_commands("echo a && git push -f ; ls | tail")] == [
         ["echo", "a"],
         ["git", "push", "-f"],
         ["ls"],
@@ -2840,36 +2846,28 @@ def test_a_redirect_still_gets_no_command_approved(command, repo):
 
 
 @pytest.mark.parametrize(
-    ("tokens", "words"),
+    ("text", "words"),
     [
-        (["2", ">&", "1", "gh", "pr", "merge", "1"], [["gh", "pr", "merge", "1"]]),
-        ([">", "out", "gh", "pr"], [["gh", "pr"]]),
-        (["<", "/dev/null", "git", "push", "-f"], [["git", "push", "-f"]]),
-        (["git", "2", ">", "/dev/null", "push", "-f"], [["git", "push", "-f"]]),
-        (["{fd}", ">", "out", "git", "push"], [["git", "push"]]),
-        (["git", "push", "2", ">&", "1", "-f"], [["git", "push", "-f"]]),
-        (["echo", "2x", ">", "out"], [["echo", "2x"]]),
-        # Only the word directly before the operator is a descriptor.
-        (["echo", "3", "2", ">", "a", ">", "b"], [["echo", "3"]]),
-        (["echo", "x", ">", "a", "3", ">", "b"], [["echo", "x"]]),
+        ("2>&1 gh pr merge 1", [["gh", "pr", "merge", "1"]]),
+        (">out gh pr", [["gh", "pr"]]),
+        ("< /dev/null git push -f", [["git", "push", "-f"]]),
+        ("git 2>/dev/null push -f", [["git", "push", "-f"]]),
+        ("{fd}>out git push", [["git", "push"]]),
+        ("git push 2>&1 -f", [["git", "push", "-f"]]),
+        ("echo 2x>out", [["echo", "2x"]]),
+        # Only digits written right before the operator are a descriptor.
+        ("echo 3 2>a > b", [["echo", "3"]]),
+        ("echo x > a 3>b", [["echo", "x"]]),
         # No target: drop the operator and nothing else.
-        (["ls", ">"], [["ls"]]),
+        ("ls >", [["ls"]]),
         # A lone `&`, a pipe and a group still split.
-        (["sleep", "1", "&", "git", "push"], [["sleep", "1"], ["git", "push"]]),
-        (["a", "|&", "git", "push"], [["a"], ["git", "push"]]),
-        (["a", "|", ">", "out", "git", "push"], [["a"], ["git", "push"]]),
+        ("sleep 1 & git push", [["sleep", "1"], ["git", "push"]]),
+        ("a |& git push", [["a"], ["git", "push"]]),
+        ("a | >out git push", [["a"], ["git", "push"]]),
     ],
 )
-def test_a_redirect_does_not_split_a_segment_in_the_lenient_reading(tokens, words):
-    assert words in segment_words(tokens)
-
-
-def segment_words(tokens):
-    """The segments' words of each reading of a token list (see `_redirect_readings`)."""
-    return [
-        [segment.words for segment in pm._segments(reading, lenient=True)]
-        for reading in pm._redirect_readings(tokens)
-    ]
+def test_a_redirect_does_not_split_a_command_for_the_guard(text, words):
+    assert [command.words for command in guard_commands(text)] == words
 
 
 @pytest.mark.parametrize("command", ["ls >", "2>", "git push -f >", "git push -f 2>&1 >"])
@@ -2883,10 +2881,9 @@ def test_a_redirect_with_no_target_still_leaves_a_push_guarded(command):
     assert pm._is_guarded(command)
 
 
-# --- a digit before a redirect is a descriptor or an argument: both readings are checked -----------
+# --- a digit before a redirect is a descriptor or an argument, by its spacing ---------------------
 
-# The tokenizer loses the spacing: `2>f` makes `2` a descriptor, `2 >f` makes it an argument (the
-# value of `-C` here), so the guard reads a segment both ways.
+# `2>f` makes `2` a descriptor, `2 >f` makes it an argument (the value of `-C` here).
 GUARD_DESCRIPTOR_OR_ARGUMENT = [
     "git -C 2 >f push -f",
     "git -c 2 >f push -f",
@@ -2894,8 +2891,6 @@ GUARD_DESCRIPTOR_OR_ARGUMENT = [
     "git -C 2 2>f push -f",
     "git -C {fd} >f push -f",
     "2>&1 gh pr merge 1",
-    "2 >&1 gh pr merge 1",
-    "FOO=1 2 >/dev/null git push -f",
 ]
 
 
@@ -2908,22 +2903,33 @@ def test_a_digit_before_a_redirect_does_not_hide_a_guarded_command(repo, command
 
 
 @pytest.mark.parametrize(
-    "command", ["echo 2 >f", "ls 2>/dev/null", "echo 2 3 >f 2>&1", "git -C 2 >f log"]
+    "command",
+    [
+        "echo 2 >f",
+        "ls 2>/dev/null",
+        "echo 2 3 >f 2>&1",
+        "git -C 2 >f log",
+        # With a space, the digit is a word: bash runs a command named `2`, or git's subcommand `2`.
+        "2 >&1 gh pr merge 1",
+        "FOO=1 2 >/dev/null git push -f",
+        "git -C 2 >f 2 >g push -f",
+    ],
 )
 def test_a_digit_before_a_redirect_on_a_harmless_command_stays_unguarded(repo, command):
     assert not pm._is_guarded(command)
     assert guard(request(command, repo)) == (0, "", "")
 
 
-def test_a_descriptor_candidate_is_read_as_a_descriptor_and_as_an_argument():
-    readings = pm._redirect_readings(["git", "2", ">", "f", "push"])
-    assert sorted(readings) == [["git", "2", "push"], ["git", "push"]]
+@pytest.mark.parametrize(
+    ("text", "words"), [("git 2>f push", ["git", "push"]), ("git 2 >f push", ["git", "2", "push"])]
+)
+def test_a_digit_is_a_descriptor_only_when_written_against_the_redirect(text, words):
+    assert [command.words for command in guard_commands(text)] == [words]
 
 
-# --- a token after a redirect operator may be its target, and one before it may be a descriptor ---
+# --- the word after a redirect operator is its target, and a quoted operator is a word ------------
 
-# A quoted operator is a bare operator token once the tokenizer is done (`>"|"`), and an unquoted one
-# after a redirect is a syntax error in bash, which runs nothing.
+# A quoted operator after a redirect (`>"|"`) is its target, a file name.
 GUARD_QUOTED_OPERATOR_TARGET = [
     'git >"|" push -f',
     'git >";" push -f',
@@ -2947,8 +2953,8 @@ GUARD_QUOTED_REDIRECT_BEFORE_SEPARATOR = [
     'echo 2 ">" ; gh pr merge 1',
 ]
 
-# `<<- EOF` is `<<-` with the target EOF, and `<< - EOF` is `<<` with the target `-` (and an
-# argument EOF): the tokenizer gives the same words for both, so both are read.
+# `<<- EOF` is `<<-` with the delimiter EOF, and `<< - EOF` is `<<` with the delimiter `-` (and an
+# argument EOF). With no delimiter line, the heredoc has no end: the git word guards.
 GUARD_HEREDOC_DASH = [
     "git <<- EOF push -f",
     "git << - push -f",
@@ -2960,7 +2966,6 @@ GUARD_HEREDOC_DASH = [
 GUARD_MIXED_DESCRIPTORS = [
     "git --namespace 2 >f 2>g push -f",
     "git -C 2 >f 2>&1 push -f",
-    "git -C 2 >f 2 >g push -f",
     "git -C 2 2>f -c 3 >g push -f",
     "git -C 2 >a 2>b 2>c 2>d 2>e 2>f push -f",  # six candidates, the most that are enumerated
 ]
@@ -2972,10 +2977,9 @@ GUARD_PROCESS_SUBSTITUTION = [
     "tee >(git push -f)",
 ]
 
-# Seven candidates are too many to enumerate: any git or gh word guards the command.
+# Many redirects (the old readings stopped at seven): each is read where it is written.
 GUARD_PAST_THE_CAP = [
     "git -C 2 >a 2>b 2>c 2>d 2>e 2>f 2>g push -f",
-    "git status 2>a 2>b 2>c 2>d 2>e 2>f 2>g",
     "env gh 1>a 2>b 3>c 4>d 5>e 6>f 7>g",
 ]
 
@@ -3011,7 +3015,7 @@ def test_the_guard_denies_a_push_behind_an_ambiguous_redirect(repo, command):
         'ls >"|" x',
         'echo >">(" x',
         "cat < <(ls)",
-        "echo 2 >a 2>b 2>c 2>d 2>e 2>f 2>g 2>h",  # past the cap, with no git or gh word
+        "echo 2 >a 2>b 2>c 2>d 2>e 2>f 2>g 2>h",
     ],
 )
 def test_an_ambiguous_redirect_on_a_harmless_command_stays_unguarded(repo, command):
@@ -3020,42 +3024,33 @@ def test_an_ambiguous_redirect_on_a_harmless_command_stays_unguarded(repo, comma
 
 
 @pytest.mark.parametrize(
-    ("tokens", "readings"),
+    ("text", "words"),
     [
-        # An operator right after a redirect is read as its target (a quoted name, or a syntax
-        # error) and as an operator (the redirect was a quoted word, or this opens `< <(cmd)`).
-        (["ls", ">", ";", "git", "push"], [["ls", "git", "push"], ["ls", ";", "git", "push"]]),
-        (["ls", ">", "&&", "git", "push"], [["ls", "git", "push"], ["ls", "&&", "git", "push"]]),
-        (["ls", ">", ">", "out", "git"], [["ls", "out", "git"], ["ls", "git"]]),
-        (["git", ">", "|", "push", "-f"], [["git", "push", "-f"], ["git", "|", "push", "-f"]]),
-        (["git", ">", "(", "push", "-f"], [["git", "push", "-f"], ["git", "(", "push", "-f"]]),
-        (["cat", "<", "<(", "git"], [["cat", "git"], ["cat", "<(", "git"]]),
-        # `-` after `<<`: the operator's suffix (EOF is the target) or the target (EOF stays).
-        (["cat", "<<", "-", "EOF", "x"], [["cat", "x"], ["cat", "EOF", "x"]]),
-        (["cat", "<<", "-EOF", "x"], [["cat", "x"]]),
-        (["cat", "<<", "-"], [["cat"], ["cat"]]),
+        # A quoted operator after a redirect is its target; an unquoted one is an operator (bash
+        # calls it a syntax error), so the guard reads on past it.
+        ('ls >";" git push', [["ls", "git", "push"]]),
+        ("ls > ; git push", [["ls"], ["git", "push"]]),
+        ('git >"|" push -f', [["git", "push", "-f"]]),
+        ("cat < <(git)", [["cat"]]),
+        # `<<-` is one operator only when written as one; `<< -` has the delimiter `-`.
+        ("cat <<- EOF x\nEOF", [["cat", "x"]]),
+        ("cat << - EOF x\n-", [["cat", "EOF", "x"]]),
+        ("cat <<-EOF x\n\tEOF", [["cat", "x"]]),
     ],
 )
-def test_the_redirect_readings_of_a_token_list(tokens, readings):
-    assert sorted(pm._redirect_readings(tokens)) == sorted(readings)
+def test_the_word_after_a_redirect_is_its_target(text, words):
+    assert [command.words for command in guard_commands(text)] == words
 
 
-def test_a_token_list_with_six_ambiguous_words_has_sixty_four_readings():
-    tokens = ["git", *["2", ">", "f"] * 6, "push"]
-    assert len(pm._redirect_readings(tokens)) == 64
+def test_many_redirects_on_a_harmless_git_command_stay_unguarded(repo):
+    # The old readings stopped at six ambiguous words and fell back to the git word here.
+    assert_unguarded("git status 2>a 2>b 2>c 2>d 2>e 2>f 2>g", repo)
 
 
-def test_a_token_list_with_seven_ambiguous_words_is_not_enumerated():
-    tokens = ["git", *["2", ">", "f"] * 7, "push"]
-    with pytest.raises(pm.Unsupported):
-        pm._redirect_readings(tokens)
+# --- a quoted redirect operator is a word -------------------------------------------------------
 
-
-# --- a git segment with a redirect operator and a push word is guarded, whatever it reads as ------
-
-# A quoted operator after a valued option (`-C ">"`) is the option's folder, but the tokenizer gives a
-# bare `>`: a push runs when a folder with that name exists. On top of the readings, a segment of
-# git (or of a wrapper) with a redirect operator and a push, merge or send-pack word is guarded.
+# A quoted operator after a valued option (`-C ">"`) is the option's folder: a push runs when a
+# folder with that name exists.
 GUARD_QUOTED_OPERATOR_VALUE = [
     'git -C ">" push -f',
     'git -c ">" push -f',
@@ -3065,9 +3060,6 @@ GUARD_QUOTED_OPERATOR_VALUE = [
     '2>&1 git -C ">" push -f',
     'env git -C ">" push -f',
     'echo hi; git -C "<" send-pack x',
-    # An accepted false positive: the word `push` is a pattern here, and the guard only runs
-    # decide() on it.
-    "git log --grep push 2>&1",
 ]
 
 
@@ -3088,8 +3080,839 @@ def test_a_git_segment_with_a_redirect_and_a_push_word_is_guarded(repo, command)
         "git push-notes >out",
         "echo push 2>&1",
         "ls >out; git log",
+        # `push` is the pattern of --grep.
+        "git log --grep push 2>&1",
     ],
 )
 def test_a_git_segment_with_a_redirect_and_no_push_word_stays_unguarded(repo, command):
     assert not pm._is_guarded(command)
     assert guard(request(command, repo)) == (0, "", "")
+
+
+# --- the guard reads quoting, substitutions, heredocs and wrappers as bash does -------------------
+
+
+def assert_guarded(command, repo):
+    """The guard runs decide() on the command and blocks it with decide()'s refusal."""
+    assert pm._is_guarded(command), command
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, ""), command
+    assert err.strip() == pm.decide(pm.Call("Bash", command, str(repo)))
+
+
+def assert_unguarded(command, repo):
+    """The guard leaves the command alone: no output, so the normal rules apply."""
+    assert not pm._is_guarded(command), command
+    assert guard(request(command, repo)) == (0, "", ""), command
+
+
+# A quoted operator is a word: as the value of a git option it is a folder name, and bash pushes.
+GUARD_QUOTED_SEPARATOR = [
+    *(f'git {option} "{operator}" push -f' for option in ("-C", "-c") for operator in ";|&()"),
+    *(f"git -C '{operator}' push -f" for operator in (";", "|", "&", "(", ")", "&&", "||")),
+    'git -C "&&" push -f',
+    'git -C "||" push -f',
+    'git --namespace ";" push -f',
+    'git --git-dir "|" merge x',
+    'git --work-tree "&&" push -f',
+    'git --super-prefix "(" push -f',
+    'env git -C ";" push -f',
+    'FOO=1 git -C ";" send-pack x',
+    'echo hi; git -C ";" push -f',
+    "git -C \\; push -f",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_QUOTED_SEPARATOR)
+def test_a_quoted_separator_does_not_split_a_guarded_command(repo, command):
+    assert_guarded(command, repo)
+
+
+GUARD_SUBSTITUTION = [
+    'echo "$(git push -f)"',
+    "echo `git push -f`",
+    'echo "`git push -f`"',
+    "x=$(gh pr merge 1)",
+    "cat <(git push -f)",
+    "echo hi > >(git push -f)",
+    "echo hi >(gh pr merge 1)",
+    "cat < <(git push -f)",
+    # Nested.
+    "echo $(echo $(git push -f))",
+    'echo "$(echo "$(gh pr merge 1)")"',
+    "echo `echo \\`git push -f\\``",
+    "echo $(echo `gh pr merge 1`)",
+    # Arithmetic, and a substitution inside a parameter expansion.
+    "echo $(( $(git push -f) + 1 ))",
+    "echo $((git push -f) )",
+    "echo ${x:-$(git push -f)}",
+    'echo "${x:-$(gh pr merge 1)}"',
+    # A `#` inside `${...}` is not a comment.
+    "echo ${x:- #}; git push -f",
+    # A redirect target and an assignment value are read too.
+    'echo >"$(git push -f)"',
+    "echo >$(git push -f)",
+    "FOO=$(git push -f) ls",
+    # A command word that a substitution or a variable makes.
+    "$(echo git) push -f",
+    "`echo git` push -f",
+    "$g push -f",
+    '"$GIT" send-pack x',
+    # A substitution the guard cannot close falls back to the git or gh word.
+    "echo $(git push -f",
+    "echo `git push -f",
+    'echo "$(gh pr merge 1"',
+]
+
+
+@pytest.mark.parametrize("command", GUARD_SUBSTITUTION)
+def test_a_substitution_that_pushes_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# A wrapper with its options is unwrapped to the command it runs.
+GUARD_WRAPPED = [
+    "env git send-pack y",
+    "nice git send-pack y",
+    "env git -C x send-pack y",
+    "nice -n 5 env FOO=1 git send-pack y",
+    "nohup git send-pack y",
+    "timeout 5 git send-pack y",
+    "timeout -s KILL --preserve-status 5s git push -f",
+    "time -p git send-pack y",
+    "command -p git send-pack y",
+    "exec git send-pack y",
+    "exec -a name git push -f",
+    "builtin exec git push -f",
+    "sudo -u x git send-pack y",
+    "sudo -E -- git push -f",
+    "env -i PATH=/usr/bin /usr/bin/git send-pack y",
+    "env -- nice -10 nohup gh pr merge 1",
+    # Options the guard cannot follow fall back to the push, merge, send-pack or gh word.
+    'env -S "git send-pack y"',
+    'sudo -s "git send-pack y"',
+    "xargs -I % git send-pack %",
+    # xargs runs git with a subcommand it reads from stdin.
+    "echo push | xargs git",
+    "xargs -0 git -C x < list",
+    # A wrapper under xargs with no command runs the words xargs reads from a git or gh text.
+    "echo git push | xargs env",
+    "printf '%s\\n' git push -f | xargs -n 9 nice",
+    "echo gh pr merge 1 | xargs sudo",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_WRAPPED)
+def test_a_wrapped_push_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+GUARD_HEREDOC_RUN = [
+    # A heredoc fed to a shell is read as commands.
+    "bash <<'EOF'\ngit push -f\nEOF",
+    "sh -s <<EOF\ngit push -f\nEOF",
+    "bash -s <<-EOF\n\tgit push -f\n\tEOF",
+    "zsh <<'EOF'\necho hi\ngh pr merge 1\nEOF",
+    "dash <<'EOF'\ngit -C ';' push -f\nEOF",
+    "env bash -e <<'EOF'\ngit push -f\nEOF",
+    "source /dev/stdin <<'EOF'\ngh pr merge 1\nEOF",
+    ". /dev/stdin <<'EOF'\ngh pr merge 1\nEOF",
+    "eval \"$(cat)\" <<'EOF'\ngit push -f\nEOF",
+    # A heredoc fed to a compound command, which may run what it reads.
+    "{ bash; } <<'EOF'\ngit push -f\nEOF",
+    "while read -r c; do $c; done <<'EOF'\ngit push -f\nEOF",
+    "(bash) <<'EOF'\ngit push -f\nEOF",
+    # An unquoted delimiter: the body's substitutions run, whoever reads it.
+    "cat <<EOF\n$(git push -f)\nEOF",
+    "cat >> notes.md <<EOF\nsee `gh pr merge 1`\nEOF",
+    "cat <<EOF\n'$(git push -f)'\nEOF",
+    # A shell fed by a pipe or a here-string, with a git or gh word in view.
+    "cat <<'EOF' | bash\ngit push -f\nEOF",
+    'echo "git push -f" | bash',
+    'printf "%s" "gh pr merge 1" | sh -s',
+    'bash <<< "git push -f"',
+    # The command after the heredoc line, and after the body.
+    "cat <<EOF; git push -f\nbody\nEOF",
+    "cat <<'EOF'\nbody\nEOF\ngit push -f",
+    "cat <<A <<B\na\nA\nb\nB\ngh pr merge 1",
+    # bash joins an unquoted delimiter's lines before it compares them: `EO\` + `F` ends the body.
+    "cat <<EOF\nEO\\\nF\ngit push -f\nEOF",
+    # bash ends a heredoc inside `$(...)` at a line such as `EOF)`.
+    "echo $(cat <<EOF\nhi\nEOF)\ngit push -f\nEOF\n)",
+    # An unterminated heredoc falls back to the git or gh word.
+    "cat <<'EOF'\ngit push -f",
+    "git add f && cat >> notes.md <<'EOF'\nnotes",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_HEREDOC_RUN)
+def test_a_heredoc_that_runs_a_push_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# The shape a PM writes after a commit (pm-aquelarre's report): a body is data for cat.
+NOTES_SHAPE = (
+    'git add f.txt && git commit -q -m "add notes" && git log --oneline -1'
+    " && cat >> notes.md <<'EOF'\n{body}\nEOF"
+)
+NOTES_BODIES = [
+    "some notes\nmore notes",
+    "then push it",
+    "merge later",
+    "gh is the tool",
+    "git push origin x",
+    "- PR 12 (merged)",
+    "it's merged, don't push",
+    'time "(5 min)" to merge',
+    "make sure we push\nenv says merge\n$(git push -f) stays text",
+    "bash -c 'git push -f'",
+]
+
+
+@pytest.mark.parametrize("body", NOTES_BODIES)
+def test_a_heredoc_fed_to_cat_after_a_commit_is_not_guarded(repo, body):
+    assert_unguarded(NOTES_SHAPE.format(body=body), repo)
+
+
+GUARD_HEREDOC_DATA = [
+    "cat <<'EOF'\ngit push -f\nEOF",
+    "cat <<EOF\ngit push -f\nEOF",
+    "cat <<-EOF\n\tgit push -f\n\tEOF",
+    "tee notes.md <<'EOF' >/dev/null\ngh pr merge 1\nEOF",
+    "cat <<'EOF'\n$(git push -f)\nEOF",
+    "cat <<\\EOF\n`gh pr merge 1`\nEOF",
+    "python3 - <<'EOF'\ngit push -f\nEOF",
+    "node <<'EOF'\ngh pr merge 1\nEOF",
+    "bash <<'EOF'\ngit log --oneline -1\nEOF",
+    "cat <<EOF\nab\\\nEOF\nmore\nEOF",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_HEREDOC_DATA)
+def test_a_heredoc_that_is_data_is_not_guarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git commit -q -m "fix: push docs"',
+        'git commit -q -m "a; push b"',
+        "git commit -q -m 'a; b' && git log --oneline -1",
+        'git commit -m "merge (x) | gh"',
+    ],
+)
+def test_a_quoted_commit_message_is_not_guarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+GUARD_STILL_QUIET = [
+    "echo hi 2>&1",
+    "grep gh f 2>/dev/null",
+    "ls >out",
+    "cat <in",
+    "echo 2 >f",
+    "git log 2>&1",
+    'git commit -m "fix: push docs"',
+    'echo "git push"',
+    "echo 'git push -f; gh pr merge 1'",
+    "printf '%s\\n' \"a;b\"",
+    "echo '$(git push -f)'",
+    "echo $(git log -1)",
+    "echo $((1 + 2))",
+    "echo a #; git push -f",
+    "echo x | grep -c push",
+    # The old readings guessed here; the scanner knows the spacing and the quoting.
+    "git log --grep push 2>&1",
+    "git status 2>a 2>b 2>c 2>d 2>e 2>f 2>g",
+    # bash runs a command named `2` with gh as its argument.
+    "2 >&1 gh pr merge 1",
+    # An unwrapped wrapper runs the inner command, which pushes nothing.
+    "timeout 60 pytest -k push",
+    "env FOO=push pytest -q",
+    "nohup echo merge",
+    "git ls-files -z | xargs -0 git add",
+    # xargs with no command runs echo; a wrapper under it reads words from a text with no git word.
+    "echo a | xargs",
+    "ls | xargs -n 1",
+    "ls | xargs env",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_STILL_QUIET)
+def test_a_harmless_command_is_not_guarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    ("text", "words"),
+    [
+        (
+            "echo a && git push -f ; ls | tail",
+            [["echo", "a"], ["git", "push", "-f"], ["ls"], ["tail"]],
+        ),
+        ('git -C ";" push', [["git", "-C", ";", "push"]]),
+        ("git -C '&&' push", [["git", "-C", "&&", "push"]]),
+        ("git push 2>&1 -f", [["git", "push", "-f"]]),
+        ("echo 2 >f", [["echo", "2"]]),
+        ("echo 2x > out", [["echo", "2x"]]),
+        ("echo 3 2>a >b", [["echo", "3"]]),
+        ("echo {fd}>a {fd} >b", [["echo", "{fd}"]]),
+        ("ls >", [["ls"]]),
+        ("sleep 1 & git push", [["sleep", "1"], ["git", "push"]]),
+        ("a |& git push", [["a"], ["git", "push"]]),
+        ('git ">" push', [["git", ">", "push"]]),
+        ("cat <<- EOF x\n\tbody\n\tEOF", [["cat", "x"]]),
+        ("cat << - x\nbody\n-", [["cat", "x"]]),
+        ("echo a\\\nb", [["echo", "ab"]]),
+        ("echo a # b\nls", [["echo", "a"], ["ls"]]),
+        ("echo a#b", [["echo", "a#b"]]),
+        ('echo "a \\" b" \'c \\\'', [["echo", 'a " b', "c \\"]]),
+    ],
+)
+def test_the_scanner_splits_simple_commands_as_bash_does(text, words):
+    commands = pm._simple_commands(pm._scan(text).tokens)
+    assert [command.words for command in commands] == words
+
+
+def test_a_word_is_read_with_its_quotes_removed():
+    assert [token.text for token in pm._scan("a \"b\" c\\d e''f").tokens] == ["a", "b", "cd", "ef"]
+
+
+# The behaviour behind each scanner case above: what the guard makes of a command built on it.
+SCANNER_BEHAVIOUR = [
+    ("echo a && git push -f ; ls | tail", True),
+    ('git -C ";" push', True),
+    ("git -C '&&' push", True),
+    ("git push 2>&1 -f", True),
+    ("echo 2 >f; git log", False),
+    ('git ">" push', False),  # git's subcommand is `>`
+    ('git -C ">" push', True),
+    ("cat <<- EOF x\n\tgit push\n\tEOF", False),
+    ("cat << - x\ngit push\n-", False),
+    ("gi\\\nt push", True),
+    ("echo a # ; git push", False),
+    ("echo a # b\ngit push", True),
+    ("echo a#b;git push", True),
+    ('echo "a \\" ; git push" x', False),
+    ("echo 'a \\' ; git push", True),
+    # A word with quoted parts is the word bash runs.
+    ("g''it push -f", True),
+    ('"git" push -f', True),
+    ("\\git push -f", True),
+    ("git '' push", False),
+    # The word after a redirect is its target.
+    ('ls >";" git push', False),
+    ("ls > ; git push", True),
+    ('git >"|" push -f', True),
+    ("cat < <(git log)", False),
+    ("git 2>f push", True),
+    ("git 2 >f push", False),
+]
+
+
+@pytest.mark.parametrize(("command", "guarded"), SCANNER_BEHAVIOUR)
+def test_the_guard_reads_a_command_as_the_scanner_splits_it(command, guarded):
+    assert pm._is_guarded(command) is guarded
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "echo 'a",
+        'echo "a',
+        "echo $(a",
+        "echo `a",
+        "echo ${a",
+        "cat <<EOF\nbody",
+        "echo $'a'",
+        'echo $"a"',
+        "echo a\\",
+        "echo a\0b",
+        "echo \"${a:-'b'}\"",
+        "cat <<",
+    ],
+)
+def test_the_scanner_gives_up_on_what_it_cannot_follow(text):
+    with pytest.raises(pm.Unsupported):
+        pm._scan(text)
+    # The guard then falls back to the git or gh word: there is none in the text itself, and a
+    # harmless git command before it no longer reads as harmless.
+    assert not pm._is_guarded(text)
+    assert pm._is_guarded("git log; " + text)
+
+
+def test_deep_nesting_falls_back_to_the_git_word():
+    command = "echo " + "$(" * 40 + "git log" + ")" * 40
+    assert pm._is_guarded(command)
+    assert not pm._is_guarded("echo " + "$(" * 40 + "ls" + ")" * 40)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "",
+        "(",
+        ")",
+        "<<",
+        "<<-",
+        "$((",
+        "$(( ))",
+        "`",
+        "\\",
+        "${",
+        "${}",
+        "<(",
+        ">(",
+        "a <<A <<B\nA",
+        "cat <<''\n\n",
+        "&& || ;; ;& |& &>> <<< <> >|",
+        "{fd}>",
+        "$",
+        '"$"',
+        "'",
+    ],
+)
+def test_odd_input_does_not_crash_the_guard(command):
+    assert isinstance(pm._is_guarded(command), bool)
+
+
+# --- fix round 1 -----------------------------------------------------------------------------------
+
+# A pipe feeds only the commands of its own pipeline: a shell or eval after `&&` or `;` reads none.
+QUIET_PIPELINES = [
+    "git log --oneline | head -3 && bash scripts/check.sh",
+    "git diff | cat; eval true",
+    "git log | tail -1\nsh run.sh",
+]
+
+
+@pytest.mark.parametrize("command", QUIET_PIPELINES)
+def test_a_pipe_does_not_feed_a_shell_in_another_pipeline(repo, command):
+    assert_unguarded(command, repo)
+
+
+# The pipe feeds a group or a compound command, and the shell inside it reads the pipe.
+PIPED_GROUPS = [
+    "echo git push -f | { bash; }",
+    "echo git push -f | (sh)",
+    "echo git push -f | ( cd /tmp; sh )",
+    "echo git push -f | if true; then sh; fi",
+    "printf 'x\\ngit push -f\\n' | while read -r l; do bash; done",
+]
+
+
+@pytest.mark.parametrize("command", PIPED_GROUPS)
+def test_a_shell_in_a_piped_group_is_fed_by_the_pipe(repo, command):
+    assert_guarded(command, repo)
+
+
+# A `case` pattern's `)` does not close the `$(` it sits in.
+CASE_IN_SUBSTITUTION = [
+    'echo "$(case a in a) git push -f;; esac)"',
+    "echo $(case a in a) git push -f;; esac)",
+    'x="$(case a in (a) git push -f;; esac)"',
+    "echo $(case a in a) echo;; b) gh pr merge 1;; esac)",
+]
+
+
+@pytest.mark.parametrize("command", CASE_IN_SUBSTITUTION)
+def test_a_case_inside_a_substitution_is_read_to_its_esac(repo, command):
+    assert_guarded(command, repo)
+
+
+def test_a_harmless_case_inside_a_substitution_stays_unguarded(repo):
+    assert_unguarded('echo "$(case a in a) git status;; esac)"', repo)
+
+
+# A wrapper the guard cannot follow, with a shell among its words, runs the heredoc or the pipe.
+UNKNOWN_WRAPPER_SHELLS = [
+    "stdbuf -oL bash <<EOF\ngit push -f\nEOF",
+    "setsid -w bash <<EOF\ngit push -f\nEOF",
+    "chrt -o 0 sh <<'EOF'\ngit push -f\nEOF",
+    "echo git push -f | stdbuf -oL sh",
+]
+
+
+@pytest.mark.parametrize("command", UNKNOWN_WRAPPER_SHELLS)
+def test_a_shell_under_an_unknown_wrapper_reads_its_input(repo, command):
+    assert_guarded(command, repo)
+
+
+def test_cat_under_an_unknown_wrapper_reads_a_heredoc_as_data(repo):
+    assert_unguarded("stdbuf -oL cat <<EOF\ngit push -f\nEOF", repo)
+
+
+# A heredoc or a here-string is stdin, as a pipe is: a script given with -c reads it as data.
+HEREDOC_STDIN = [
+    "xargs -I{} git {} -f <<EOF\npush\nEOF",
+    "echo push | xargs -I{} git {} -f",
+    "bash -c 'git $(cat)' <<EOF\npush -f\nEOF",
+    "bash -c 'read v; git $v' <<EOF\npush -f\nEOF",
+    "xargs sh -c 'git \"$@\"' _ <<EOF\npush -f\nEOF",
+    "bash -c 'read v; git $v' <<<'push -f'",
+    "sh <<<'g''it push -f'",
+    'bash <<< "git push -f"',
+]
+
+
+@pytest.mark.parametrize("command", HEREDOC_STDIN)
+def test_a_heredoc_or_here_string_feeds_the_command_that_reads_it(repo, command):
+    assert_guarded(command, repo)
+
+
+# The outer shell expands an unquoted body or a here-string before the inner shell reads it, so
+# what a substitution prints becomes commands: `x=merge gh` runs gh.
+EXPANDED_INTO_COMMANDS = [
+    "bash <<-EOF\n\tx=$(echo merge gh)\n\tEOF",
+    "bash <<EOF\nx=`echo push git`\nEOF",
+    'sh <<< "x=$(echo merge gh)"',
+    "bash <<EOF\n$v git push\nEOF",
+]
+
+
+@pytest.mark.parametrize("command", EXPANDED_INTO_COMMANDS)
+def test_an_expansion_in_a_body_a_shell_reads_may_become_a_command(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash <<'EOF'\nx=$(echo merge gh)\nEOF",
+        "bash <<EOF\nx=$(date)\nEOF",
+        "cat <<EOF\n$(echo gh)\nEOF",
+    ],
+)
+def test_an_expansion_that_cannot_print_a_guarded_word_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A shell reading its script from a heredoc or a here-string runs its commands: they are read.
+QUIET_SHELL_INPUT = [
+    "bash <<EOF\ngit status\nEOF",
+    'bash <<< "git log -1"',
+    "sh <<<'git status'",
+]
+
+
+@pytest.mark.parametrize("command", QUIET_SHELL_INPUT)
+def test_a_shell_reading_harmless_commands_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# Assignments with `+=` or an index, `function`, `coproc` and trap's action.
+SHELL_FORMS = [
+    "X+=1 git push -f",
+    "env X+=1 git push",
+    "X[0]=1 git push -f",
+    "function f { git push -f; }; f",
+    "function f() { git push -f; }",
+    "coproc git push -f",
+    "coproc { git push -f; }",
+    "coproc NAME { gh pr merge 1; }",
+    "trap 'git push -f' EXIT",
+    "trap \"g''it push -f\" EXIT",
+]
+
+
+@pytest.mark.parametrize("command", SHELL_FORMS)
+def test_a_push_in_a_shell_form_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command", ["X[0]=1 git log -1", "X+=1 git status", "trap 'rm -f /tmp/x' EXIT", "coproc ls"]
+)
+def test_a_harmless_shell_form_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# The fallbacks read the text with its quotes and backslashes removed, for a push word too.
+OBFUSCATED_FALLBACKS = [
+    "echo $(( $(g''it push -f) ))",
+    "cat <<EOF | bash\ng''it push -f\nEOF",
+    "echo 'g''it push -f' | sh",
+    "printf '%s\\n' 'g''it push -f' | sh",
+    "echo 'g''it push -f' | bash -s",
+    "cat <<EOF | xargs -I{} sh -c {}\ng''it push -f\nEOF",
+    "echo '\\git push -f' | sh",
+]
+
+
+@pytest.mark.parametrize("command", OBFUSCATED_FALLBACKS)
+def test_a_fallback_sees_a_word_split_by_quotes(repo, command):
+    assert_guarded(command, repo)
+
+
+# Commands that run the rest of their words, with options the guard does not follow: a push,
+# merge, send-pack or gh word among them guards.
+EXEC_WRAPPERS = [
+    "setsid git push -f",
+    "stdbuf -o0 git push -f",
+    "ionice -c3 git push -f",
+    "flock /tmp/l git push -f",
+    "taskset 1 git push -f",
+    "chrt -o 0 git push -f",
+    "unshare -U git push -f",
+    "nsenter -U -t 1 gh pr merge 1",
+    "script -qc 'git push -f' /dev/null",
+    "find . -maxdepth 0 -exec git push -f \\;",
+    "find . -execdir git send-pack y {} +",
+]
+
+
+@pytest.mark.parametrize("command", EXEC_WRAPPERS)
+def test_a_push_under_an_exec_wrapper_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command", ["find . -name '*push*'", "stdbuf -oL pytest -q", "setsid -w sleep 1"]
+)
+def test_a_harmless_exec_wrapper_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A pipe into a command that only names a shell or `.` among its words (a grep pattern) does not
+# run what it reads.
+PIPES_INTO_A_SEARCH = [
+    "git status --short | grep -c .",
+    "git diff --name-only | grep bash",
+    "git ls-files | grep -n source",
+    "git log -3 | grep -c eval",
+    "git diff HEAD~1 | grep '^+' | grep -c source",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_SEARCH)
+def test_a_pipe_into_a_search_for_a_shell_word_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A wrapper that runs its words still reads a pipe or a heredoc with the shell it names.
+PIPES_INTO_A_WRAPPED_SHELL = [
+    "echo 'git push -f' | stdbuf -oL bash",
+    "echo 'git push -f' | setsid -w sh",
+    "busybox sh <<EOF\ngit push -f\nEOF",
+    "echo 'gh pr merge 1' | busybox sh",
+    # The shell find runs reads find's stdin.
+    "echo 'git push -f' | find . -maxdepth 0 -exec sh \\;",
+    "find . -maxdepth 0 -exec bash \\; <<EOF\ngit push -f\nEOF",
+    "echo 'gh pr merge 1' | find . -maxdepth 0 -exec find . -maxdepth 0 -exec sh",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPED_SHELL)
+def test_a_pipe_into_a_wrapped_shell_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# find runs the command after an exec action, up to its `;` or `{} +`: only that command counts.
+FIND_SEARCHES = [
+    "find . -name '*.py' -exec grep -l merge {} +",
+    "find . -name '*.md' -exec grep -n 'git push' {} \\;",
+    "find . -exec grep -q push {} \\; -print",
+]
+
+
+@pytest.mark.parametrize("command", FIND_SEARCHES)
+def test_a_find_that_runs_a_search_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+FIND_PUSHES = [
+    "find . -exec git push -f \\;",
+    "find . -name x -exec grep -q a {} \\; -exec gh pr merge 1 \\;",
+    "find . -ok sh -c 'git push -f' \\;",
+    "find . -exec echo {} + -exec git push -f \\;",
+    "find . -exec git push",
+]
+
+
+@pytest.mark.parametrize("command", FIND_PUSHES)
+def test_a_find_that_runs_a_push_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# `time`, `time -p`, `coproc`, `!`, `{` and `(` come before a reserved word: a case there keeps
+# its pattern's `)` inside the `$(`.
+CASE_AFTER_A_PREFIX = [
+    'echo "$(time case a in a) git push -f;; esac)"',
+    'echo "$(time -p case a in a) git push -f;; esac)"',
+    'echo "$(coproc case a in a) gh pr merge 1;; esac)"',
+    'echo "$(! case a in a) git push -f;; esac)"',
+    'echo "$({ case a in a) git push -f;; esac; })"',
+    'echo "$( (case a in a) git push -f;; esac) )"',
+]
+
+
+@pytest.mark.parametrize("command", CASE_AFTER_A_PREFIX)
+def test_a_case_after_a_prefix_in_a_substitution_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize("prefix", ["time ", "time -p ", "coproc a ", "{ ", "! ", "if "])
+def test_a_long_run_of_prefixes_is_read_in_one_pass(prefix):
+    command = prefix * 10_000 + "git status"
+    start = time.monotonic()
+    assert not pm._is_guarded(command)
+    assert time.monotonic() - start < 2  # one pass takes well under a second
+
+
+# A `{` after `function NAME`, `coproc NAME` or `time` opens a group, and a closer ends only the
+# group it matches: the outer group a pipe feeds stays fed.
+PIPED_GROUP_FORMS = [
+    "echo 'git push -f' | { function g { :; }; sh; }",
+    "echo 'git push -f' | { coproc N { :; }; sh; }",
+    "echo 'git push -f' | { time { :; }; sh; }",
+    "echo 'git push -f' | { time -p { :; }; sh; }",
+    "echo 'git push -f' | { time if :; then :; fi; sh; }",
+    "echo 'git push -f' | { if :; then :; }; sh; }",
+    "echo 'git push -f' | { while :; do break; }; sh; }",
+]
+
+
+@pytest.mark.parametrize("command", PIPED_GROUP_FORMS)
+def test_a_pipe_into_a_group_past_an_inner_group_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log -1 | { function g { :; }; cat; }; sh -n x.sh",
+        "git log -1 | { time { :; }; cat; }; bash scripts/check.sh",
+        'echo "$(time case a in a) git log -1;; esac)"',
+    ],
+)
+def test_a_group_form_with_no_push_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A quoted word is never reserved: a quoted closer is a command, and the group a pipe feeds stays
+# fed past it. So is a quoted `!`, after which a `}` is a plain word.
+QUOTED_CLOSERS = [
+    "echo 'git push -f' | { \"}\"; sh; }",
+    "echo 'git push -f' | { \\}; sh; }",
+    "echo 'git push -f' | { '}' 2>/dev/null; sh; }",
+    "echo 'git push -f' | if :; then 'fi'; sh; fi",
+    "echo 'git push -f' | while :; do \"done\"; sh; break; done",
+    "echo 'git push -f' | case a in a) \"esac\"; sh;; esac",
+    "echo 'git push -f' | { \"!\" }; sh; }",
+    "echo 'gh pr merge 1' | { \\! }; sh; }",
+]
+
+
+@pytest.mark.parametrize("command", QUOTED_CLOSERS)
+def test_a_pipe_into_a_group_past_a_quoted_closer_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# bash reads no reserved word after a quoted opener or prefix: `"{"` opens nothing, and a case
+# after `\time` or `time "-p"` is a word, so its `)` ends the `$(`.
+@pytest.mark.parametrize(
+    "command",
+    [
+        'git log -1 | { "{"; cat; }; sh -n x.sh',
+        "git log -1 | { '{' 2>/dev/null; cat; }; bash scripts/check.sh",
+        'echo "$(\\time case a in a) git push -f;; esac)"',
+        'echo "$(time "-p" case a in a) git push -f;; esac)"',
+    ],
+)
+def test_a_quoted_opener_or_prefix_is_not_reserved(repo, command):
+    assert_unguarded(command, repo)
+
+
+# parallel runs each line it reads as a command when it has none of its own, and adds what it
+# reads to a git, gh, shell or wrapper command's words; `make -f -` reads its makefile there.
+STDIN_RUNNERS = [
+    "echo 'all:; git push -f' | make -f -",
+    "echo 'all:; gh pr merge 1' | make --file=- all",
+    "echo 'all:; git push -f' | make -sf-",
+    "make -f - <<EOF\nall:\n\tgit push -f\nEOF",
+    "echo 'git push -f' | parallel",
+    "echo 'gh pr merge 1' | parallel -j 4",
+    "echo push | parallel git",
+    "echo 'git push -f' | parallel --pipe sh",
+    "echo 'git push -f' | parallel --no-such-option wc",
+    "parallel <<EOF\ngit push -f\nEOF",
+    "parallel git <<EOF\npush\nEOF",
+    "parallel -j 2 sh -c <<<'git push -f'",
+]
+
+
+@pytest.mark.parametrize("command", STDIN_RUNNERS)
+def test_a_pipe_or_heredoc_into_a_stdin_command_runner_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "make test | tail -n 5",
+        "git ls-files | parallel wc -l",
+        "git ls-files | parallel -j 4 wc -l",
+        "git ls-files '*.py' | parallel --pipe wc -l",
+        "git log -1 | make check",
+        "parallel wc -l ::: a b",
+    ],
+)
+def test_a_stdin_runner_with_a_harmless_command_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# make reads its makefile from stdin as `-`, /dev/stdin, /dev/fd/0 or /proc/self/fd/0, given to
+# -f, --file or --makefile (with `=` or glued on); a heredoc body is a makefile, not shell, so it
+# guards when it names git, gh or a push, merge or send-pack word (`@gh`, `-gh`, `+gh`).
+MAKEFILES_ON_STDIN = [
+    "echo 'all:; gh pr merge 1' | make -f /dev/stdin",
+    "echo 'all:; gh pr merge 1' | make -f /dev/fd/0",
+    "echo 'all:; gh pr merge 1' | make --file=/dev/stdin",
+    "echo 'all:; git push -f' | make --makefile /proc/self/fd/0",
+    "echo 'all:; git push -f' | make -f/dev/stdin",
+    "echo 'all:; git push -f' | make -sf/dev/fd/0 all",
+    "make -f /dev/stdin <<'EOF'\nall:\n\tgh pr merge 1\nEOF",
+    "make -f - <<'EOF'\nall:\n\t@gh pr merge 1\nEOF",
+    "make -f - <<'EOF'\nall:\n\t-gh pr merge 1\nEOF",
+    "make -f - <<'EOF'\nall:\n\t+git push -f\nEOF",
+    "make -f - <<'EOF'\nall: ; @gh pr merge 1\nEOF",
+    "make --file=/dev/stdin <<<'all: ; @git push -f'",
+]
+
+
+@pytest.mark.parametrize("command", MAKEFILES_ON_STDIN)
+def test_make_reading_a_makefile_with_a_push_on_stdin_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "make test | tail -n 5",
+        "make -f /dev/stdin <<'EOF'\nall:\n\t@echo done\nEOF",
+        "git log -1 | make -f Makefile check",
+    ],
+)
+def test_make_with_a_harmless_makefile_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A shell or source given a stdin path reads the pipe or the heredoc as commands.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'git push -f' | bash /dev/stdin",
+        "echo 'gh pr merge 1' | sh /dev/fd/0",
+        "source /dev/stdin <<'EOF'\ngit push -f\nEOF",
+        ". /proc/self/fd/0 <<<'gh pr merge 1'",
+    ],
+)
+def test_a_shell_given_a_stdin_path_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize("path", ["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"])
+def test_a_gh_body_file_on_stdin_is_refused_as_stdin(repo, path):
+    message = denied(f"gh pr create --fill --body-file {path}", repo)
+    assert "not stdin" in message
