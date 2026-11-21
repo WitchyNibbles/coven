@@ -99,22 +99,25 @@ or `>` is a word and only unquoted text is an operator; a redirect and its targe
 descriptor only when written against the operator, `2>f`); comments are skipped; and
 `$(...)`, backticks, `<(...)`, `>(...)` (not inside single quotes) and `$((...))` are read too.
 It runs decide() when a simple command, in the command or in any substitution, is a `gh` command
-or a git `push`, `merge` or `send-pack` (after git's global options and any `NAME=value` prefix),
-under any wrappers it can follow (env, nice, nohup, time, timeout, command, exec, builtin, sudo,
-xargs, with their options; xargs before git with no subcommand counts); a wrapper it cannot follow,
-a shell, eval or make whose words hold `push`, `merge`, `send-pack` or `gh`; a command name that
-expands (`$g`, `$(...)`) next to such a word or a git word; or a `$((...))` with a git or gh word.
-A heredoc body is data, but for its unquoted-delimiter substitutions, unless it feeds a shell,
-`source`, `eval`, a compound command or a command the guard cannot name: then it is read as
-commands. A shell fed by a pipe, an input redirect or a here-string guards a text with a git or gh
-word. Text the scanner cannot follow (an unbalanced quote or substitution, an unended heredoc,
-`$'..'`, nesting past MAX_NESTING) guards it when it holds a `git` or `gh` word. A word in a
+or a git `push`, `merge` or `send-pack` (after git's global options, assignments, `function NAME`
+and `coproc`), under any wrappers it can follow (env, nice, nohup, time, timeout, command, exec,
+builtin, sudo, xargs, with their options; xargs before git with no subcommand counts); a wrapper
+it cannot follow, a shell, eval, trap, make or an exec wrapper (setsid, stdbuf, find -exec...)
+whose words hold `push`, `merge`, `send-pack` or `gh`; a command name that expands (`$g`,
+`$(...)`) next to such a word or a git word; or a `$((...))` that mentions one. A heredoc or
+here-string body is data, but for its unquoted-delimiter substitutions, unless it feeds a command
+that reads commands (a shell, `source`, `eval`, any of them as a word of the command, a compound
+command or a command the guard cannot name): then it is read as commands, and the command's own
+words must not mention git or a push. A shell fed by a pipe (in its own pipeline or group) or an
+input redirect guards a text that mentions git, gh or a push. Text the scanner cannot follow (an
+unbalanced quote or substitution, an unended heredoc, `$'..'`, nesting past MAX_NESTING) guards
+it when it mentions one; "mentions" is read with quotes and backslashes removed. A word in a
 commit message, a search pattern, a quoted string, a file name or a heredoc fed to cat does not
 count. A refusal blocks the call (exit 2, the message on stderr, which holds in
 bypassPermissions). Anything decide() approves, and every other command, prints nothing, so the
 plain forms still reach the ask rule and this hook's PermissionRequest answer. A bad payload, an
-internal error or a check past DEADLINE blocks too. It is best effort against an agent that follows its role: GitHub branch
-protection on the default branch is the real wall.
+internal error or a check past DEADLINE blocks too. It is best effort against an agent that
+follows its role: GitHub branch protection on the default branch is the real wall.
 """
 
 import importlib
@@ -236,9 +239,26 @@ WRAPPERS = SHELLS | {
     "nice",
     "timeout",
     "make",
+    "trap",  # its action is a command string, as eval's words are
 }
+# Commands that run the rest of their words as a command, with options the guard does not follow:
+# a push, merge, send-pack or gh word among their words guards. find does so with an exec action.
+EXEC_WRAPPERS = frozenset(
+    {
+        *("setsid", "stdbuf", "ionice", "flock", "taskset", "chrt", "unshare", "nsenter"),
+        *("script", "doas", "su", "runuser", "chroot", "watch", "strace", "ltrace", "nocache"),
+        *("unbuffer", "faketime", "firejail", "systemd-run", "sg", "numactl", "cgexec"),
+        *("parallel", "proxychains", "proxychains4", "torsocks", "pkexec", "ssh"),
+    }
+)
+FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
-ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
+# The words that open and close a group or compound command, at the start of a command: a pipe
+# into one feeds every command inside it.
+GROUP_OPENERS = frozenset({"{", "if", "while", "until", "for", "select", "case"})
+GROUP_CLOSERS = frozenset({"}", "fi", "done", "esac"})
+# `NAME=`, `NAME+=`, `NAME[index]=` and `NAME[index]+=`.
+ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 QUOTE_CHARS = re.compile(r"['\"\\]")
 GH_PR_COMMANDS = frozenset({"create", "view", "checks"})
 PIPE_SOURCES = frozenset({"git", "gh"})
@@ -318,7 +338,8 @@ SCAN_OPERATORS = (
 )
 REDIRECTS = frozenset({">", ">>", "<", "<<", "<<-", "<<<", ">&", "<&", "&>", "&>>", ">|", "<>"})
 HEREDOCS = frozenset({"<<", "<<-"})
-INPUT_REDIRECTS = frozenset({"<", "<<<", "<&", "<>"})  # they feed a command's stdin
+# They feed a command's stdin from a file or a descriptor. A here-string is read as a heredoc.
+INPUT_REDIRECTS = frozenset({"<", "<&", "<>"})
 PIPES = frozenset({"|", "|&"})
 DESCRIPTOR = re.compile(r"\d+|\{[A-Za-z_]\w*\}")
 BLANKS = frozenset(" \t")
@@ -1179,7 +1200,6 @@ class Token:
 
     kind: TokenKind
     text: str
-    quoted: bool = False  # any part of the word was quoted or escaped
     heredoc: Heredoc | None = None
 
 
@@ -1219,6 +1239,7 @@ class _Scanner:
         self.arithmetic: list[str] = []
         self.pending: list[Heredoc] = []  # heredocs whose body starts after the next newline
         self.parens = 0
+        self.cases = 0  # `case` commands open: a `)` in one ends a pattern, not the `$(`
         self.braces = 0  # `${` open inside the one being read
 
     def scan(self, closing: bool = False) -> Scanned:
@@ -1236,7 +1257,7 @@ class _Scanner:
                 self.pos = len(text) if end == -1 else end
             elif char == "\n":
                 self._newline()
-            elif closing and char == ")" and not self.parens:
+            elif closing and char == ")" and not self.parens and not self.cases:
                 return self._closed()
             elif char in OPERATOR_CHARS and not self._at_process_substitution():
                 self._operator()
@@ -1347,11 +1368,25 @@ class _Scanner:
         self.arithmetic.extend(scanner.arithmetic)
 
     def _word(self) -> None:
+        starts_a_command = self._at_command_start()
         text, quoted = self._read_word()
         at = self.text[self.pos : self.pos + 1]
         descriptor = not quoted and at in ("<", ">") and DESCRIPTOR.fullmatch(text)
         if not (descriptor and not self._at_process_substitution()):
-            self.tokens.append(Token(TokenKind.WORD, text, quoted))
+            self.tokens.append(Token(TokenKind.WORD, text))
+        if starts_a_command and not quoted:
+            if text == "case":
+                self.cases += 1
+            elif text == "esac" and self.cases:
+                self.cases -= 1
+
+    def _at_command_start(self) -> bool:
+        """Whether the next word starts a command: first, after an operator, or after `!`, `{`,
+        `then`, `do` and the like. A reserved word counts only there."""
+        if not self.tokens:
+            return True
+        last = self.tokens[-1]
+        return last.kind is TokenKind.SEPARATOR or last.text in SHELL_PREFIXES
 
     def _read_word(self) -> tuple[str, bool]:
         """The next word's text, quotes removed, and whether any part of it was quoted."""
@@ -1522,8 +1557,9 @@ def _scan(text: str, depth: int = 0) -> Scanned:
 
 @dataclass
 class SimpleCommand:
-    """One command of a scanned list: its words (no redirect or target), the heredocs fed to it,
-    whether a pipe feeds it, and whether an input redirect or a here-string does."""
+    """One command of a scanned list: its words (no redirect or target), the heredocs fed to it (a
+    here-string is one, its word the body), whether a pipe feeds it (or the group or compound
+    command it is in), and whether an input redirect does."""
 
     words: list[str] = field(default_factory=list)
     heredocs: list[Heredoc] = field(default_factory=list)
@@ -1531,28 +1567,73 @@ class SimpleCommand:
     fed: bool = False
 
 
+class _CommandList:
+    """Splits tokens into simple commands, and follows which open groups a pipe feeds."""
+
+    def __init__(self) -> None:
+        self.commands = [SimpleCommand()]
+        self.groups: list[tuple[str, bool]] = []  # each open group's opener, and if a pipe feeds it
+        self.target: str | None = None  # the redirect whose target the next word is
+
+    def read(self, tokens: Sequence[Token]) -> list[SimpleCommand]:
+        for token in tokens:
+            if token.kind is TokenKind.WORD:
+                self._word(token.text)
+            elif token.kind is TokenKind.REDIRECT:
+                self._redirect(token)
+            else:
+                self._separator(token.text)
+        return [command for command in self.commands if command.words or command.heredocs]
+
+    def _in_a_piped_group(self) -> bool:
+        return any(piped for _, piped in self.groups)
+
+    def _word(self, text: str) -> None:
+        current = self.commands[-1]
+        target, self.target = self.target, None
+        if target == "<<<":
+            # The outer shell expands it as an unquoted body (its substitutions are read already).
+            current.heredocs.append(Heredoc("", quoted=False, strip_tabs=False, body=text))
+        elif target is None:
+            self._open_or_close(current, text)
+            current.words.append(text)
+
+    def _open_or_close(self, current: SimpleCommand, text: str) -> None:
+        """A reserved word at the start of a command opens or closes a group."""
+        if not all(word in SHELL_PREFIXES or word in GROUP_OPENERS for word in current.words):
+            return
+        if text in GROUP_OPENERS:
+            self.groups.append((text, current.piped))
+        elif text in GROUP_CLOSERS and self.groups:
+            self.groups.pop()
+
+    def _redirect(self, token: Token) -> None:
+        current = self.commands[-1]
+        # A heredoc's delimiter is already read; any other redirect takes the next word.
+        self.target = None if token.heredoc else token.text
+        if token.heredoc:
+            current.heredocs.append(token.heredoc)
+        current.fed = current.fed or token.text in INPUT_REDIRECTS
+
+    def _separator(self, text: str) -> None:
+        # An operator where a target belongs is a syntax error: read on, past the redirect.
+        self.target = None
+        current = self.commands[-1]
+        if text == "(":
+            self.groups.append((text, current.piped or self._in_a_piped_group()))
+        elif text == ")" and self.groups and self.groups[-1][0] != "case":
+            self.groups.pop()  # in a case, a `)` ends a pattern
+        if current.words or current.heredocs or current.fed:
+            piped = text in PIPES or self._in_a_piped_group()
+            self.commands.append(SimpleCommand(piped=piped))
+        else:  # an empty command: a newline continues the list, and `| (` still pipes
+            current.piped = current.piped or text in PIPES
+
+
 def _simple_commands(tokens: Sequence[Token]) -> list[SimpleCommand]:
     """The commands between the separators, with each redirect and its target (the word right
     after it) left out. A newline right after `|`, `&&` or `||` continues the list."""
-    commands = [SimpleCommand()]
-    takes_target = False
-    for token in tokens:
-        current = commands[-1]
-        if token.kind is TokenKind.WORD:
-            if not takes_target:
-                current.words.append(token.text)
-            takes_target = False
-            continue
-        # An operator where a target belongs is a syntax error: read on, past the redirect.
-        takes_target = token.kind is TokenKind.REDIRECT and token.heredoc is None
-        if token.kind is TokenKind.REDIRECT:
-            current.heredocs += [token.heredoc] if token.heredoc else []
-            current.fed = current.fed or token.text in INPUT_REDIRECTS
-        elif current.words or current.heredocs or current.fed:
-            commands.append(SimpleCommand(piped=token.text in PIPES))
-        else:  # an empty command: a newline continues the list, and `| (` still pipes
-            current.piped = current.piped or token.text in PIPES
-    return [command for command in commands if command.words or command.heredocs]
+    return _CommandList().read(tokens)
 
 
 @dataclass(frozen=True)
@@ -1615,10 +1696,10 @@ WRAPPER_SYNTAX = {
     "xargs": WrapperSyntax(
         flags=frozenset(
             {"-0", "-r", "-t", "-p", "-x", "-o", "--null", "--no-run-if-empty", "--verbose"}
-            | {"--interactive", "--exit", "--open-tty"}
+            | {"--interactive", "--exit", "--open-tty", "-i", "--replace"}
         ),
         valued=frozenset(
-            {"-a", "-E", "-L", "-n", "-P", "-s", "-d", "--arg-file", "--eof", "--max-lines"}
+            {"-a", "-E", "-I", "-L", "-n", "-P", "-s", "-d", "--arg-file", "--eof", "--max-lines"}
             | {"--max-args", "--max-procs", "--max-chars", "--delimiter", "--process-slot-var"}
         ),
     ),
@@ -1668,10 +1749,18 @@ def _wrapped_start(syntax: WrapperSyntax, words: Sequence[str], index: int) -> i
 
 
 def _command_start(words: Sequence[str], start: int = 0) -> int:
-    """Where the command name is, from `start`: assignments and shell prefixes (`{`, `!`, `if`...)
-    come before it."""
-    while start < len(words) and (ASSIGNMENT.match(words[start]) or words[start] in SHELL_PREFIXES):
-        start += 1
+    """Where the command name is, from `start`: assignments, shell prefixes (`{`, `!`, `if`...),
+    `function NAME` and `coproc` (with its NAME, before a `{`) come before it."""
+    while start < len(words):
+        word = words[start]
+        if ASSIGNMENT.match(word) or word in SHELL_PREFIXES:
+            start += 1
+        elif word == "function":
+            start += 2
+        elif word == "coproc":
+            start += 2 if words[start + 2 : start + 3] == ["{"] else 1
+        else:
+            break
     return start
 
 
@@ -1714,6 +1803,13 @@ def _holds_a_guarded_word(command: Sequence[str]) -> bool:
     return bool(HOLDS_GUARDED.search(QUOTE_CHARS.sub("", " ".join(command))))
 
 
+def _mentions_a_guarded_word(text: str) -> bool:
+    """Whether text the guard cannot read as commands holds a git, gh, push, merge or send-pack
+    word, once its quotes and backslashes are removed (`g''it`, `\\git`)."""
+    plain = QUOTE_CHARS.sub("", text)
+    return bool(HOLDS_GIT_OR_GH.search(plain) or HOLDS_GUARDED.search(plain))
+
+
 def _segment_is_guarded(words: Sequence[str]) -> bool:
     """A command that runs gh, or a git push, merge or send-pack, under any wrappers; a wrapper
     the guard cannot unwrap, or a shell, eval or make, whose words hold such a word; a command
@@ -1734,9 +1830,11 @@ def _segment_is_guarded(words: Sequence[str]) -> bool:
             subcommand in GUARDED_SUBCOMMANDS or expands or (inner.stdin_words and not subcommand)
         )
     if _expands(command[0]):
-        joined = " ".join(command)
-        return bool(HOLDS_GUARDED.search(joined) or HOLDS_GIT_OR_GH.search(joined))
-    return name in WRAPPERS and _holds_a_guarded_word(command)
+        return _mentions_a_guarded_word(" ".join(command))
+    runs_its_words = name in WRAPPERS or name in EXEC_WRAPPERS
+    if name == "find":
+        runs_its_words = not FIND_ACTIONS.isdisjoint(command)
+    return runs_its_words and _holds_a_guarded_word(command)
 
 
 def _receiver(words: Sequence[str]) -> str:
@@ -1754,27 +1852,49 @@ def _receiver(words: Sequence[str]) -> str:
     return NO_COMMAND if name in COMPOUND_ENDS else name
 
 
-def _runs_its_input(scanned: Scanned, commands: Sequence[SimpleCommand], depth: int) -> bool:
-    """Whether a command runs text the guard has not read as commands yet: a heredoc fed to a
-    shell, `source`, `eval`, a compound command or an unknown command (its body is checked as
-    commands), or a shell or unknown command fed by a pipe or an input redirect, in a text with a
-    git or gh word."""
-    piped = any(command.piped for command in commands)
-    receivers = [_receiver(command.words) for command in commands]
-    runs = [name in COMMAND_READERS or name == UNKNOWN_COMMAND for name in receivers]
-    fed = any(run and (piped or command.fed) for run, command in zip(runs, commands, strict=True))
-    if fed and HOLDS_GIT_OR_GH.search(scanned.source):
+def _reads_commands(command: SimpleCommand, receiver: str) -> bool:
+    """Whether a command may run what it reads on stdin: a shell, `source` or `eval` (also as any
+    word of it, under a wrapper the guard does not know: `stdbuf -oL bash`), or an unknown one."""
+    if receiver in COMMAND_READERS or receiver == UNKNOWN_COMMAND:
         return True
-    return any(
-        _text_is_guarded(heredoc.body, depth + 1)
-        for run, name, command in zip(runs, receivers, commands, strict=True)
-        if run or name == NO_COMMAND
-        for heredoc in command.heredocs
+    return any(os.path.basename(word) in COMMAND_READERS for word in command.words)
+
+
+def _expands_into_commands(heredoc: Heredoc) -> bool:
+    """Whether an unquoted body (or a here-string) has an expansion and mentions a guarded word:
+    the outer shell expands it before a shell reads it as commands."""
+    expands = not heredoc.quoted and ("$" in heredoc.body or "`" in heredoc.body)
+    return expands and _mentions_a_guarded_word(heredoc.body)
+
+
+def _command_runs_its_input(command: SimpleCommand, source: str, depth: int) -> bool:
+    receiver = _receiver(command.words)
+    runs = _reads_commands(command, receiver)
+    # A pipe or a file gives text the guard cannot see: the line's own words must not mention git.
+    if runs and (command.piped or command.fed) and _mentions_a_guarded_word(source):
+        return True
+    # A script given in the words (`bash -c 'git $(cat)'`) reads a heredoc as data for it.
+    if runs and command.heredocs and _mentions_a_guarded_word(" ".join(command.words)):
+        return True
+    # What an expansion in an unquoted body prints becomes part of the commands (`x=$(echo gh)`).
+    if runs and any(_expands_into_commands(heredoc) for heredoc in command.heredocs):
+        return True
+    return (runs or receiver == NO_COMMAND) and any(
+        _text_is_guarded(heredoc.body, depth + 1) for heredoc in command.heredocs
     )
 
 
+def _runs_its_input(scanned: Scanned, commands: Sequence[SimpleCommand], depth: int) -> bool:
+    """Whether a command runs text the guard has not read as commands yet: a heredoc or a
+    here-string fed to a shell, `source`, `eval`, a compound command or an unknown command (its
+    body is checked as commands, and its words must not mention git or a push), or a shell or an
+    unknown command fed by a pipe (in its pipeline or group) or an input redirect, in a text that
+    mentions git, gh or a push."""
+    return any(_command_runs_its_input(command, scanned.source, depth) for command in commands)
+
+
 def _scanned_is_guarded(scanned: Scanned, depth: int) -> bool:
-    if any(HOLDS_GIT_OR_GH.search(text) for text in scanned.arithmetic):
+    if any(_mentions_a_guarded_word(text) for text in scanned.arithmetic):
         return True
     if any(_scanned_is_guarded(inner, depth + 1) for inner in scanned.substitutions):
         return True
@@ -1788,7 +1908,7 @@ def _text_is_guarded(text: str, depth: int) -> bool:
     try:
         scanned = _scan(text, depth)
     except Unsupported:
-        return bool(HOLDS_GIT_OR_GH.search(text))
+        return _mentions_a_guarded_word(text)
     return _scanned_is_guarded(scanned, depth)
 
 

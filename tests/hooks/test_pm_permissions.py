@@ -3375,14 +3375,45 @@ def test_the_scanner_splits_simple_commands_as_bash_does(text, words):
     assert [command.words for command in commands] == words
 
 
-def test_a_token_says_whether_any_part_of_it_was_quoted():
-    tokens = pm._scan("a \"b\" c\\d e''f").tokens
-    assert [(token.text, token.quoted) for token in tokens] == [
-        ("a", False),
-        ("b", True),
-        ("cd", True),
-        ("ef", True),
-    ]
+def test_a_word_is_read_with_its_quotes_removed():
+    assert [token.text for token in pm._scan("a \"b\" c\\d e''f").tokens] == ["a", "b", "cd", "ef"]
+
+
+# The behaviour behind each scanner case above: what the guard makes of a command built on it.
+SCANNER_BEHAVIOUR = [
+    ("echo a && git push -f ; ls | tail", True),
+    ('git -C ";" push', True),
+    ("git -C '&&' push", True),
+    ("git push 2>&1 -f", True),
+    ("echo 2 >f; git log", False),
+    ('git ">" push', False),  # git's subcommand is `>`
+    ('git -C ">" push', True),
+    ("cat <<- EOF x\n\tgit push\n\tEOF", False),
+    ("cat << - x\ngit push\n-", False),
+    ("gi\\\nt push", True),
+    ("echo a # ; git push", False),
+    ("echo a # b\ngit push", True),
+    ("echo a#b;git push", True),
+    ('echo "a \\" ; git push" x', False),
+    ("echo 'a \\' ; git push", True),
+    # A word with quoted parts is the word bash runs.
+    ("g''it push -f", True),
+    ('"git" push -f', True),
+    ("\\git push -f", True),
+    ("git '' push", False),
+    # The word after a redirect is its target.
+    ('ls >";" git push', False),
+    ("ls > ; git push", True),
+    ('git >"|" push -f', True),
+    ("cat < <(git log)", False),
+    ("git 2>f push", True),
+    ("git 2 >f push", False),
+]
+
+
+@pytest.mark.parametrize(("command", "guarded"), SCANNER_BEHAVIOUR)
+def test_the_guard_reads_a_command_as_the_scanner_splits_it(command, guarded):
+    assert pm._is_guarded(command) is guarded
 
 
 @pytest.mark.parametrize(
@@ -3405,6 +3436,10 @@ def test_a_token_says_whether_any_part_of_it_was_quoted():
 def test_the_scanner_gives_up_on_what_it_cannot_follow(text):
     with pytest.raises(pm.Unsupported):
         pm._scan(text)
+    # The guard then falls back to the git or gh word: there is none in the text itself, and a
+    # harmless git command before it no longer reads as harmless.
+    assert not pm._is_guarded(text)
+    assert pm._is_guarded("git log; " + text)
 
 
 def test_deep_nesting_falls_back_to_the_git_word():
@@ -3440,3 +3475,200 @@ def test_deep_nesting_falls_back_to_the_git_word():
 )
 def test_odd_input_does_not_crash_the_guard(command):
     assert isinstance(pm._is_guarded(command), bool)
+
+
+# --- fix round 1 -----------------------------------------------------------------------------------
+
+# A pipe feeds only the commands of its own pipeline: a shell or eval after `&&` or `;` reads none.
+QUIET_PIPELINES = [
+    "git log --oneline | head -3 && bash scripts/check.sh",
+    "git diff | cat; eval true",
+    "git log | tail -1\nsh run.sh",
+]
+
+
+@pytest.mark.parametrize("command", QUIET_PIPELINES)
+def test_a_pipe_does_not_feed_a_shell_in_another_pipeline(repo, command):
+    assert_unguarded(command, repo)
+
+
+# The pipe feeds a group or a compound command, and the shell inside it reads the pipe.
+PIPED_GROUPS = [
+    "echo git push -f | { bash; }",
+    "echo git push -f | (sh)",
+    "echo git push -f | ( cd /tmp; sh )",
+    "echo git push -f | if true; then sh; fi",
+    "printf 'x\\ngit push -f\\n' | while read -r l; do bash; done",
+]
+
+
+@pytest.mark.parametrize("command", PIPED_GROUPS)
+def test_a_shell_in_a_piped_group_is_fed_by_the_pipe(repo, command):
+    assert_guarded(command, repo)
+
+
+# A `case` pattern's `)` does not close the `$(` it sits in.
+CASE_IN_SUBSTITUTION = [
+    'echo "$(case a in a) git push -f;; esac)"',
+    "echo $(case a in a) git push -f;; esac)",
+    'x="$(case a in (a) git push -f;; esac)"',
+    "echo $(case a in a) echo;; b) gh pr merge 1;; esac)",
+]
+
+
+@pytest.mark.parametrize("command", CASE_IN_SUBSTITUTION)
+def test_a_case_inside_a_substitution_is_read_to_its_esac(repo, command):
+    assert_guarded(command, repo)
+
+
+def test_a_harmless_case_inside_a_substitution_stays_unguarded(repo):
+    assert_unguarded('echo "$(case a in a) git status;; esac)"', repo)
+
+
+# A wrapper the guard cannot follow, with a shell among its words, runs the heredoc or the pipe.
+UNKNOWN_WRAPPER_SHELLS = [
+    "stdbuf -oL bash <<EOF\ngit push -f\nEOF",
+    "setsid -w bash <<EOF\ngit push -f\nEOF",
+    "chrt -o 0 sh <<'EOF'\ngit push -f\nEOF",
+    "echo git push -f | stdbuf -oL sh",
+]
+
+
+@pytest.mark.parametrize("command", UNKNOWN_WRAPPER_SHELLS)
+def test_a_shell_under_an_unknown_wrapper_reads_its_input(repo, command):
+    assert_guarded(command, repo)
+
+
+def test_cat_under_an_unknown_wrapper_reads_a_heredoc_as_data(repo):
+    assert_unguarded("stdbuf -oL cat <<EOF\ngit push -f\nEOF", repo)
+
+
+# A heredoc or a here-string is stdin, as a pipe is: a script given with -c reads it as data.
+HEREDOC_STDIN = [
+    "xargs -I{} git {} -f <<EOF\npush\nEOF",
+    "echo push | xargs -I{} git {} -f",
+    "bash -c 'git $(cat)' <<EOF\npush -f\nEOF",
+    "bash -c 'read v; git $v' <<EOF\npush -f\nEOF",
+    "xargs sh -c 'git \"$@\"' _ <<EOF\npush -f\nEOF",
+    "bash -c 'read v; git $v' <<<'push -f'",
+    "sh <<<'g''it push -f'",
+    'bash <<< "git push -f"',
+]
+
+
+@pytest.mark.parametrize("command", HEREDOC_STDIN)
+def test_a_heredoc_or_here_string_feeds_the_command_that_reads_it(repo, command):
+    assert_guarded(command, repo)
+
+
+# The outer shell expands an unquoted body or a here-string before the inner shell reads it, so
+# what a substitution prints becomes commands: `x=merge gh` runs gh.
+EXPANDED_INTO_COMMANDS = [
+    "bash <<-EOF\n\tx=$(echo merge gh)\n\tEOF",
+    "bash <<EOF\nx=`echo push git`\nEOF",
+    'sh <<< "x=$(echo merge gh)"',
+    "bash <<EOF\n$v git push\nEOF",
+]
+
+
+@pytest.mark.parametrize("command", EXPANDED_INTO_COMMANDS)
+def test_an_expansion_in_a_body_a_shell_reads_may_become_a_command(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash <<'EOF'\nx=$(echo merge gh)\nEOF",
+        "bash <<EOF\nx=$(date)\nEOF",
+        "cat <<EOF\n$(echo gh)\nEOF",
+    ],
+)
+def test_an_expansion_that_cannot_print_a_guarded_word_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A shell reading its script from a heredoc or a here-string runs its commands: they are read.
+QUIET_SHELL_INPUT = [
+    "bash <<EOF\ngit status\nEOF",
+    'bash <<< "git log -1"',
+    "sh <<<'git status'",
+]
+
+
+@pytest.mark.parametrize("command", QUIET_SHELL_INPUT)
+def test_a_shell_reading_harmless_commands_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# Assignments with `+=` or an index, `function`, `coproc` and trap's action.
+SHELL_FORMS = [
+    "X+=1 git push -f",
+    "env X+=1 git push",
+    "X[0]=1 git push -f",
+    "function f { git push -f; }; f",
+    "function f() { git push -f; }",
+    "coproc git push -f",
+    "coproc { git push -f; }",
+    "coproc NAME { gh pr merge 1; }",
+    "trap 'git push -f' EXIT",
+    "trap \"g''it push -f\" EXIT",
+]
+
+
+@pytest.mark.parametrize("command", SHELL_FORMS)
+def test_a_push_in_a_shell_form_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command", ["X[0]=1 git log -1", "X+=1 git status", "trap 'rm -f /tmp/x' EXIT", "coproc ls"]
+)
+def test_a_harmless_shell_form_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# The fallbacks read the text with its quotes and backslashes removed, for a push word too.
+OBFUSCATED_FALLBACKS = [
+    "echo $(( $(g''it push -f) ))",
+    "cat <<EOF | bash\ng''it push -f\nEOF",
+    "echo 'g''it push -f' | sh",
+    "printf '%s\\n' 'g''it push -f' | sh",
+    "echo 'g''it push -f' | bash -s",
+    "cat <<EOF | xargs -I{} sh -c {}\ng''it push -f\nEOF",
+    "echo '\\git push -f' | sh",
+]
+
+
+@pytest.mark.parametrize("command", OBFUSCATED_FALLBACKS)
+def test_a_fallback_sees_a_word_split_by_quotes(repo, command):
+    assert_guarded(command, repo)
+
+
+# Commands that run the rest of their words, with options the guard does not follow: a push,
+# merge, send-pack or gh word among them guards.
+EXEC_WRAPPERS = [
+    "setsid git push -f",
+    "stdbuf -o0 git push -f",
+    "ionice -c3 git push -f",
+    "flock /tmp/l git push -f",
+    "taskset 1 git push -f",
+    "chrt -o 0 git push -f",
+    "unshare -U git push -f",
+    "nsenter -U -t 1 gh pr merge 1",
+    "script -qc 'git push -f' /dev/null",
+    "find . -maxdepth 0 -exec git push -f \\;",
+    "find . -execdir git send-pack y {} +",
+]
+
+
+@pytest.mark.parametrize("command", EXEC_WRAPPERS)
+def test_a_push_under_an_exec_wrapper_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command", ["find . -name '*push*'", "stdbuf -oL pytest -q", "setsid -w sleep 1"]
+)
+def test_a_harmless_exec_wrapper_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
