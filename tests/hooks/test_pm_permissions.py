@@ -3860,3 +3860,59 @@ def test_a_pipe_or_heredoc_into_a_stdin_command_runner_is_guarded(repo, command)
 )
 def test_a_stdin_runner_with_a_harmless_command_stays_unguarded(repo, command):
     assert_unguarded(command, repo)
+
+
+# make reads its makefile from stdin as `-`, /dev/stdin, /dev/fd/0 or /proc/self/fd/0, given to
+# -f, --file or --makefile (with `=` or glued on); a heredoc body is a makefile, not shell, so it
+# guards when it names git, gh or a push, merge or send-pack word (`@gh`, `-gh`, `+gh`).
+MAKEFILES_ON_STDIN = [
+    "echo 'all:; gh pr merge 1' | make -f /dev/stdin",
+    "echo 'all:; gh pr merge 1' | make -f /dev/fd/0",
+    "echo 'all:; gh pr merge 1' | make --file=/dev/stdin",
+    "echo 'all:; git push -f' | make --makefile /proc/self/fd/0",
+    "echo 'all:; git push -f' | make -f/dev/stdin",
+    "echo 'all:; git push -f' | make -sf/dev/fd/0 all",
+    "make -f /dev/stdin <<'EOF'\nall:\n\tgh pr merge 1\nEOF",
+    "make -f - <<'EOF'\nall:\n\t@gh pr merge 1\nEOF",
+    "make -f - <<'EOF'\nall:\n\t-gh pr merge 1\nEOF",
+    "make -f - <<'EOF'\nall:\n\t+git push -f\nEOF",
+    "make -f - <<'EOF'\nall: ; @gh pr merge 1\nEOF",
+    "make --file=/dev/stdin <<<'all: ; @git push -f'",
+]
+
+
+@pytest.mark.parametrize("command", MAKEFILES_ON_STDIN)
+def test_make_reading_a_makefile_with_a_push_on_stdin_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "make test | tail -n 5",
+        "make -f /dev/stdin <<'EOF'\nall:\n\t@echo done\nEOF",
+        "git log -1 | make -f Makefile check",
+    ],
+)
+def test_make_with_a_harmless_makefile_stays_unguarded(repo, command):
+    assert_unguarded(command, repo)
+
+
+# A shell or source given a stdin path reads the pipe or the heredoc as commands.
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'git push -f' | bash /dev/stdin",
+        "echo 'gh pr merge 1' | sh /dev/fd/0",
+        "source /dev/stdin <<'EOF'\ngit push -f\nEOF",
+        ". /proc/self/fd/0 <<<'gh pr merge 1'",
+    ],
+)
+def test_a_shell_given_a_stdin_path_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+@pytest.mark.parametrize("path", ["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"])
+def test_a_gh_body_file_on_stdin_is_refused_as_stdin(repo, path):
+    message = denied(f"gh pr create --fill --body-file {path}", repo)
+    assert "not stdin" in message

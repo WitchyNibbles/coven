@@ -760,7 +760,7 @@ def _body_file_problem(
     `..` that resolves inside `cwd` from every directory the command may run in, and that
     deny-secrets (`target_hit`, the check it makes of a Write or Edit target) would not block; or,
     when `temp_allowed` (a body file), an absolute path that `_temp_file_problem` accepts."""
-    if not value or value == "-":
+    if not value or _is_stdin(value):
         return "needs the path of a file (not stdin)"
     if temp_allowed and value.startswith("/"):
         return _temp_file_problem(value, cwd)
@@ -1833,6 +1833,9 @@ PARALLEL_SYNTAX = WrapperSyntax(
 )
 # The words after which parallel's arguments come, not its command.
 PARALLEL_SOURCES = frozenset({":::", "::::", ":::+", "::::+"})
+# The paths a command reads its stdin from, and make's short options with a file glued on.
+STDIN_PATHS = frozenset({"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"})
+MAKE_GLUED_FILE = re.compile(r"-[A-Za-z]*f(?P<path>.+)")
 
 
 def _option_words(syntax: WrapperSyntax, word: str, following: int) -> int | None:
@@ -2035,13 +2038,24 @@ def _parallel_runs_its_input(command: Sequence[str]) -> bool:
     return runs_words or name in COMMAND_READERS or _expands(command[start])
 
 
+def _is_stdin(path: str) -> bool:
+    """Whether a path names the reader's stdin: `-`, /dev/stdin, /dev/fd/0 or /proc/self/fd/0."""
+    return path in STDIN_PATHS
+
+
 def _make_reads_its_makefile(command: Sequence[str]) -> bool:
-    """make reads its makefile from stdin, and runs its recipes, with `-f -`, `-f-`, `-sf-` or
-    `--file=-` (a `-` word counts wherever it is)."""
-    return any(
-        word == "-" or (word.startswith("-") and word.endswith(("f-", "=-")))
-        for word in command[1:]
-    )
+    """make reads its makefile from stdin, and runs its recipes, with -f, --file or --makefile
+    given a stdin path: as the next word (a stdin path counts wherever it is), after `=`
+    (`--file=-`), or glued on (`-f-`, `-sf/dev/stdin`)."""
+    for word in command[1:]:
+        if word.startswith("--"):
+            value = word.partition("=")[2]
+        else:
+            glued = MAKE_GLUED_FILE.fullmatch(word)
+            value = glued["path"] if glued else ""
+        if _is_stdin(word) or _is_stdin(value):
+            return True
+    return False
 
 
 def _expands_into_commands(heredoc: Heredoc) -> bool:
@@ -2063,6 +2077,9 @@ def _command_runs_its_input(command: SimpleCommand, source: str, depth: int) -> 
     # What an expansion in an unquoted body prints becomes part of the commands (`x=$(echo gh)`).
     if runs and any(_expands_into_commands(heredoc) for heredoc in command.heredocs):
         return True
+    # A makefile is not shell (`@gh`, `-gh`): its text must not mention git, gh or a push.
+    if receiver == "make":
+        return runs and any(_mentions_a_guarded_word(heredoc.body) for heredoc in command.heredocs)
     return (runs or receiver == NO_COMMAND) and any(
         _text_is_guarded(heredoc.body, depth + 1) for heredoc in command.heredocs
     )
