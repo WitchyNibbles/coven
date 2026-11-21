@@ -1246,6 +1246,7 @@ class _Scanner:
         self.start = start
         self.pos = start
         self.tokens: list[Token] = []
+        self.starts: dict[int, bool] = {}  # whether a word at each token index starts a command
         self.substitutions: list[Scanned] = []
         self.arithmetic: list[str] = []
         self.pending: list[Heredoc] = []  # heredocs whose body starts after the next newline
@@ -1394,20 +1395,28 @@ class _Scanner:
     def _at_command_start(self) -> bool:
         """Whether the next word starts a command: first, after an operator (`(` too), or after
         `!`, `{`, `then`, `do` and the like, or `time`, `time -p`, `coproc` and `coproc NAME`
-        there. A reserved word counts only there."""
+        there. A reserved word counts only there. Each index is decided once (`time time ...`)."""
         index = len(self.tokens)
+        walked: list[int] = []
+        starts = True
         while index:
+            if index in self.starts:
+                starts = self.starts[index]
+                break
             last = self.tokens[index - 1]
             if last.kind is TokenKind.SEPARATOR or last.text in SHELL_PREFIXES:
-                return True
+                break
+            walked.append(index)
             before = self.tokens[index - 2].text if index > 1 else None
             if last.text in RESERVED_PREFIXES:
                 index -= 1
             elif (before, last.text) == ("time", "-p") or before == "coproc":
                 index -= 2
             else:
-                return False
-        return True
+                starts = False
+                break
+        self.starts.update(dict.fromkeys(walked, starts))
+        return starts
 
     def _read_word(self) -> tuple[str, bool]:
         """The next word's text, quotes removed, and whether any part of it was quoted."""
@@ -1588,10 +1597,63 @@ class SimpleCommand:
     fed: bool = False
 
 
+class _Position(Enum):
+    """Where the next word of a command is, for a reserved word: where bash reads one (first, or
+    after shell prefixes and openers such as `! {` and `if {`), right after `time` (`-p` may
+    come), `coproc` (a NAME may come) or `function` (its NAME comes), or past them all."""
+
+    RESERVED = auto()
+    AFTER_TIME = auto()
+    AFTER_COPROC = auto()
+    AFTER_FUNCTION = auto()
+    PAST = auto()
+
+
+RESERVED_OPENERS = SHELL_PREFIXES | GROUP_OPENERS
+NEXT_POSITION = {
+    "time": _Position.AFTER_TIME,
+    "coproc": _Position.AFTER_COPROC,
+    "function": _Position.AFTER_FUNCTION,
+}
+
+
+class _CommandStart:
+    """Follows the first words of the command being read, one word at a time."""
+
+    def __init__(self) -> None:
+        self.position = _Position.RESERVED
+        self.prefixes_only = True  # every word so far is a shell prefix or an opener
+
+    def opens(self) -> bool:
+        """Whether an opener here opens a group: also after `time`, `time -p`, `coproc`, `coproc
+        NAME` and `function NAME`."""
+        return self.position in (
+            _Position.RESERVED,
+            _Position.AFTER_TIME,
+            _Position.AFTER_COPROC,
+        )
+
+    def read(self, word: str) -> None:
+        position = self.position
+        named = position is _Position.AFTER_FUNCTION or (
+            position is _Position.AFTER_COPROC and word not in RESERVED_OPENERS
+        )
+        if named or (position is _Position.AFTER_TIME and word == "-p"):
+            self.position = _Position.RESERVED
+        elif self.opens() and word in RESERVED_OPENERS:
+            self.position = _Position.RESERVED
+        elif self.opens():
+            self.position = NEXT_POSITION.get(word, _Position.PAST)
+        else:
+            self.position = _Position.PAST
+        self.prefixes_only = self.prefixes_only and word in RESERVED_OPENERS
+
+
 class _CommandList:
     """Splits tokens into simple commands, and follows which open groups a pipe feeds."""
 
     def __init__(self) -> None:
+        self.start = _CommandStart()  # the first words of the last command
         self.commands = [SimpleCommand()]
         self.groups: list[tuple[str, bool]] = []  # each open group's opener, and if a pipe feeds it
         self.target: str | None = None  # the redirect whose target the next word is
@@ -1617,20 +1679,21 @@ class _CommandList:
             current.heredocs.append(Heredoc("", quoted=False, strip_tabs=False, body=text))
         elif target is None:
             self._open_or_close(current, text)
+            self.start.read(text)
             current.words.append(text)
 
     def _open_or_close(self, current: SimpleCommand, text: str) -> None:
         """A reserved word at the start of a command opens or closes a group. A closer ends only
         the open group it matches: otherwise every group stays open, and a pipe into one still
         feeds the commands after it."""
-        if text in GROUP_OPENERS and _reads_a_reserved_word(current.words):
+        if text in GROUP_OPENERS and self.start.opens():
             self.groups.append((text, current.piped))
-        elif text in GROUP_CLOSERS and self._closes(text, current.words):
+        elif text in GROUP_CLOSERS and self._closes(text):
             self.groups.pop()
 
-    def _closes(self, closer: str, words: Sequence[str]) -> bool:
-        prefixes_only = all(word in SHELL_PREFIXES or word in GROUP_OPENERS for word in words)
-        return prefixes_only and bool(self.groups) and self.groups[-1][0] in GROUP_CLOSERS[closer]
+    def _closes(self, closer: str) -> bool:
+        matches = bool(self.groups) and self.groups[-1][0] in GROUP_CLOSERS[closer]
+        return self.start.prefixes_only and matches
 
     def _redirect(self, token: Token) -> None:
         current = self.commands[-1]
@@ -1651,29 +1714,9 @@ class _CommandList:
         if current.words or current.heredocs or current.fed:
             piped = text in PIPES or self._in_a_piped_group()
             self.commands.append(SimpleCommand(piped=piped))
+            self.start = _CommandStart()
         else:  # an empty command: a newline continues the list, and `| (` still pipes
             current.piped = current.piped or text in PIPES
-
-
-def _reads_a_reserved_word(words: Sequence[str]) -> bool:
-    """Whether bash reads a reserved word after these first words of a command: shell prefixes
-    and openers (`! {`, `if {`), `time`, `time -p`, `function NAME`, `coproc` and `coproc NAME`."""
-    openers = SHELL_PREFIXES | GROUP_OPENERS
-    index = 0
-    while index < len(words):
-        word = words[index]
-        following = words[index + 1 : index + 2]
-        if word in openers:
-            index += 1
-        elif word == "time":
-            index += 2 if following == ["-p"] else 1
-        elif word == "function":
-            index += 2
-        elif word == "coproc":
-            index += 1 if not following or following[0] in openers else 2
-        else:
-            return False
-    return index == len(words)
 
 
 def _simple_commands(tokens: Sequence[Token]) -> list[SimpleCommand]:

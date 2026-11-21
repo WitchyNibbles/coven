@@ -3752,6 +3752,14 @@ def test_a_case_after_a_prefix_in_a_substitution_is_guarded(repo, command):
     assert_guarded(command, repo)
 
 
+@pytest.mark.parametrize("prefix", ["time ", "time -p ", "coproc a ", "{ ", "! ", "if "])
+def test_a_long_run_of_prefixes_is_read_in_one_pass(prefix):
+    command = prefix * 10_000 + "git status"
+    start = time.monotonic()
+    assert not pm._is_guarded(command)
+    assert time.monotonic() - start < 2  # one pass takes well under a second
+
+
 # A `{` after `function NAME`, `coproc NAME` or `time` opens a group, and a closer ends only the
 # group it matches: the outer group a pipe feeds stays fed.
 PIPED_GROUP_FORMS = [
