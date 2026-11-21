@@ -81,7 +81,7 @@ def test_manifests_parse_and_match_docs_fields() -> None:
     assert plugin["author"] == {"name": "WitchyNibbles"}
     assert plugin["license"] == "MIT"
     assert plugin["homepage"] == "https://github.com/WitchyNibbles/coven"
-    assert plugin["dependencies"] == ["superpowers@claude-plugins-official"]
+    assert plugin["dependencies"] == ["superpowers@claude-plugins-official", "aquelarre"]
 
     marketplace = load(MARKETPLACE_JSON)
     assert set(marketplace) <= MARKETPLACE_KEYS
@@ -96,7 +96,7 @@ def test_manifests_parse_and_match_docs_fields() -> None:
 
 def test_aquelarre_manifest_matches_coven() -> None:
     mod = load(AQUELARRE_JSON)
-    assert set(mod) <= PLUGIN_KEYS | {"types"}
+    assert set(mod) <= PLUGIN_KEYS | {"types", "userConfig"}
     assert mod["name"] == "aquelarre"
     assert mod["version"] == load(PLUGIN_JSON)["version"]
     assert mod["description"].strip()

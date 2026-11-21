@@ -28,6 +28,9 @@ type Status = Literal["ok", "warn", "fail"]
 
 PYTHON_MINIMUM: Final = (3, 12)
 SUPERPOWERS: Final = "superpowers@claude-plugins-official"
+AQUELARRE: Final = "aquelarre@coven"
+# The oldest Claude Code aquelarre was tested on; older ones install it but cannot load the mod.
+AQUELARRE_TESTED_FROM: Final = (2, 1, 325)
 RECENT: Final = timedelta(hours=24)
 ERRORS_SHOWN: Final = 5
 LOG_TAIL_BYTES: Final = (
@@ -145,25 +148,50 @@ def _is_install(entry: object) -> bool:
     return isinstance(entry, dict) and bool(entry.get("installPath"))
 
 
+def _read_plugins_file() -> object:
+    """The installed-plugins file's JSON; `FileNotFoundError`, `OSError` or `ValueError` when not."""
+    file = paths.installed_plugins_file()
+    return safe_json.loads(file.read_text(encoding="utf-8", errors="replace"))
+
+
+def _has_install(data: object, plugin: str) -> bool:
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    entry = plugins.get(plugin) if isinstance(plugins, dict) else None
+    # Version 2 files hold a list of installs per plugin; the shim also accepts one object.
+    if isinstance(entry, list):
+        return any(_is_install(item) for item in entry)
+    return _is_install(entry)
+
+
 def _superpowers(_now: datetime) -> Outcome:
     file = paths.installed_plugins_file()
     try:
-        data = safe_json.loads(file.read_text(encoding="utf-8", errors="replace"))
+        data = _read_plugins_file()
     except FileNotFoundError:
         return Outcome("fail", f"{file} does not exist; run claude plugin install {SUPERPOWERS}")
     except (OSError, ValueError) as error:
         return Outcome("fail", f"{file} cannot be read: {_one_line(str(error))}")
-    plugins = data.get("plugins") if isinstance(data, dict) else None
-    entry = plugins.get(SUPERPOWERS) if isinstance(plugins, dict) else None
-    # Version 2 files hold a list of installs per plugin; the shim also accepts one object.
-    installed = (
-        any(_is_install(item) for item in entry) if isinstance(entry, list) else _is_install(entry)
-    )
-    if installed:
+    if _has_install(data, SUPERPOWERS):
         return _ok(SUPERPOWERS)
     return Outcome(
         "fail", f"{SUPERPOWERS} is not installed; run claude plugin install {SUPERPOWERS}"
     )
+
+
+def _aquelarre(_now: datetime) -> Outcome:
+    try:
+        too_old = claude_version.installed() < AQUELARRE_TESTED_FROM
+    except CovenError:
+        too_old = False  # a missing or unreadable Claude Code is the `claude code` line's to report
+    if too_old:
+        return Outcome("warn", f"needs Claude Code {dotted(AQUELARRE_TESTED_FROM)} or newer")
+    try:
+        installed = _has_install(_read_plugins_file(), AQUELARRE)
+    except (OSError, ValueError):
+        installed = False
+    if installed:
+        return _ok(AQUELARRE)
+    return Outcome("warn", "not installed (reinstall coven@coven)")
 
 
 def _config(_now: datetime) -> Outcome:
@@ -463,6 +491,7 @@ CHECKS: Final[tuple[tuple[str, Status, Callable[[datetime], Outcome]], ...]] = (
     ("uv", "warn", _uv),
     ("gh", "warn", _gh),
     ("superpowers plugin", "fail", _superpowers),
+    ("aquelarre plugin", "warn", _aquelarre),
     ("config", "fail", _config),
     ("memory store", "fail", _memory_store),
     ("memory hook", "fail", _memory_hook),

@@ -151,6 +151,23 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   (`git -C <store> status` shows what).
 - Adopt was not tested on case-insensitive filesystems.
 
+## aquelarre
+
+- The mod API is early access. aquelarre follows it as Claude Code ships it, and a release can
+  change it.
+- The mod's types are checked through `claude plugin validate --strict`. CI does not run `tsc`:
+  the engine lays the types only for a live session.
+- Its tests run with `claude plugin test`. aquelarre was tested from Claude Code 2.1.325 (the CI
+  pin stays there). On 2.1.224, coven's minimum, the dependency installs but the mod cannot load:
+  `validate` rejects its hooks file and `plugin test` does not exist. `coven doctor` warns below
+  2.1.325.
+- format, lint and coverage are `n/a` for a mod: it has no Node toolchain, and `claude plugin
+  test` reports no coverage. The check prints `n/a` for them on the mod, never for a Python or
+  TypeScript project.
+- Disabling or uninstalling coven leaves aquelarre on. `claude plugin prune` removes it.
+- Whether `coven` is on the mod's `PATH` rests on the plugin's `bin/` joining it; a live session
+  confirms it, and a lookup through the installed plugins file is the follow-up if it does not.
+
 ## Checks and platforms
 
 - The install smoke job (`.github/workflows/install-smoke.yml`, run by `ci/install-smoke/run.sh`)

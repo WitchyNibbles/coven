@@ -42,6 +42,7 @@ fi
 
 log "claude plugin validate"
 claude plugin validate "$SRC" --strict || fail "claude plugin validate --strict found problems"
+claude plugin validate --strict "$SRC/plugins/aquelarre" || fail "claude plugin validate --strict found problems in plugins/aquelarre"
 
 # The checkout itself failing to add as a marketplace is a coven bug, never a fallback.
 claude plugin marketplace add "$SRC" || fail "claude plugin marketplace add $SRC failed: the checkout must work as a marketplace"
@@ -86,6 +87,15 @@ fi
 coven=$root/bin/coven
 log "coven: $coven ($mode)"
 
+# coven declares aquelarre as a dependency, so installing coven installs and enables it too.
+if [ "$mode" = installed ]; then
+    plugin_list=$(claude plugin list) || fail "claude plugin list failed"
+    printf '%s\n' "$plugin_list"
+    printf '%s\n' "$plugin_list" |
+        awk '/aquelarre@coven/ { seen = 1; next } seen && /Status:/ { found = ($0 ~ / enabled$/); exit } END { exit !found }' ||
+        fail "aquelarre@coven is not enabled in claude plugin list after installing coven@coven"
+fi
+
 # --- coven doctor: no fail lines; warn lines only from the expected set --------------------------
 # A fresh container has no gh login, no crossSessionInbound setting and no memory store yet.
 doctor_rc=0
@@ -98,6 +108,13 @@ while IFS= read -r line; do
         "ok "*) ;;
         "  "*) ;; # a detail line under a check
         "warn gh:"* | "warn crossSessionInbound:"* | "warn memory store:"* | "warn memory hook:"*) ;;
+        "warn aquelarre plugin:"*)
+            # Only the fallback may lack aquelarre: it never installed anything.
+            if [ "$mode" = installed ]; then
+                log "unexpected doctor line: $line"
+                bad=1
+            fi
+            ;;
         "fail superpowers plugin:"*)
             # Only the fallback may lack superpowers: it never installed anything.
             if [ "$mode" = installed ]; then
@@ -117,6 +134,7 @@ for check in "claude code" python3 git uv config; do
 done
 if [ "$mode" = installed ]; then
     grep -q '^ok superpowers plugin:' "$work/doctor.txt" || fail "coven doctor did not report 'ok superpowers plugin'"
+    grep -q '^ok aquelarre plugin:' "$work/doctor.txt" || fail "coven doctor did not report 'ok aquelarre plugin'"
     [ "$doctor_rc" -eq 0 ] || fail "coven doctor exited $doctor_rc"
 fi
 

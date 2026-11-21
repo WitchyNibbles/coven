@@ -5,5 +5,5 @@
   "author": { "name": "WitchyNibbles" },
   "license": "MIT",
   "homepage": "https://github.com/WitchyNibbles/coven",
-  "dependencies": ["superpowers@claude-plugins-official"]
+  "dependencies": ["superpowers@claude-plugins-official", "aquelarre"]
 }

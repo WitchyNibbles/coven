@@ -248,6 +248,25 @@ approval for the exact command. With no guard set up, nothing changes for you.
 The guard is best effort against a PM that follows its role, and it never covers your own terminal
 outside Claude Code. See [known gaps](docs/known-gaps.md).
 
+## Aquelarre
+
+☾ A second plugin in the same marketplace that installs with coven (coven lists it as a
+dependency): a mod that shows your live project managers. It needs Claude Code 2.1.325 or newer;
+`coven doctor` warns on an older one.
+
+- **Pane.** `/aquelarre` opens a pane beside the chat with one card per live PM: its state, how
+  long it has been in it, its plan, what it waits on and its last messages.
+- **Band.** One row above the prompt that counts the PMs working or waiting.
+- **Toasts.** One when a PM asks a question, needs a production step, finishes or dies.
+- **Settings.** Three rows in `/config`: `language` (`en` or `es`, default `en`), `band` and
+  `toasts` (both on by default). A change takes effect when the mod reloads, for example in the
+  next session.
+
+It reads `coven pm status` and writes only `~/.cache/aquelarre/`. See
+[plugins/aquelarre](plugins/aquelarre/README.md).
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
 ## Uninstall
@@ -258,7 +277,9 @@ outside Claude Code. See [known gaps](docs/known-gaps.md).
    timestamped backups beside `~/.claude/settings.json` are for you to read; coven never restores
    one over later changes.
 2. Remove the plugin and its marketplace:
-   `claude plugin uninstall coven@coven` and `claude plugin marketplace remove coven`.
+   `claude plugin uninstall coven@coven` and `claude plugin marketplace remove coven`. The uninstall
+   leaves aquelarre, which Claude Code installed as its dependency, on and showing its band;
+   `claude plugin prune` removes it, or switch the band off in `/config` (`band`).
 3. Delete what is left of `~/.config/coven` and, if you want, the memory store (`~/coven-memory` or
    the path you chose). The store is your notes: copy out what you keep first. Logs live in
    `${XDG_CACHE_HOME:-~/.cache}/coven`.

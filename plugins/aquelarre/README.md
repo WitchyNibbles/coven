@@ -14,7 +14,7 @@ second plugin in the coven marketplace and installs with coven.
 
 ## Settings
 
-Three options, each a row in `/config` (a change reloads the mod):
+Three options, each a row in `/config` (a change takes effect when the mod reloads, for example in the next session):
 
 - `language`: `en` (the default) or `es`. The language of the pane, the band, the toasts and the
   `/aquelarre` command.
