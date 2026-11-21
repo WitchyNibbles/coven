@@ -3814,7 +3814,7 @@ def test_a_pipe_into_a_group_past_a_quoted_closer_is_guarded(repo, command):
 @pytest.mark.parametrize(
     "command",
     [
-        "git log -1 | { \"{\"; cat; }; sh -n x.sh",
+        'git log -1 | { "{"; cat; }; sh -n x.sh',
         "git log -1 | { '{' 2>/dev/null; cat; }; bash scripts/check.sh",
         'echo "$(\\time case a in a) git push -f;; esac)"',
         'echo "$(time "-p" case a in a) git push -f;; esac)"',
