@@ -41,7 +41,9 @@ with any arguments), `source`, `.`, `eval`, a shell, `source` or `eval` as a wor
 wrapper (`stdbuf -oL bash`, `busybox sh`), one in find's exec action (`find . -exec sh \;`, which
 inherits find's stdin), parallel with no command of its own, an option the guard cannot follow or
 a git, gh, shell, eval or wrapper command (`parallel`, `parallel git`: it runs or adds what it
-reads, as xargs does), `make -f -` (its makefile is stdin), an expansion (`$x`), a wrapper the
+reads, as xargs does), make with `-f`, `--file` or `--makefile` given a stdin path (`-`,
+/dev/stdin, /dev/fd/0 or /proc/self/fd/0, also after `=` or glued on; a heredoc body there is a
+makefile, so it guards when it names git, gh or a guarded word, `@gh` and `-gh` too), an expansion (`$x`), a wrapper the
 guard cannot unwrap, or a compound command (`} done fi esac )`). The words of any other command are its own
 data: `git diff --name-only | grep bash` and `git status --short | grep -c .` are not guarded. Anything else (cat, tee, python3 -, node,
 perl) is data. Such a command is also guarded when its own words mention a guarded word, as its
