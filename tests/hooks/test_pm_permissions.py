@@ -3049,3 +3049,47 @@ def test_a_token_list_with_seven_ambiguous_words_is_not_enumerated():
     tokens = ["git", *["2", ">", "f"] * 7, "push"]
     with pytest.raises(pm.Unsupported):
         pm._redirect_readings(tokens)
+
+
+# --- a git segment with a redirect operator and a push word is guarded, whatever it reads as ------
+
+# A quoted operator after a valued option (`-C ">"`) is the option's folder, but the tokenizer gives a
+# bare `>`: a push runs when a folder with that name exists. On top of the readings, a segment of
+# git (or of a wrapper) with a redirect operator and a push, merge or send-pack word is guarded.
+GUARD_QUOTED_OPERATOR_VALUE = [
+    'git -C ">" push -f',
+    'git -c ">" push -f',
+    'git --namespace ">" push -f',
+    'git --git-dir ">" merge x',
+    'FOO=1 git -C ">" push -f',
+    '2>&1 git -C ">" push -f',
+    'env git -C ">" push -f',
+    'echo hi; git -C "<" send-pack x',
+    # An accepted false positive: the word `push` is a pattern here, and the guard only runs
+    # decide() on it.
+    "git log --grep push 2>&1",
+]
+
+
+@pytest.mark.parametrize("command", GUARD_QUOTED_OPERATOR_VALUE)
+def test_a_git_segment_with_a_redirect_and_a_push_word_is_guarded(repo, command):
+    assert pm._is_guarded(command)
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.strip() == pm.decide(pm.Call("Bash", command, str(repo)))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git log 2>&1",
+        'git -C ">" log',
+        "git status >out",
+        "git push-notes >out",
+        "echo push 2>&1",
+        "ls >out; git log",
+    ],
+)
+def test_a_git_segment_with_a_redirect_and_no_push_word_stays_unguarded(repo, command):
+    assert not pm._is_guarded(command)
+    assert guard(request(command, repo)) == (0, "", "")
