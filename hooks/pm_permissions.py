@@ -1174,7 +1174,9 @@ def _is_guarded(command: str) -> bool:
     before a redirect is read both ways (a descriptor, or an argument), and either may be guarded."""
     try:
         tokens = _tokens(command, lenient=True)
-        readings = [_segments(tokens, lenient=True, keep_descriptors=keep) for keep in (False, True)]
+        readings = [
+            _segments(tokens, lenient=True, keep_descriptors=keep) for keep in (False, True)
+        ]
     except Unsupported:
         return bool(HOLDS_GIT_OR_GH.search(command))
     return any(_segment_is_guarded(segment.words) for segments in readings for segment in segments)

@@ -2902,7 +2902,9 @@ def test_a_digit_before_a_redirect_does_not_hide_a_guarded_command(repo, command
     assert err.strip() == pm.decide(pm.Call("Bash", command, str(repo)))
 
 
-@pytest.mark.parametrize("command", ["echo 2 >f", "ls 2>/dev/null", "echo 2 3 >f 2>&1", "git -C 2 >f log"])
+@pytest.mark.parametrize(
+    "command", ["echo 2 >f", "ls 2>/dev/null", "echo 2 3 >f 2>&1", "git -C 2 >f log"]
+)
 def test_a_digit_before_a_redirect_on_a_harmless_command_stays_unguarded(repo, command):
     assert not pm._is_guarded(command)
     assert guard(request(command, repo)) == (0, "", "")
