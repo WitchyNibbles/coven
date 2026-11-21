@@ -37,9 +37,10 @@ order. A line equal to the delimiter ends a body (tabs stripped for `<<-`; for a
 delimiter after backslash-newline joining, as bash does). An unquoted delimiter's body is scanned
 for substitutions, which always run. A heredoc or here-string body is read as commands when the
 command it feeds reads commands: a shell (bash, sh, zsh, dash, ksh, mksh, ash, fish, csh, tcsh,
-with any arguments), `source`, `.`, `eval`, any of those as a word of the command (`stdbuf -oL
-bash`, under a wrapper the guard does not know), an expansion (`$x`), a wrapper the guard cannot
-unwrap, or a compound command (`} done fi esac )`). Anything else (cat, tee, python3 -, node,
+with any arguments), `source`, `.`, `eval`, a shell, `source` or `eval` as a word of an exec
+wrapper (`stdbuf -oL bash`, `busybox sh`), an expansion (`$x`), a wrapper the guard cannot
+unwrap, or a compound command (`} done fi esac )`). The words of any other command are its own
+data: `git diff --name-only | grep bash` and `git status --short | grep -c .` are not guarded. Anything else (cat, tee, python3 -, node,
 perl) is data. Such a command is also guarded when its own words mention a guarded word, as its
 script then reads the body as data (`bash -c 'git $(cat)' <<EOF`), and when an unquoted body or a
 here-string has an expansion and mentions a guarded word: the outer shell expands it first, so
@@ -47,7 +48,10 @@ here-string has an expansion and mentions a guarded word: the outer shell expand
 `<&` or `<>` instead, it is guarded when the whole text mentions a guarded word: what it runs is
 not in view. A pipe feeds the commands of its own pipeline only, and every command inside a group or a
 compound command it feeds (`| { bash; }`, `| while ...; do sh; done`): `git log | head && bash x`
-is not fed.
+is not fed. An opener counts at the start of a command, also after `time`, `time -p`, `function
+NAME` and `coproc [NAME]`, and a closer ends only the open group it matches (`}` a `{`, `fi` an
+`if`, `done` a loop, `esac` a case, `)` a `(`). A closer that matches none ends nothing, so a pipe
+into an outer group still feeds what follows: that fails closed.
 
 ## Wrappers
 
@@ -56,8 +60,10 @@ their known options (and env's and sudo's assignment words) to the inner command
 normal git and gh check. An option the guard cannot follow (`env -S`, `sudo -s`, `xargs -i{}`)
 falls back to the word check HOLDS_GUARDED, which holds `send-pack`; shells, eval, trap (its
 action), make and the exec wrappers (setsid, stdbuf, ionice, flock, taskset, chrt, unshare,
-nsenter, script, doas, su, runuser, chroot, watch, strace and others, and find with `-exec`) keep
-that check. xargs in front of git with no subcommand is guarded (stdin names it), and so is a
+nsenter, script, doas, su, runuser, chroot, watch, strace, busybox and others) keep that check.
+find runs the command after each `-exec`, `-execdir`, `-ok` or `-okdir`, up to its `;` or a `+`
+right after `{}` (to the end when neither comes), and that command gets the normal check: `find .
+-exec grep -n 'git push' {} \;` is not guarded, `find . -exec git push -f \;` is. xargs in front of git with no subcommand is guarded (stdin names it), and so is a
 wrapper under xargs with no command of its own. A command word that expands (`$g push`, `$(echo
 git) push`) is guarded when its words mention a guarded word. Assignments are `NAME=`, `NAME+=`
 and `NAME[i]=`; `function NAME` and `coproc [NAME]` come before the command as prefixes do.

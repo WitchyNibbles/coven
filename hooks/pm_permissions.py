@@ -102,13 +102,14 @@ It runs decide() when a simple command, in the command or in any substitution, i
 or a git `push`, `merge` or `send-pack` (after git's global options, assignments, `function NAME`
 and `coproc`), under any wrappers it can follow (env, nice, nohup, time, timeout, command, exec,
 builtin, sudo, xargs, with their options; xargs before git with no subcommand counts); a wrapper
-it cannot follow, a shell, eval, trap, make or an exec wrapper (setsid, stdbuf, find -exec...)
-whose words hold `push`, `merge`, `send-pack` or `gh`; a command name that expands (`$g`,
-`$(...)`) next to such a word or a git word; or a `$((...))` that mentions one. A heredoc or
-here-string body is data, but for its unquoted-delimiter substitutions, unless it feeds a command
-that reads commands (a shell, `source`, `eval`, any of them as a word of the command, a compound
-command or a command the guard cannot name): then it is read as commands, and the command's own
-words must not mention git or a push. A shell fed by a pipe (in its own pipeline or group) or an
+it cannot follow, a shell, eval, trap, make or an exec wrapper (setsid, stdbuf...) whose words
+hold `push`, `merge`, `send-pack` or `gh`; a find whose `-exec` command is one of these; a
+command name that expands (`$g`, `$(...)`) next to such a word or a git word; or a `$((...))`
+that mentions one. A heredoc or here-string body is data, but for its unquoted-delimiter
+substitutions, unless it feeds a command that reads commands (a shell, `source`, `.`, `eval`, a
+shell as a word of an exec wrapper, a compound command or a command the guard cannot name): then
+it is read as commands, and the command's own words must not mention git or a push. A grep
+pattern such as `bash` is data. A shell fed by a pipe (in its own pipeline or group) or an
 input redirect guards a text that mentions git, gh or a push. Text the scanner cannot follow (an
 unbalanced quote or substitution, an unended heredoc, `$'..'`, nesting past MAX_NESTING) guards
 it when it mentions one; "mentions" is read with quotes and backslashes removed. A word in a

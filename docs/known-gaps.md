@@ -64,7 +64,12 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   `timeout` or `sudo`, inside a `bash -c` or `make` that names one, and in a heredoc fed to a
   shell; and on any text it cannot read that mentions `git`, `gh` or a push. Words in a commit
   message, a quoted string, a file name or a heredoc fed to `cat` do not trigger it, and
-  `make push-docs` does, on purpose. What still gets through:
+  `make push-docs` does, on purpose. Some harmless forms are guarded because the guard fails
+  closed: `echo $(( $(git rev-list --count HEAD) + 1 ))` (it does not read a substitution inside
+  arithmetic, so it guards one that mentions git), and a pipe from git into any shell, even one
+  whose `-c` script ignores stdin (`git log --oneline | sh -c 'head -2'`). Write the count as
+  `n=$(git rev-list --count HEAD); echo $((n + 1))` and drop the `sh -c`. What still gets
+  through:
   - git aliases (`git config alias.p push`, or `-c alias.p=push`, then `git p`), and any shell
     function or script that pushes;
   - a script file written now and run later, even in the same command: `tee f <<'EOF'`, a push in
