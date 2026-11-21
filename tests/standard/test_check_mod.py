@@ -123,6 +123,18 @@ def test_a_repo_with_only_a_mod_is_checked(run_check, mod_repo, fake_claude):
     assert " dirty=no " in receipt(out)
 
 
+def test_a_bare_fast_runs_no_mod_tests_as_it_runs_no_python_tests(
+    run_check, py_project, fake_claude
+):
+    """A bare `fast` runs no tests for a Python project (tests=0), so none for a mod either."""
+    write_mod(py_project)
+    commit_all(py_project)
+    out = run_check(py_project, "fast", env=fake_claude.env)
+    assert out.returncode == 0, out.stdout
+    assert " types=ok tests=0 " in receipt(out)
+    assert [call.split()[:2] for call in fake_claude.calls()] == [["plugin", "validate"]]
+
+
 def test_fast_without_test_paths_validates_and_runs_no_tests(run_check, mod_repo, fake_claude):
     out = run_check(mod_repo, "fast", env=fake_claude.env)
     assert out.returncode == 0, out.stdout

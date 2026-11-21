@@ -260,6 +260,23 @@ def test_setup_ts_only_writes_ts_files_not_ruff(git_repo: Path):
     assert drift(git_repo) == []
 
 
+def test_setup_and_drift_accept_a_mod_only_repo(git_repo: Path):
+    mod = git_repo / "plugins/mod"
+    (mod / ".claude-plugin").mkdir(parents=True)
+    (mod / "hooks").mkdir()
+    (mod / ".claude-plugin/plugin.json").write_text("{}")
+    (mod / "hooks/hooks.json").write_text('{"modules": ["./register.ts"]}')
+    (mod / "hooks/register.ts").write_text("export function register(): void {}\n")
+    result = setup(git_repo)
+    assert set(result.written) == {*SCRIPTS, WORKFLOW}
+    assert result.wiring == ()
+    for rel in result.written:
+        assert (git_repo / rel).read_bytes() == (REPO / SOURCES[rel]).read_bytes()
+    assert (git_repo / ".coven/check_mod.py").is_file()
+    assert not (git_repo / ".coven/ruff.toml").exists()
+    assert drift(git_repo) == []
+
+
 def test_setup_backend_frontend_writes_both(git_repo: Path):
     (git_repo / "backend").mkdir()
     (git_repo / "backend/pyproject.toml").write_text(BARE)
