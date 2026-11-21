@@ -182,7 +182,7 @@ hooks module tested by `claude plugin test` (kit `claude-code/testing`).
 - Consumes: `paths.installed_plugins_file()`, the `_superpowers` reading pattern
   (`src/coven/doctor.py:148-166`), `claude_version` parsing.
 - Produces: doctor check `aquelarre plugin`, after `superpowers plugin` in `CHECKS`: `ok` when an
-  install entry for `aquelarre@coven` exists; `warn` "not installed (reinstall coven@coven)"
+  install entry for `aquelarre@coven` exists; `warn` "not installed; run claude plugin install aquelarre@coven"
   otherwise; `warn` "needs Claude Code 2.1.325 or newer" when the installed Claude Code is older.
   `AQUELARRE_TESTED_FROM = (2, 1, 325)`.
 

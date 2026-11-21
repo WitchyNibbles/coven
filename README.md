@@ -92,9 +92,16 @@ If superpowers is installed but disabled, Claude Code refuses to load coven. Ena
 - The deny-secrets hook blocks reads and copies of `.env` files and of the key folders (`~/.ssh`
   and the like), everywhere.
 - The project manager hooks do something only in PM sessions; in your own sessions they stay quiet.
+- aquelarre, the mod that installs with coven, draws a band above the prompt that sums up the live
+  project managers. To fill it, each session that is not a PM runs `coven pm status` every 5 seconds
+  while the aquelarre pane is open and about every 10 seconds otherwise. When `coven` is missing or
+  fails, the band shows a read error in every session.
 
-To switch it off, run `claude plugin disable coven@coven` (`claude plugin enable coven@coven`
-brings it back), and `coven setup --undo` to restore the settings that setup changed.
+To switch it off, run `claude plugin disable coven@coven` and
+`claude plugin disable aquelarre@coven` (`claude plugin enable` on each brings them back), and
+`coven setup --undo` to restore the settings that setup changed. Disabling only coven leaves
+aquelarre running. To keep aquelarre but hide the band, switch `band` off in `/config`; the polling
+goes on, for the pane and the toasts.
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 

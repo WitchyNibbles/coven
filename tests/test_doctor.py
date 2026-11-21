@@ -266,23 +266,33 @@ def test_aquelarre_in_the_object_form_is_ok(world):
         {"plugins": {AQUELARRE: []}},
         {"plugins": {AQUELARRE: [{"scope": "user"}]}},
         {"plugins": []},
-        "{not json",
     ],
-    ids=[
-        "other plugin only",
-        "empty list",
-        "entry without installPath",
-        "plugins a list",
-        "not json",
-    ],
+    ids=["other plugin only", "empty list", "entry without installPath", "plugins a list"],
 )
-def test_aquelarre_absent_or_unreadable_warns_and_says_how_to_reinstall(world, content):
+def test_aquelarre_absent_from_a_readable_file_warns_and_says_how_to_install(world, content):
     world.plugins(content)
     state, detail = results()["aquelarre plugin"]
     assert state == "warn"
-    assert "not installed" in detail
-    assert "reinstall coven@coven" in detail
+    assert detail == f"not installed; run claude plugin install {AQUELARRE}"
+
+
+def test_aquelarre_in_a_file_that_is_not_json_warns_that_it_cannot_be_read(world):
+    world.plugins("{not json")
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert detail.startswith(f"{paths.installed_plugins_file()} cannot be read: ")
+    assert "not installed" not in detail
     assert "\n" not in detail
+
+
+def test_aquelarre_in_a_plugin_file_that_cannot_be_opened_warns_that_it_cannot_be_read(world):
+    file = paths.installed_plugins_file()
+    file.unlink()
+    file.mkdir()  # reading a directory raises OSError, not FileNotFoundError
+    state, detail = results()["aquelarre plugin"]
+    assert state == "warn"
+    assert detail.startswith(f"{file} cannot be read: ")
+    assert detail == results()["superpowers plugin"][1]
 
 
 def test_aquelarre_with_no_plugin_file_warns(world):

@@ -163,6 +163,10 @@ def _has_install(data: object, plugin: str) -> bool:
     return _is_install(entry)
 
 
+def _unreadable(error: Exception) -> str:
+    return f"{paths.installed_plugins_file()} cannot be read: {_one_line(str(error))}"
+
+
 def _superpowers(_now: datetime) -> Outcome:
     file = paths.installed_plugins_file()
     try:
@@ -170,7 +174,7 @@ def _superpowers(_now: datetime) -> Outcome:
     except FileNotFoundError:
         return Outcome("fail", f"{file} does not exist; run claude plugin install {SUPERPOWERS}")
     except (OSError, ValueError) as error:
-        return Outcome("fail", f"{file} cannot be read: {_one_line(str(error))}")
+        return Outcome("fail", _unreadable(error))
     if _has_install(data, SUPERPOWERS):
         return _ok(SUPERPOWERS)
     return Outcome(
@@ -187,11 +191,13 @@ def _aquelarre(_now: datetime) -> Outcome:
         return Outcome("warn", f"needs Claude Code {dotted(AQUELARRE_TESTED_FROM)} or newer")
     try:
         installed = _has_install(_read_plugins_file(), AQUELARRE)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         installed = False
+    except (OSError, ValueError) as error:
+        return Outcome("warn", _unreadable(error))
     if installed:
         return _ok(AQUELARRE)
-    return Outcome("warn", "not installed (reinstall coven@coven)")
+    return Outcome("warn", f"not installed; run claude plugin install {AQUELARRE}")
 
 
 def _config(_now: datetime) -> Outcome:
