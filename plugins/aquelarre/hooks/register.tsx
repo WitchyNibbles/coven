@@ -53,7 +53,6 @@ type Plural = readonly [one: string, many: string]
 type Text = Readonly<{
   /** Each group's label in the summary, singular then plural. */
   summary: Readonly<Record<Group, Plural>>
-  waitsWord: string
   /** A PM's state as a word, by the state `coven pm status` prints. A state not listed is unknown. */
   stateWords: Readonly<Record<string, string>>
   unknownState: string
@@ -93,7 +92,6 @@ type Text = Readonly<{
 const TEXT: Record<'en' | 'es', Text> = {
   en: {
     summary: { waits: ['waits', 'wait'], problem: ['problem', 'problems'], working: ['working', 'working'], idle: ['paused', 'paused'] },
-    waitsWord: 'waits on the GM',
     stateWords: {
       working: 'working',
       idle: 'paused',
@@ -135,7 +133,6 @@ const TEXT: Record<'en' | 'es', Text> = {
   },
   es: {
     summary: { waits: ['espera', 'esperan'], problem: ['problema', 'problemas'], working: ['trabajando', 'trabajando'], idle: ['en pausa', 'en pausa'] },
-    waitsWord: 'espera al GM',
     stateWords: {
       working: 'trabajando',
       idle: 'en pausa',
@@ -501,7 +498,7 @@ function entryFor(before: Witch | undefined, witch: Witch, t: Text): Entry | und
     return { text: `✕ ${name} ${t.stateWords[witch.state] ?? t.unknownState}`, isUrgent: true }
   }
   if (classify(witch) === 'waits' && (!before || classify(before) !== 'waits')) {
-    return { text: entryText(`◆ ${name} ${t.waitsWord}`, awaitedMessage(witch, t)), isUrgent: true }
+    return { text: entryText(`◆ ${name} ${t.stateWords.blocked}`, awaitedMessage(witch, t)), isUrgent: true }
   }
   const isDoneOut = parseMessage(witch.lastOut)?.kind === 'DONE'
   const isFinished = witch.state === 'done' ? before?.state !== 'done' : isDoneOut && before?.lastOut !== witch.lastOut
@@ -864,7 +861,7 @@ function rightEdge({ witch, group }: Live, t: Text): string {
 }
 
 function stateWord({ witch, group }: Live, t: Text): string {
-  return group === 'waits' ? t.waitsWord : (t.stateWords[witch.state] ?? t.unknownState)
+  return group === 'waits' ? t.stateWords.blocked : (t.stateWords[witch.state] ?? t.unknownState)
 }
 
 /** The longest live name plus a gap, at most MAX_NAME_COLUMN. */

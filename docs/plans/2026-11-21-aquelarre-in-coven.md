@@ -64,7 +64,7 @@ hooks module tested by `claude plugin test` (kit `claude-code/testing`).
 - Produces: `check_repo.Project.kind: Literal["python", "typescript", "mod"]` (`manager` is
   `None` for a mod); `check_repo.is_mod(repo: Path, directory: Path, files: set[Path]) -> bool`;
   `check_mod.mod_stages(project: check_repo.Project, run: check_stages.Run) -> check_stages.Stages`;
-  `check_mod.MOD_SUFFIXES` = `SCANNED_TS_SUFFIXES`.
+  the suffixes scanned are `SCANNED_TS_SUFFIXES`.
 - A mod is a directory with `.claude-plugin/plugin.json` and `hooks/hooks.json` whose JSON object
   has a non-empty list under `modules`. A mod at or below a TypeScript project's root is not a mod
   project. Unreadable or non-JSON `hooks.json`: not a mod (the files then stay "outside every

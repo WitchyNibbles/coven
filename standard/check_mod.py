@@ -9,7 +9,6 @@ has a mod.
 from __future__ import annotations
 
 import importlib
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -27,8 +26,6 @@ else:
 # The standard's version: the same in every module of it (check.py refuses a mismatch).
 STANDARD_VERSION = 6
 
-# The files of a mod scanned for suppressions: the ones the TypeScript projects scan.
-MOD_SUFFIXES = check_repo.SCANNED_TS_SUFFIXES
 CLAUDE = "claude"
 # The summary lines of `claude plugin test`: ` 253 pass`, ` 0 fail`.
 PASS_COUNT = re.compile(r"^\s*(\d+) pass\s*$", re.MULTILINE)
@@ -42,7 +39,6 @@ def _claude(root: Path, *args: str) -> tuple[int, str]:
         done = subprocess.run(
             [CLAUDE, *args],
             cwd=root,
-            env=os.environ.copy(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             encoding="utf-8",
