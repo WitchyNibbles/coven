@@ -92,7 +92,7 @@ two versions equal.
 ### Scrubbing
 
 - Code and comments: every mention of the private toolkit where coven is meant becomes coven.
-- Tests: the fixture home `/home/witch` becomes `/home/user` (coven's privacy test allows only
+- Tests: the fixture home (a made-up user name) becomes the placeholder `user` (coven's privacy test allows only
   placeholder names); PM names and senders that use the private toolkit's name become neutral
   ones. Assertions do not change.
 - The status fallback to the private toolkit and its role variable are removed (call 4 below),

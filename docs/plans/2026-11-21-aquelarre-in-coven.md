@@ -130,7 +130,7 @@ hooks module tested by `claude plugin test` (kit `claude-code/testing`).
   where coven is meant becomes coven. Remove the status fallback (`STATUS_COMMANDS` keeps only
   `coven pm status`) and the second role variable; delete the tests that only covered them and
   turn "when neither ... exists" into `when coven is missing the error is shown`. Fixture `HOME`
-  `/home/witch` -> `/home/user`; PM names and senders using the private name -> `tower`,
+  (a made-up user name) -> the placeholder `user`; PM names and senders using the private name -> `tower`,
   `gm-1`-style neutral names. Assertions otherwise unchanged; list every removed test in the
   commit body.
 - [ ] **Step 3: Run** `claude plugin test plugins/aquelarre` (all pass, count printed),
