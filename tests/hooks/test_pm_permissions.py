@@ -2920,7 +2920,7 @@ def test_a_descriptor_candidate_is_read_as_a_descriptor_and_as_an_argument():
     assert sorted(readings) == [["git", "2", "push"], ["git", "push"]]
 
 
-# --- the token after a redirect operator is its target, whatever it looks like --------------------
+# --- a token after a redirect operator may be its target, and one before it may be a descriptor ---
 
 # A quoted operator is a bare operator token once the tokenizer is done (`>"|"`), and an unquoted one
 # after a redirect is a syntax error in bash, which runs nothing.
@@ -2935,6 +2935,16 @@ GUARD_QUOTED_OPERATOR_TARGET = [
     'git >">(" push -f',
     'gh >"|" pr merge 1',
     'git 2>"||" push -f',
+]
+
+# A quoted `">"` is a word, not a redirect: the separator after it is a real one.
+GUARD_QUOTED_REDIRECT_BEFORE_SEPARATOR = [
+    'echo git ">" ; gh pr merge 1',
+    'echo ">" && git push -f',
+    'echo ">" |& env gh pr merge 1',
+    'echo ">" | git push -f',
+    'echo "<" ; git push -f',
+    'echo 2 ">" ; gh pr merge 1',
 ]
 
 # `<<- EOF` is `<<-` with the target EOF, and `<< - EOF` is `<<` with the target `-` (and an
@@ -2974,6 +2984,7 @@ GUARD_PAST_THE_CAP = [
     "command",
     [
         *GUARD_QUOTED_OPERATOR_TARGET,
+        *GUARD_QUOTED_REDIRECT_BEFORE_SEPARATOR,
         *GUARD_HEREDOC_DASH,
         *GUARD_MIXED_DESCRIPTORS,
         *GUARD_PROCESS_SUBSTITUTION,
@@ -3011,13 +3022,13 @@ def test_an_ambiguous_redirect_on_a_harmless_command_stays_unguarded(repo, comma
 @pytest.mark.parametrize(
     ("tokens", "readings"),
     [
-        # The next token is the target even when it is an operator.
-        (["ls", ">", ";", "git", "push"], [["ls", "git", "push"]]),
-        (["ls", ">", "&&", "git", "push"], [["ls", "git", "push"]]),
-        (["ls", ">", ">", "out", "git"], [["ls", "out", "git"]]),
-        (["git", ">", "|", "push", "-f"], [["git", "push", "-f"]]),
-        (["git", ">", "(", "push", "-f"], [["git", "push", "-f"]]),
-        # A target that may open a process substitution is read as a name and as an operator.
+        # An operator right after a redirect is read as its target (a quoted name, or a syntax
+        # error) and as an operator (the redirect was a quoted word, or this opens `< <(cmd)`).
+        (["ls", ">", ";", "git", "push"], [["ls", "git", "push"], ["ls", ";", "git", "push"]]),
+        (["ls", ">", "&&", "git", "push"], [["ls", "git", "push"], ["ls", "&&", "git", "push"]]),
+        (["ls", ">", ">", "out", "git"], [["ls", "out", "git"], ["ls", "git"]]),
+        (["git", ">", "|", "push", "-f"], [["git", "push", "-f"], ["git", "|", "push", "-f"]]),
+        (["git", ">", "(", "push", "-f"], [["git", "push", "-f"], ["git", "(", "push", "-f"]]),
         (["cat", "<", "<(", "git"], [["cat", "git"], ["cat", "<(", "git"]]),
         # `-` after `<<`: the operator's suffix (EOF is the target) or the target (EOF stays).
         (["cat", "<<", "-", "EOF", "x"], [["cat", "x"], ["cat", "EOF", "x"]]),

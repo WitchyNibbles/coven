@@ -294,9 +294,8 @@ PARENS = frozenset({"(", ")"})
 # commands), and the word before one that names a descriptor: `2` in `2>&1`, `{fd}` in `{fd}>f`.
 REDIRECTS = frozenset({">", ">>", "<", "<<", "<<<", ">&", "<&", "&>", "&>>", ">|", "<>"})
 DESCRIPTOR = re.compile(r"\d+|\{[A-Za-z_]\w*\}")
-# A target that may be a process substitution (`< <(cmd)`), and how many ambiguous tokens the
-# guard reads both ways (2**6 readings) before it falls back to looking for a git or gh word.
-PROCESS_SUBSTITUTION = re.compile(r"[<>]\(")
+# How many ambiguous redirect tokens the guard reads both ways (2**6 readings) before it falls
+# back to looking for a git or gh word.
 MAX_AMBIGUOUS = 6
 OPERATOR_CHARS = frozenset("();<>|&")
 
@@ -569,13 +568,13 @@ def _is_operator(token: str) -> bool:
 
 class _RedirectReader:
     """Reads a token list without its redirects: each operator of REDIRECTS and its target, the
-    token right after it, whatever that looks like (a quoted `">"` is a bare operator token here,
-    and an unquoted operator after a redirect is a syntax error that runs nothing). The tokenizer
-    loses the spacing and the quoting, so three kinds of token have two readings. `choices` answers
-    them in the order they come up (False once it runs out) and `asked` counts them; True means
-    that the word before a redirect is its descriptor (`2>f`, not the argument of `2 >f`), that a
-    `-` after `<<` is part of the operator (`<<-`, not the target of `<< -`), and that a `<(` or
-    `>(` after a redirect is its target (a quoted name, not a process substitution)."""
+    token right after it. The tokenizer loses the spacing and the quoting, so three kinds of token
+    have two readings. `choices` answers them in the order they come up (False once it runs out)
+    and `asked` counts them; True means that the word before a redirect is its descriptor (`2>f`,
+    not the argument of `2 >f`), that a `-` after `<<` is part of the operator (`<<-`, not the
+    target of `<< -`), and that an operator right after a redirect is its target (a quoted name
+    such as `>"|"`; unquoted it is a syntax error that runs nothing), not an operator of its own
+    (as in `< <(cmd)`, or `echo ">" ; gh` where the redirect was a quoted word)."""
 
     def __init__(self, choices: Sequence[bool]) -> None:
         self.choices = choices
@@ -607,7 +606,7 @@ class _RedirectReader:
         if expects == "heredoc" and word == "-":
             self.expects = "target" if self.ask() else ""
             return True
-        return not PROCESS_SUBSTITUTION.fullmatch(word) or self.ask()
+        return not _is_operator(word) or self.ask()
 
 
 def _redirect_readings(tokens: Sequence[str]) -> list[list[str]]:
