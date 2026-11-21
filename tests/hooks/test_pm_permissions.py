@@ -2854,9 +2854,6 @@ def test_a_redirect_still_gets_no_command_approved(command, repo):
         (["echo", "x", ">", "a", "3", ">", "b"], [["echo", "x"]]),
         # No target: drop the operator and nothing else.
         (["ls", ">"], [["ls"]]),
-        (["ls", ">", ";", "git", "push"], [["ls"], ["git", "push"]]),
-        (["ls", ">", "&&", "git", "push"], [["ls"], ["git", "push"]]),
-        (["ls", ">", ">", "out", "git"], [["ls", "git"]]),
         # A lone `&`, a pipe and a group still split.
         (["sleep", "1", "&", "git", "push"], [["sleep", "1"], ["git", "push"]]),
         (["a", "|&", "git", "push"], [["a"], ["git", "push"]]),
@@ -2864,7 +2861,15 @@ def test_a_redirect_still_gets_no_command_approved(command, repo):
     ],
 )
 def test_a_redirect_does_not_split_a_segment_in_the_lenient_reading(tokens, words):
-    assert [segment.words for segment in pm._segments(tokens, lenient=True)] == words
+    assert words in segment_words(tokens)
+
+
+def segment_words(tokens):
+    """The segments' words of each reading of a token list (see `_redirect_readings`)."""
+    return [
+        [segment.words for segment in pm._segments(reading, lenient=True)]
+        for reading in pm._redirect_readings(tokens)
+    ]
 
 
 @pytest.mark.parametrize("command", ["ls >", "2>", "git push -f >", "git push -f 2>&1 >"])
@@ -2910,13 +2915,126 @@ def test_a_digit_before_a_redirect_on_a_harmless_command_stays_unguarded(repo, c
     assert guard(request(command, repo)) == (0, "", "")
 
 
+def test_a_descriptor_candidate_is_read_as_a_descriptor_and_as_an_argument():
+    readings = pm._redirect_readings(["git", "2", ">", "f", "push"])
+    assert sorted(readings) == [["git", "2", "push"], ["git", "push"]]
+
+
+# --- the token after a redirect operator is its target, whatever it looks like --------------------
+
+# A quoted operator is a bare operator token once the tokenizer is done (`>"|"`), and an unquoted one
+# after a redirect is a syntax error in bash, which runs nothing.
+GUARD_QUOTED_OPERATOR_TARGET = [
+    'git >"|" push -f',
+    'git >";" push -f',
+    'git >"&" push -f',
+    'git >"(" push -f',
+    'git >")" push -f',
+    'git >"&&" push -f',
+    'git >">" push -f',
+    'git >">(" push -f',
+    'gh >"|" pr merge 1',
+    'git 2>"||" push -f',
+]
+
+# `<<- EOF` is `<<-` with the target EOF, and `<< - EOF` is `<<` with the target `-` (and an
+# argument EOF): the tokenizer gives the same words for both, so both are read.
+GUARD_HEREDOC_DASH = [
+    "git <<- EOF push -f",
+    "git << - push -f",
+    "git <<- EOF push -f\nEOF",
+    "gh <<- X pr merge 1",
+]
+
+# Each digit or `{fd}` word before a redirect is a descriptor or an argument, on its own.
+GUARD_MIXED_DESCRIPTORS = [
+    "git --namespace 2 >f 2>g push -f",
+    "git -C 2 >f 2>&1 push -f",
+    "git -C 2 >f 2 >g push -f",
+    "git -C 2 2>f -c 3 >g push -f",
+    "git -C 2 >a 2>b 2>c 2>d 2>e 2>f push -f",  # six candidates, the most that are enumerated
+]
+
+# Process substitution after a redirect is a command; a quoted `>(` is a file name.
+GUARD_PROCESS_SUBSTITUTION = [
+    "cat < <(git push -f)",
+    "echo > >(gh pr merge 1)",
+    "tee >(git push -f)",
+]
+
+# Seven candidates are too many to enumerate: any git or gh word guards the command.
+GUARD_PAST_THE_CAP = [
+    "git -C 2 >a 2>b 2>c 2>d 2>e 2>f 2>g push -f",
+    "git status 2>a 2>b 2>c 2>d 2>e 2>f 2>g",
+    "env gh 1>a 2>b 3>c 4>d 5>e 6>f 7>g",
+]
+
+
 @pytest.mark.parametrize(
-    ("keep", "words"),
+    "command",
     [
-        (False, ["git", "push"]),
-        (True, ["git", "2", "push"]),
+        *GUARD_QUOTED_OPERATOR_TARGET,
+        *GUARD_HEREDOC_DASH,
+        *GUARD_MIXED_DESCRIPTORS,
+        *GUARD_PROCESS_SUBSTITUTION,
+        *GUARD_PAST_THE_CAP,
     ],
 )
-def test_the_redirect_reading_drops_or_keeps_a_descriptor_candidate(keep, words):
-    tokens = ["git", "2", ">", "f", "push"]
-    assert pm._drop_redirects(tokens, keep_descriptors=keep) == words
+def test_the_guard_denies_a_push_behind_an_ambiguous_redirect(repo, command):
+    assert pm._is_guarded(command)
+    code, out, err = guard(request(command, repo))
+    assert (code, out) == (2, "")
+    assert err.strip() == pm.decide(pm.Call("Bash", command, str(repo)))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo hi 2>&1",
+        "grep gh f 2>/dev/null",
+        "ls >out",
+        "cat <in",
+        "echo 2 >f",
+        "cat <<- EOF",
+        "cat << - x",
+        'ls >"|" x',
+        'echo >">(" x',
+        "cat < <(ls)",
+        "echo 2 >a 2>b 2>c 2>d 2>e 2>f 2>g 2>h",  # past the cap, with no git or gh word
+    ],
+)
+def test_an_ambiguous_redirect_on_a_harmless_command_stays_unguarded(repo, command):
+    assert not pm._is_guarded(command)
+    assert guard(request(command, repo)) == (0, "", "")
+
+
+@pytest.mark.parametrize(
+    ("tokens", "readings"),
+    [
+        # The next token is the target even when it is an operator.
+        (["ls", ">", ";", "git", "push"], [["ls", "git", "push"]]),
+        (["ls", ">", "&&", "git", "push"], [["ls", "git", "push"]]),
+        (["ls", ">", ">", "out", "git"], [["ls", "out", "git"]]),
+        (["git", ">", "|", "push", "-f"], [["git", "push", "-f"]]),
+        (["git", ">", "(", "push", "-f"], [["git", "push", "-f"]]),
+        # A target that may open a process substitution is read as a name and as an operator.
+        (["cat", "<", "<(", "git"], [["cat", "git"], ["cat", "<(", "git"]]),
+        # `-` after `<<`: the operator's suffix (EOF is the target) or the target (EOF stays).
+        (["cat", "<<", "-", "EOF", "x"], [["cat", "x"], ["cat", "EOF", "x"]]),
+        (["cat", "<<", "-EOF", "x"], [["cat", "x"]]),
+        (["cat", "<<", "-"], [["cat"], ["cat"]]),
+    ],
+)
+def test_the_redirect_readings_of_a_token_list(tokens, readings):
+    assert sorted(pm._redirect_readings(tokens)) == sorted(readings)
+
+
+def test_a_token_list_with_six_ambiguous_words_has_sixty_four_readings():
+    tokens = ["git", *["2", ">", "f"] * 6, "push"]
+    assert len(pm._redirect_readings(tokens)) == 64
+
+
+def test_a_token_list_with_seven_ambiguous_words_is_not_enumerated():
+    tokens = ["git", *["2", ">", "f"] * 7, "push"]
+    with pytest.raises(pm.Unsupported):
+        pm._redirect_readings(tokens)
