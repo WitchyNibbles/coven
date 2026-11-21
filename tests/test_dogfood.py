@@ -1,7 +1,9 @@
+import re
 import tomllib
 
 from support import REPO
 
+from coven import claude_version
 from coven.project import drift
 
 STANDARD = REPO / "standard"
@@ -45,3 +47,40 @@ def test_workflow_template_runs_the_installed_check():
     text = (STANDARD / "workflows/coven-check.yml").read_text()
     assert "python3 .coven/check.py install" in text
     assert "python3 .coven/check.py full" in text
+
+
+MOD_MANIFEST = "hashFiles('**/.claude-plugin/plugin.json') != ''"
+
+
+def workflow_steps() -> list[str]:
+    """The `check` job's steps as text blocks, in order."""
+    text = (STANDARD / "workflows/coven-check.yml").read_text()
+    return re.split(r"^      - ", text, flags=re.MULTILINE)[1:]
+
+
+def step_named(name: str) -> str:
+    return next(step for step in workflow_steps() if f"name: {name}" in step)
+
+
+def test_workflow_installs_claude_code_at_the_tested_version_when_a_mod_exists():
+    text = (STANDARD / "workflows/coven-check.yml").read_text()
+    pinned = claude_version.dotted(claude_version.LAST_TESTED)
+    assert re.search(rf'^    env:\n      CLAUDE_CODE_VERSION: "{re.escape(pinned)}"$', text, re.M)
+    install = step_named("Install Claude Code")
+    assert f"if: {MOD_MANIFEST}" in install
+    assert 'npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"' in install
+
+
+def test_workflow_installs_claude_code_after_node_and_before_the_dependencies():
+    names = [step.split("\n")[0] for step in workflow_steps()]
+    node = next(i for i, step in enumerate(workflow_steps()) if "actions/setup-node@" in step)
+    install = names.index("name: Install Claude Code")
+    assert node < install < names.index("name: Install locked dependencies")
+
+
+def test_workflow_sets_node_up_for_a_package_or_a_plugin_manifest():
+    node = next(step for step in workflow_steps() if "actions/setup-node@" in step)
+    assert (
+        "if: hashFiles('**/package.json') != '' || hashFiles('**/.claude-plugin/plugin.json') != ''"
+        in node
+    )
