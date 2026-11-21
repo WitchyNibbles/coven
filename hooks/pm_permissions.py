@@ -290,6 +290,15 @@ TRIMMERS = frozenset({"tail", "head"})
 TRIM_OPTIONS = re.compile(r"(?:-n [0-9]+|-[0-9]+)?")
 SEPARATORS = frozenset({"&&", "||", ";", "|"})
 PARENS = frozenset({"(", ")"})
+# The redirect operators (`|&` is a pipe and a lone `&` runs in the background: both separate
+# commands), and the word before one that names a descriptor: `2` in `2>&1`, `{fd}` in `{fd}>f`.
+REDIRECTS = frozenset({">", ">>", "<", "<<", "<<<", ">&", "<&", "&>", "&>>", ">|", "<>"})
+DESCRIPTOR = re.compile(r"\d+|\{[A-Za-z_]\w*\}")
+# How many ambiguous redirect tokens the guard reads both ways (2**6 readings) before it falls
+# back to looking for a git or gh word.
+MAX_AMBIGUOUS = 6
+# Stands for a redirect operator in a word list (a shell word cannot hold a NUL).
+REDIRECT_MARK = "\0"
 OPERATOR_CHARS = frozenset("();<>|&")
 
 REMOTE_NAME = re.compile(r"[A-Za-z0-9._-]+")
@@ -559,10 +568,73 @@ def _is_operator(token: str) -> bool:
     return bool(token) and all(char in OPERATOR_CHARS for char in token)
 
 
+class _RedirectReader:
+    """Reads a token list without its redirects: each operator of REDIRECTS and its target, the
+    token right after it. The tokenizer loses the spacing and the quoting, so three kinds of token
+    have two readings. `choices` answers them in the order they come up (False once it runs out)
+    and `asked` counts them; True means that the word before a redirect is its descriptor (`2>f`,
+    not the argument of `2 >f`), that a `-` after `<<` is part of the operator (`<<-`, not the
+    target of `<< -`), and that an operator right after a redirect is its target (a quoted name
+    such as `>"|"`; unquoted it is a syntax error that runs nothing), not an operator of its own
+    (as in `< <(cmd)`, or `echo ">" ; gh` where the redirect was a quoted word)."""
+
+    def __init__(self, choices: Sequence[bool]) -> None:
+        self.choices = choices
+        self.asked = 0
+        self.kept: list[str] = []
+        self.after_word = False  # whether the last token read is the last one kept, and a word
+        # After a redirect operator: "target", or "heredoc" after `<<` (the target may be `-`).
+        self.expects = ""
+
+    def ask(self) -> bool:
+        self.asked += 1
+        return self.asked <= len(self.choices) and self.choices[self.asked - 1]
+
+    def read(self, word: str) -> None:
+        after_word, self.after_word = self.after_word, False
+        expects, self.expects = self.expects, ""
+        if expects and self._is_target(word, expects):
+            return
+        if word not in REDIRECTS:
+            self.kept.append(word)
+            self.after_word = not _is_operator(word)
+            return
+        if after_word and DESCRIPTOR.fullmatch(self.kept[-1]) and self.ask():
+            self.kept.pop()
+        self.expects = "heredoc" if word == "<<" else "target"
+
+    def _is_target(self, word: str, expects: str) -> bool:
+        """Whether the redirect before this word takes it."""
+        if expects == "heredoc" and word == "-":
+            self.expects = "target" if self.ask() else ""
+            return True
+        return not _is_operator(word) or self.ask()
+
+
+def _redirect_readings(tokens: Sequence[str]) -> list[list[str]]:
+    """The token list without its redirects, once for each way to read its ambiguous tokens (see
+    `_RedirectReader`). Past MAX_AMBIGUOUS of them it is Unsupported, and the caller guards."""
+    readings: list[list[str]] = []
+    pending: list[tuple[bool, ...]] = [()]
+    while pending:
+        choices = pending.pop()
+        reader = _RedirectReader(choices)
+        for token in tokens:
+            reader.read(token)
+        if reader.asked <= len(choices):
+            readings.append(reader.kept)
+        elif len(choices) < MAX_AMBIGUOUS:
+            pending.extend([(*choices, False), (*choices, True)])
+        else:
+            raise Unsupported(f"more than {MAX_AMBIGUOUS} redirect words with two readings")
+    return readings
+
+
 def _segments(tokens: Iterable[str], lenient: bool = False) -> list[Segment]:
     """The non-empty command segments. Parentheses only split: whatever bash would run is one of
     the segments, and an unbalanced pair is a syntax error that runs nothing. Lenient (for the
-    guard): any other operator (`&`, a redirect) splits too, and empty parts are fine."""
+    guard): any other operator (`&`, a redirect left in the tokens) splits too, and empty parts
+    are fine. The guard takes the redirects out first, see `_redirect_readings`."""
     parts: list[list[str]] = [[]]
     breaks: list[str] = []
     for token in tokens:
@@ -1137,15 +1209,50 @@ def _segment_is_guarded(words: Sequence[str]) -> bool:
     return False
 
 
+def _segment_pushes_past_a_redirect(words: Sequence[str]) -> bool:
+    """A segment of git (or of a wrapper) that holds a redirect operator (as REDIRECT_MARK) and a
+    push, merge or send-pack word. Whatever the redirect reads as, that word may be the subcommand
+    (`git -C ">" push`, where the quoted operator is a folder name)."""
+    if REDIRECT_MARK not in words:
+        return False
+    start = 0
+    while start < len(words):
+        word = words[start]
+        if word == REDIRECT_MARK:
+            start += 2  # the operator and its target
+        elif ASSIGNMENT.match(word) or word in SHELL_PREFIXES or DESCRIPTOR.fullmatch(word):
+            start += 1
+        else:
+            break
+    command = words[start:]
+    name = os.path.basename(command[0]) if command else ""
+    return (name == "git" or name in WRAPPERS) and any(w in GUARDED_SUBCOMMANDS for w in command)
+
+
+def _is_push_past_a_redirect(tokens: Sequence[str]) -> bool:
+    marked = [REDIRECT_MARK if token in REDIRECTS else token for token in tokens]
+    return any(
+        _segment_pushes_past_a_redirect(segment.words)
+        for segment in _segments(marked, lenient=True)
+    )
+
+
 def _is_guarded(command: str) -> bool:
     """Whether the guard must run decide() on a command: a segment that is a push, merge,
     send-pack or gh command, or a wrapper holding such a word, or text the tokenizer cannot read
-    that holds a git or gh word. A word in a message, a pattern or a file name is not one."""
+    that holds a git or gh word. A word in a message, a pattern or a file name is not one. A redirect
+    word with two readings is read both ways, and either may be guarded; a git segment with a
+    redirect and a push word is guarded whatever it reads as."""
     try:
-        segments = _segments(_tokens(command, lenient=True), lenient=True)
+        tokens = _tokens(command, lenient=True)
+        readings = _redirect_readings(tokens)
     except Unsupported:
         return bool(HOLDS_GIT_OR_GH.search(command))
-    return any(_segment_is_guarded(segment.words) for segment in segments)
+    return _is_push_past_a_redirect(tokens) or any(
+        _segment_is_guarded(segment.words)
+        for reading in readings
+        for segment in _segments(reading, lenient=True)
+    )
 
 
 @dataclass(frozen=True)
