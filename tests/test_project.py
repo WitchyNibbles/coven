@@ -14,7 +14,14 @@ TOOLS = ("ruff", "mypy", "pytest", "pytest-cov", "diff-cover", "pytest-xdist")
 WORKFLOW = ".github/workflows/coven-check.yml"
 SCRIPTS = tuple(
     f".coven/{name}"
-    for name in ("check.py", "check_python.py", "check_repo.py", "check_stages.py", "check_ts.py")
+    for name in (
+        "check.py",
+        "check_mod.py",
+        "check_python.py",
+        "check_repo.py",
+        "check_stages.py",
+        "check_ts.py",
+    )
 )
 PYTHON_FILES = {*SCRIPTS, ".coven/ruff.toml", WORKFLOW}
 TS_FILES = {*SCRIPTS, ".coven/tsconfig.base.json", ".coven/eslint.config.mjs", WORKFLOW}
@@ -173,7 +180,9 @@ def test_drift_refuses_a_subdirectory_of_the_repo(bare_repo: Path):
 
 
 def test_no_project(git_repo: Path):
-    with pytest.raises(ProjectError, match="no Python or TypeScript project found in") as error:
+    with pytest.raises(
+        ProjectError, match="no Python, TypeScript or Claude Code mod project found in"
+    ) as error:
         setup(git_repo)
     assert str(git_repo) in str(error.value)
 

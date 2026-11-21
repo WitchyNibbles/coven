@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # The standard's version: the same in every module of it (check.py refuses a mismatch).
-STANDARD_VERSION = 5
+STANDARD_VERSION = 6
 
 COVERAGE_FLOOR: int = 80
 TAIL_LINES: int = 20

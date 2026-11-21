@@ -17,7 +17,14 @@ STANDARD = REPO / "standard"
 # The siblings check.py loads when it starts.
 EAGER_UNDER_TEST = ("check_repo", "check_stages", "check_python")
 # A module may import only the modules ranked below it.
-RANK = {"check_repo": 0, "check_stages": 1, "check_python": 2, "check_ts": 2, "check": 3}
+RANK = {
+    "check_repo": 0,
+    "check_stages": 1,
+    "check_python": 2,
+    "check_ts": 2,
+    "check_mod": 3,
+    "check": 4,
+}
 SIBLING_PREFIX = "coven_"
 
 

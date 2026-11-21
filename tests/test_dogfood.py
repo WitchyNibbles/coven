@@ -8,6 +8,7 @@ STANDARD = REPO / "standard"
 # What a Python repo gets in `.coven/`, with the folder of `standard/` each file comes from.
 INSTALLED = {
     "check.py": "",
+    "check_mod.py": "",
     "check_python.py": "",
     "check_repo.py": "",
     "check_stages.py": "",

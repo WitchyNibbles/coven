@@ -562,7 +562,7 @@ def test_no_project(run_check, git_repo):
     out = run_check(git_repo, "fast")
     assert out.returncode == 2
     assert receipt(out) == (
-        f'CHECK fast exit=2 sha={sha} dirty=no error="no Python or TypeScript project found"'
+        f'CHECK fast exit=2 sha={sha} dirty=no error="no Python, TypeScript or Claude Code mod project found"'
     )
 
 
@@ -1264,7 +1264,7 @@ def test_no_lockfile_is_setup_error(run_check, git_repo):
 def test_no_project_at_all_is_a_setup_error(run_check, git_repo):
     out = run_check(git_repo, "fast")
     assert out.returncode == 2
-    assert receipt(out).endswith(' error="no Python or TypeScript project found"')
+    assert receipt(out).endswith(' error="no Python, TypeScript or Claude Code mod project found"')
 
 
 # A package.json naming a supported test runner, for projects whose tools are never installed.

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import CodeType, ModuleType
@@ -21,9 +22,9 @@ MINIMUM_PYTHON = (3, 11)
 
 # The standard's version, the same literal in every module of it. It goes up whenever a name one
 # module uses from another is added, removed, or changes meaning or signature.
-STANDARD_VERSION = 5
+STANDARD_VERSION = 6
 # The siblings loaded when the check starts, in dependency order. check_ts.py loads only when a
-# TypeScript project needs it.
+# TypeScript project needs it, and check_mod.py (which builds on it) only when a mod does.
 EAGER = ("check_repo", "check_stages", "check_python")
 SIBLING_PREFIX = "coven_"
 # What loading a broken or stale sibling raises, its module code included. Anything else is a bug
@@ -224,6 +225,7 @@ def _python_version_error() -> str | None:
     )
 
 
+NO_PROJECT = "no Python, TypeScript or Claude Code mod project found"
 # pytest reads `@file` arguments as more options, so they are refused like `-` ones.
 OPTION_PREFIXES = ("-", "@")
 
@@ -271,8 +273,8 @@ def _owner(
         return None
     depth = max(len(project.root.parts) for project in holding)
     here = [project for project in holding if len(project.root.parts) == depth]
-    prefer = "typescript" if target.suffix in check_repo.TS_SUFFIXES else "python"
-    project = next((p for p in here if p.kind == prefer), here[0])
+    prefer = ("typescript", "mod") if target.suffix in check_repo.TS_SUFFIXES else ("python",)
+    project = next((p for p in here if p.kind in prefer), here[0])
     return project, target.relative_to(project.root).as_posix() + separator + node
 
 
@@ -298,12 +300,13 @@ def _setup_problem(
     if any(path.startswith(OPTION_PREFIXES) for path in paths):
         return "test paths only, no pytest options"
     if not projects:
-        return "no Python or TypeScript project found"
+        return NO_PROJECT
     for project in projects:
         problem = _lock_problem(repo, project)
         if problem is not None:
             return check_repo.prefixed(check_repo.where(repo, project), problem)
     problem = _check_ts_problem(projects) or _typescript_problem(repo, projects, args.mode)
+    problem = problem or _check_mod_problem(projects)
     if problem is not None:
         return problem
     if (
@@ -361,8 +364,10 @@ def _base_field(root: Path, mode: str, base: str | None) -> str:
 
 
 def fold_ok(values: list[str]) -> str:
-    """`fail` when any project failed the stage, else `ok`."""
-    return "fail" if "fail" in values else "ok"
+    """`fail` when any project failed the stage; `n/a` when none has the stage (mods only); else `ok`."""
+    if "fail" in values:
+        return "fail"
+    return "n/a" if values and all(value == "n/a" for value in values) else "ok"
 
 
 def fold_tests(values: list[str]) -> str:
@@ -417,6 +422,44 @@ def _check_ts_problem(projects: list[check_repo.Project]) -> str | None:
     return None
 
 
+CHECK_MOD = "check_mod.py"
+
+
+@functools.cache
+def load_mod() -> ModuleType:
+    """The mod module that sits next to this script (loaded once, see `_load`), and `check_ts`.
+
+    check_mod.py uses check_ts.py, so that one is loaded first and registered again as this
+    script's own. Raises FileNotFoundError when either file is missing; its `filename` says which.
+    """
+    sys.modules[SIBLING_PREFIX + "check_ts"] = load_ts()
+    return _load("check_mod", needs=("mod_stages",))
+
+
+def _mod_problem_for(name: str, load: Callable[[], ModuleType]) -> str | None:
+    try:
+        load()
+    except FileNotFoundError:
+        return f"{check_repo.STANDARD_DIR}/{name}.py is missing (re-run coven project)"
+    except LOAD_ERRORS as error:
+        return _load_problem(name, error)
+    return None
+
+
+def _check_mod_problem(projects: list[check_repo.Project]) -> str | None:
+    """Why the mod modules or Claude Code cannot be used, when the repo has a mod.
+
+    The standard fails, never skips, on a missing tool: `claude` is looked for even when no
+    test of the mod is named.
+    """
+    if not any(project.kind == "mod" for project in projects):
+        return None
+    problem = _mod_problem_for("check_ts", load_ts) or _mod_problem_for("check_mod", load_mod)
+    if problem is None and shutil.which("claude") is None:
+        return "claude not found on PATH"
+    return problem
+
+
 def _missing_ts_stages(
     project: check_repo.Project, projects: list[check_repo.Project]
 ) -> check_stages.Stages:
@@ -445,6 +488,16 @@ def _typescript_stages(
     except FileNotFoundError:
         return _missing_ts_stages(project, projects)
     stages: check_stages.Stages = module.typescript_stages(project, run, projects, paths, out)
+    return stages
+
+
+def _mod_stages(
+    project: check_repo.Project, run: check_stages.Run, paths: list[str]
+) -> check_stages.Stages:
+    """A mod's stages. Its tests run whole, in full mode or when fast names a path inside it."""
+    stages: check_stages.Stages = load_mod().mod_stages(
+        project, run, run_tests=run.mode == "full" or bool(paths)
+    )
     return stages
 
 
@@ -490,6 +543,8 @@ def _run_stages(
                 results.append(
                     check_python.python_stages(project, run, paths, out / "coverage.xml")
                 )
+            elif project.kind == "mod":
+                results.append(_mod_stages(project, run, paths))
             else:
                 results.append(_typescript_stages(project, run, projects, paths, out))
             if len(projects) > 1:  # each project's own results, before they are folded together
@@ -517,10 +572,13 @@ def _run_stages(
 def _install_commands(
     repo: Path, projects: list[check_repo.Project]
 ) -> tuple[list[tuple[check_repo.Project, list[str]]], str | None]:
-    """Per project, the command that installs its lockfile; or why nothing can be installed."""
+    """Per project, the command that installs its lockfile; or why nothing can be installed.
+
+    A mod has no lockfile: its command is empty.
+    """
     problem = _python_version_error()
     if problem is None and not projects:
-        problem = "no Python or TypeScript project found"
+        problem = NO_PROJECT
     for project in projects:
         lock = _lock_problem(repo, project)
         if problem is None and lock is not None:
@@ -528,8 +586,11 @@ def _install_commands(
     problem = problem or _check_ts_problem(projects)
     if problem is not None:
         return [], problem
-    commands = []
+    commands: list[tuple[check_repo.Project, list[str]]] = []
     for project in projects:
+        if project.kind == "mod":
+            commands.append((project, []))
+            continue
         if project.kind == "python":
             command = ["uv", "sync", "--locked"]
         else:
@@ -561,6 +622,11 @@ def install(cwd: Path) -> int:
         return 2
     failed = False
     for project, command in commands:
+        if not command:
+            print(
+                f"install {check_repo.where(found, project)} ({project.kind}): nothing to install"
+            )
+            continue
         line = f"install {check_repo.where(found, project)} ({project.kind}): {' '.join(command)}"
         try:
             done = subprocess.run(

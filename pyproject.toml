@@ -49,6 +49,7 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 markers = [
     "node: needs node and npm (npm ci of tests/fixtures/ts-project, cached in .pytest_cache); fails, never skips, when they are missing",
+    "claude: needs Claude Code (claude) on PATH; fails, never skips, when it is missing",
     "shellcheck: needs the shellcheck binary (the dev group's shellcheck-py puts it in the venv); fails, never skips, when it is missing",
 ]
 

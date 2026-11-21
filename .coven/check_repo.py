@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 # The standard's version: the same in every module of it (check.py refuses a mismatch).
-STANDARD_VERSION = 5
+STANDARD_VERSION = 6
 
 
 def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -118,6 +118,7 @@ STANDARD_DIR = ".coven"
 # `__pycache__` is not one of them: Python may load bytecode found there in place of the source.
 STANDARD_FILES = (
     "check.py",
+    "check_mod.py",
     "check_python.py",
     "check_repo.py",
     "check_stages.py",
@@ -259,12 +260,13 @@ def outside_problems(repo: Path, projects: list[Project], listing: list[Path]) -
     """Source files no project covers: nothing would check them.
 
     Python files must sit below a Python project; TypeScript and JavaScript files, and the
-    framework components the standard does not check yet, below a TypeScript project. Exempt: vendored and generated files (.gitattributes), the repo's
+    framework components the standard does not check yet, below a TypeScript project or a Claude
+    Code mod. Exempt: vendored and generated files (.gitattributes), the repo's
     `.coven/`, and TypeScript below `node_modules` (a Python file there is not exempt; tracked
     files there are a problem of their own, see `node_modules_problems`).
     """
     python = [p.root.relative_to(repo) for p in projects if p.kind == "python"]
-    typescript = [p.root.relative_to(repo) for p in projects if p.kind == "typescript"]
+    scanned = [p.root.relative_to(repo) for p in projects if p.kind in ("typescript", "mod")]
     outside = [
         path
         for path in listing
@@ -276,7 +278,7 @@ def outside_problems(repo: Path, projects: list[Project], listing: list[Path]) -
         or (
             path.suffix in SCANNED_TS_SUFFIXES
             and not skipped_dir(path)
-            and not under(path, typescript)
+            and not under(path, scanned)
         )
     ]
     exempt = excluded_files(repo, [repo / path for path in outside])
@@ -308,8 +310,9 @@ def skipped_dir(path: Path) -> bool:
 @dataclass(frozen=True)
 class Project:
     root: Path
-    kind: Literal["python", "typescript"]
-    manager: str | None  # the package manager of a TypeScript project; None without a lockfile
+    kind: Literal["python", "typescript", "mod"]
+    # The package manager of a TypeScript project; None without a lockfile, and for a mod.
+    manager: str | None
 
 
 def _is_workspace(repo: Path, directory: Path, files: set[Path]) -> bool:
@@ -345,22 +348,61 @@ def _manager(repo: Path, directory: Path) -> str | None:
     return next((name for lock, name in LOCKFILES if (repo / directory / lock).is_file()), None)
 
 
+MOD_MANIFEST = Path(".claude-plugin") / "plugin.json"
+MOD_HOOKS = Path("hooks") / "hooks.json"
+
+
+def is_mod(repo: Path, directory: Path, files: set[Path]) -> bool:
+    """Whether `directory` (below `repo`) is a Claude Code mod: a plugin whose hooks file lists
+    code `modules`.
+
+    It has a manifest and a `hooks/hooks.json` whose JSON object holds a non-empty list under
+    `modules`; a hooks file of commands alone is a plugin, not a mod. A hooks file that cannot be
+    read as JSON makes it no mod: its sources then stay outside every project, which says so.
+    """
+    if directory / MOD_MANIFEST not in files or directory / MOD_HOOKS not in files:
+        return False
+    try:
+        data = json.loads((repo / directory / MOD_HOOKS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    modules = data.get("modules") if isinstance(data, dict) else None
+    return isinstance(modules, list) and bool(modules)
+
+
+def _mod_dirs(repo: Path, files: set[Path], typescript: list[Path]) -> list[Path]:
+    """The mods' directories, leaving out those a TypeScript project holds (it has its own tools)."""
+    candidates = {
+        path.parent.parent
+        for path in files
+        if path.parts[-2:] == MOD_MANIFEST.parts and is_mod(repo, path.parent.parent, files)
+    }
+    return sorted(
+        directory
+        for directory in candidates
+        if not any(directory.is_relative_to(outer) for outer in typescript)
+    )
+
+
 def discover(repo: Path) -> list[Project]:
     """The repo's projects, sorted by path (a Python one before a TypeScript one in a directory).
 
     A Python project is a directory with `pyproject.toml`. A TypeScript project is a directory with
     `package.json` and `tsconfig.json`, except that an npm/yarn/pnpm workspace root is one project
-    that takes in every package below it. `node_modules` and `.coven` are not searched.
+    that takes in every package below it. A Claude Code mod (see `is_mod`) is a project too, unless
+    a TypeScript project holds it. `node_modules` and `.coven` are not searched.
     """
     files = {path for path in listing(repo) if not skipped_dir(path)}
     python = [
         Project(repo / path.parent, "python", None) for path in files if path.name == PYPROJECT
     ]
+    typescript_dirs = _typescript_dirs(repo, files)
     typescript = [
         Project(repo / directory, "typescript", _manager(repo, directory))
-        for directory in _typescript_dirs(repo, files)
+        for directory in typescript_dirs
     ]
-    return sorted([*python, *typescript], key=lambda project: (project.root, project.kind))
+    mods = [Project(repo / path, "mod", None) for path in _mod_dirs(repo, files, typescript_dirs)]
+    return sorted([*python, *typescript, *mods], key=lambda project: (project.root, project.kind))
 
 
 def _resolves(root: Path, ref: str) -> bool:
