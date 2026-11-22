@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -25,6 +26,8 @@ PASSED_THROUGH: Final = (
     "OPENCODE_DISABLE_MODELS_FETCH",
 )
 VERSION_TIMEOUT: Final = 10.0
+# 2.x prints `opencode v2.3.2`; 1.x printed the bare `1.19.0`.
+VERSION_LINE: Final = re.compile(r"(?:opencode )?v?(\d+\.\d+\.\d+\S*)")
 BINARY_OVERRIDE: Final = "COVEN_OPENCODE_BIN"
 
 MISSING = "the OpenCode runtime is missing; run coven opencode install"
@@ -38,7 +41,7 @@ def binary_path(layout: Layout) -> Path:
 
 
 def binary_version(binary: Path, env: Mapping[str, str]) -> str | None:
-    """The first line of `binary --version`, or None when the binary cannot run."""
+    """The version token of `binary --version`, or None when it cannot run or prints no version."""
     try:
         done = subprocess.run(
             [str(binary), "--version"],
@@ -51,7 +54,10 @@ def binary_version(binary: Path, env: Mapping[str, str]) -> str | None:
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
     lines = done.stdout.strip().splitlines()
-    return lines[0].strip() if done.returncode == 0 and lines else None
+    if done.returncode != 0 or not lines:
+        return None
+    found = VERSION_LINE.fullmatch(lines[0].strip())
+    return found.group(1) if found else None
 
 
 def isolated_env(

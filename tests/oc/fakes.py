@@ -48,7 +48,7 @@ def serve():
 
 def main(argv):
     if argv[:1] == ["--version"]:
-        print(VERSION)
+        print(f"opencode v{{VERSION}}")
     elif argv[:2] == ["debug", "paths"]:
         shown = {{**default_paths(), **PATHS}}
         for name, value in shown.items():
