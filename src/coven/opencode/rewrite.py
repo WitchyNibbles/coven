@@ -66,7 +66,10 @@ SKILL_NAMES: Final = [
 
 TABLE: Final = [
     _entry(rf'subagent_type: "coven:({_any(AGENTS)})"', r'agent: "\1"'),
-    _entry(rf"\bSubagent \(coven:({_any(AGENTS)}) or coven:({_any(AGENTS)})\):", r"subagent (agent: \1 or \2):"),
+    _entry(
+        rf"\bSubagent \(coven:({_any(AGENTS)}) or coven:({_any(AGENTS)})\):",
+        r"subagent (agent: \1 or \2):",
+    ),
     _entry(rf"\bSubagent \(coven:({_any(AGENTS)})\):", r"subagent (agent: \1):"),
     _entry(rf"\bcoven:({_any(AGENTS)}){WORD_END}", r"\1"),
     _entry(rf"\bcoven:({_any(COMMANDS)}){WORD_END}", r"/coven-\1"),
@@ -116,7 +119,9 @@ def _check(text: str, source: str) -> None:
         for pattern in FORBIDDEN:
             found = pattern.search(line)
             if found:
-                raise RewriteError(f"{source}:{number}: {found.group()} has no OpenCode equivalent (add an override)")
+                raise RewriteError(
+                    f"{source}:{number}: {found.group()} has no OpenCode equivalent (add an override)"
+                )
 
 
 def rewrite_text(text: str, source: str) -> str:

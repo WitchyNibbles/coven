@@ -35,7 +35,9 @@ def test_content_is_fresh(tmp_path: Path) -> None:
     content.render_content(REPO, tmp_path)
     assert files_under(tmp_path) == files_under(RENDERED)
     stale = [
-        str(rel) for rel in files_under(tmp_path) if (tmp_path / rel).read_bytes() != (RENDERED / rel).read_bytes()
+        str(rel)
+        for rel in files_under(tmp_path)
+        if (tmp_path / rel).read_bytes() != (RENDERED / rel).read_bytes()
     ]
     assert not stale, f"regenerate with `uv run python -m coven.opencode.content`: {stale}"
 
@@ -49,7 +51,9 @@ def test_skill_layout() -> None:
         assert files_under(rendered) == files_under(source), name
         for rel in files_under(source):
             if (source / rel).stat().st_mode & stat.S_IXUSR:
-                assert (rendered / rel).stat().st_mode & stat.S_IXUSR, f"{name}/{rel} lost its executable bit"
+                assert (rendered / rel).stat().st_mode & stat.S_IXUSR, (
+                    f"{name}/{rel} lost its executable bit"
+                )
 
 
 def test_the_constants_name_the_shipped_sources() -> None:
@@ -62,7 +66,9 @@ def test_the_constants_name_the_shipped_sources() -> None:
 def test_commands(name: str) -> None:
     path = RENDERED / "commands" / f"coven-{name}.md"
     source_description = next(
-        line for line in frontmatter(REPO / "skills" / name / "SKILL.md") if line.startswith("description:")
+        line
+        for line in frontmatter(REPO / "skills" / name / "SKILL.md")
+        if line.startswith("description:")
     )
     assert frontmatter(path) == [source_description]
     assert path.read_text().endswith("\n$ARGUMENTS\n")
@@ -80,7 +86,11 @@ def test_frontmatter_name(name: str) -> None:
 
 
 def test_override_header_stripped() -> None:
-    started = [str(rel) for rel in files_under(RENDERED) if (RENDERED / rel).read_bytes().startswith(b"<!-- opencode override")]
+    started = [
+        str(rel)
+        for rel in files_under(RENDERED)
+        if (RENDERED / rel).read_bytes().startswith(b"<!-- opencode override")
+    ]
     assert not started
 
 
@@ -92,10 +102,14 @@ def test_override_hash_current() -> None:
     for override in overrides():
         header = content.parse_header(override.read_text())
         rel = override.relative_to(REPO)
-        assert header is not None, f"{rel} has no `<!-- opencode override of PATH sha256:HEX -->` first line"
+        assert header is not None, (
+            f"{rel} has no `<!-- opencode override of PATH sha256:HEX -->` first line"
+        )
         source, digest = header
         actual = hashlib.sha256((REPO / source).read_bytes()).hexdigest()
-        assert digest == actual, f"{rel} replaces {source}, which changed: update the override, then its hash"
+        assert digest == actual, (
+            f"{rel} replaces {source}, which changed: update the override, then its hash"
+        )
 
 
 def test_overrides_mirror_a_source_path() -> None:

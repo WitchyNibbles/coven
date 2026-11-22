@@ -16,19 +16,9 @@ from pathlib import Path
 from typing import Final
 
 from coven import paths
-from coven.opencode.rewrite import rewrite_text
+from coven.opencode.rewrite import AGENTS, COMMANDS, COVEN_SKILLS, rewrite_text
 
-SKILLS: Final = (
-    "ceo-review",
-    "clean-code",
-    "office-hours",
-    "project-standard",
-    "shared-memory",
-    "requesting-code-review",
-    "subagent-driven-development",
-)
-COMMANDS: Final = ("grill-me", "handoff")
-AGENTS: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
+SKILLS: Final = COVEN_SKILLS
 # Skills whose override is not written yet: rendered from the source without the rewrite table.
 PENDING_OVERRIDE: Final = ("subagent-driven-development",)
 PREFIX: Final = "coven-"
@@ -73,7 +63,13 @@ def _read(repo: Path, skill: str, rel: Path, *, rewrite: bool = True) -> str:
 
 def _skill_files(repo: Path, skill: str) -> list[Path]:
     roots = (repo / "skills" / skill, repo / OVERRIDES_REL / "skills" / skill)
-    found = {path.relative_to(root) for root in roots if root.is_dir() for path in root.rglob("*") if path.is_file()}
+    found = {
+        path.relative_to(root)
+        for root in roots
+        if root.is_dir()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
     return sorted(found)
 
 
@@ -128,7 +124,9 @@ def render_content(repo: Path, out: Path) -> None:
 
 def main() -> int:
     render_content(paths.root(), CONTENT)
-    print(f"rendered {sum(1 for path in CONTENT.rglob('*') if path.is_file())} files into {CONTENT}")
+    print(
+        f"rendered {sum(1 for path in CONTENT.rglob('*') if path.is_file())} files into {CONTENT}"
+    )
     return 0
 
 
