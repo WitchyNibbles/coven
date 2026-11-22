@@ -30,6 +30,14 @@ async function opencode(world: RuntimeWorld, args: string[]): Promise<string> {
   return done.out;
 }
 
+/** `opencode session export` of `sessionID`: the JSON text. */
+export function exportSession(
+  world: RuntimeWorld,
+  sessionID: string,
+): Promise<string> {
+  return opencode(world, ["session", "export", "--standalone", sessionID]);
+}
+
 /** Runs `prompt`, exports the session and reads the requests it caused. */
 export async function runPrompt(
   world: RuntimeWorld,
@@ -43,12 +51,7 @@ export async function runPrompt(
     "json",
     prompt,
   ]);
-  const exported = await opencode(world, [
-    "session",
-    "export",
-    "--standalone",
-    sessionOf(out),
-  ]);
+  const exported = await exportSession(world, sessionOf(out));
   return {
     history: readHistory(exported),
     exported,
