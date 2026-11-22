@@ -48,7 +48,10 @@ export interface PluginContext {
   };
   session: {
     get(input: { sessionID: string }): Promise<SessionInfo>;
-    /** Resolves once the session's agent loop is idle; at once when it already is. */
+    /**
+     * Resolves once the session's agent loop is idle; at once when it already is. The 2.3.2 plugin
+     * adapter drops `options`, so the signal does not cancel it there; callers stop listening.
+     */
     wait(
       input: { sessionID: string },
       options?: { signal?: AbortSignal },
