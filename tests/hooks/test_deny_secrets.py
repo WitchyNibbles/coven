@@ -184,6 +184,9 @@ def test_allows_a_name_that_is_only_data(bash: Run, command: str) -> None:
         "echo f()[0].env",
         "python3 - <<'EOF'\nassert spawned[0].env == {}\nEOF",
         "echo conn[0].ssh",
+        "echo x\\\nrows[0].env",
+        # zsh applies no subscript after a modifier (`:h`), so nothing leaks
+        "echo $x:h[1,0].env",
     ],
 )
 def test_allows_a_name_that_is_an_attribute_of_a_call_or_an_index(bash: Run, command: str) -> None:
@@ -227,6 +230,13 @@ def test_allows_a_name_that_is_an_attribute_of_a_call_or_an_index(bash: Run, com
         "cat $==a[1].env",
         "cat $~a[1].ssh",
         "cat $~h[k].env",
+        # zsh drops a backslash-newline, so the variable is still one
+        "cat $\\\nx[1,0].env",
+        "cat $~\\\nx[1].env",
+        "cat $a\\\nb[1].env",
+        "cat $\\\nx[1].ssh",
+        "cat $\\\n~x[1,0].env",
+        "cat $~\\\n\\\nx[1,0].env",
         # zsh glob qualifiers
         "cat x(#c0).env",
         "cat x(#a0).env",

@@ -71,7 +71,8 @@ Limits. This is defence in depth, not a boundary; these get through:
   basename counts;
 - a write through a hard link, to a symlink made after the check (a race), or through a symlink
   whose text points into `/proc/self` (the hook resolves its own process there, not Claude's);
-- an interpreter payload, such as a `python3 -c "..."` string, that builds a path.
+- an interpreter payload, such as a `python3 -c "..."` string, that builds a path;
+- a variable glued to the name (`$d.env`, where `d` ends in `/`), which reads `dir/.env`.
 
 The hook's matcher in hooks.json is `Read|Grep|Glob|Bash|Edit|Write|NotebookEdit`; `MultiEdit` is
 handled in case a call still arrives under that name.
@@ -358,7 +359,9 @@ def closes_call_or_index(text: str, close: int) -> bool:
             return False
         before = text[opener - 1]
         if before not in GROUP_OPENING:
-            return bool(NAME_CHAR.match(before)) and not SHELL_VARIABLE.search(text[:opener])
+            # zsh drops a backslash-newline before it reads the line (`$\<NL>x[1,0]` is `$x[1,0]`).
+            joined_before = text[:opener].replace("\\\n", "")
+            return bool(NAME_CHAR.match(before)) and not SHELL_VARIABLE.search(joined_before)
         close = opener - 1
 
 
