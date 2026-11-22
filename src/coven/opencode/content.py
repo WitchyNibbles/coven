@@ -19,6 +19,7 @@ from coven import paths
 from coven.opencode.rewrite import COMMANDS, COVEN_SKILLS, rewrite_text
 
 SKILLS: Final = COVEN_SKILLS
+# The rendered order of the agent files; `rewrite.AGENTS` is the same set, whose order only the table reads.
 AGENTS: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
 # Skills whose override is not written yet: rendered from the source without the rewrite table.
 PENDING_OVERRIDE: Final = ("subagent-driven-development",)
@@ -26,6 +27,27 @@ PREFIX: Final = "coven-"
 OVERRIDES_REL: Final = Path("opencode/overrides")
 OVERRIDES: Final = paths.root() / OVERRIDES_REL
 CONTENT: Final = paths.root() / "opencode" / "content"
+YAML_INDICATORS: Final = (
+    "-",
+    "?",
+    ":",
+    ",",
+    "[",
+    "]",
+    "{",
+    "}",
+    "#",
+    "&",
+    "*",
+    "!",
+    "|",
+    ">",
+    "'",
+    '"',
+    "%",
+    "@",
+    "`",
+)
 HEADER: Final = re.compile(r"<!-- opencode override of (\S+) sha256:([0-9a-f]{64}) -->")
 
 
@@ -74,9 +96,35 @@ def _skill_files(repo: Path, skill: str) -> list[Path]:
     return sorted(found)
 
 
-def _with_name(text: str, name: str) -> str:
+class ContentError(Exception):
+    """A source file the generator cannot render."""
+
+
+def _yaml_safe(line: str) -> str:
+    """A `description:` line whose plain value YAML would misread, as a double-quoted string.
+
+    OpenCode reads frontmatter with a strict YAML parser: `only: the` in a plain value is an error.
+    """
+    key, value = line.split(":", 1)
+    value = value.strip()
+    plain = bool(value) and not value.startswith(('"', "'"))
+    if plain and (": " in value or " #" in value or value.startswith(YAML_INDICATORS)):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'{key}: "{escaped}"'
+    return line
+
+
+def _frontmatter_line(line: str) -> str:
+    return _yaml_safe(line) if line.startswith("description:") else line
+
+
+def _with_name(text: str, name: str, source: str) -> str:
     front, body = _split_frontmatter(text)
-    named = [f"name: {name}" if line.startswith("name:") else line for line in front]
+    if not any(line.startswith("name:") for line in front):
+        raise ContentError(f"{source}: the frontmatter has no `name:` line")
+    named = [
+        f"name: {name}" if line.startswith("name:") else _frontmatter_line(line) for line in front
+    ]
     return "\n".join(["---", *named, "---"]) + "\n" + body
 
 
@@ -87,7 +135,9 @@ def _copy(repo: Path, skill: str, rel: Path, target: Path) -> None:
         return
     text = _read(repo, skill, rel, rewrite=skill not in PENDING_OVERRIDE)
     if rel.name == "SKILL.md":
-        text = _with_name(text, PREFIX + skill)
+        text = _with_name(
+            text, PREFIX + skill, _file(repo, skill, rel).relative_to(repo).as_posix()
+        )
     target.write_text(text)
 
 
@@ -98,7 +148,7 @@ def _skill(repo: Path, skill: str, out: Path) -> None:
 
 def _command(repo: Path, name: str, out: Path) -> None:
     front, body = _split_frontmatter(_read(repo, name, Path("SKILL.md")))
-    description = next(line for line in front if line.startswith("description:"))
+    description = _yaml_safe(next(line for line in front if line.startswith("description:")))
     target = out / "commands" / f"{PREFIX}{name}.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(f"---\n{description}\n---\n{body.rstrip(chr(10))}\n\n$ARGUMENTS\n")

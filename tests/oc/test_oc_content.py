@@ -1,5 +1,6 @@
 import hashlib
 import re
+import shutil
 import stat
 from pathlib import Path
 
@@ -130,3 +131,45 @@ def test_no_machine_paths() -> None:
         if rel.parts[:2] not in skipped and pattern.search((RENDERED / rel).read_text())
     ]
     assert not hits
+
+
+def descriptions() -> list[tuple[Path, str]]:
+    paths = [*RENDERED.glob("commands/*.md"), *RENDERED.glob("skills/*/SKILL.md")]
+    return [
+        (path, line.removeprefix("description:").strip())
+        for path in paths
+        for line in frontmatter(path)
+        if line.startswith("description:")
+    ]
+
+
+def test_every_rendered_description_is_valid_yaml_plain_or_quoted() -> None:
+    found = descriptions()
+    assert len(found) == len(SKILL_NAMES) + len(COMMAND_NAMES)
+    for path, value in found:
+        assert value.startswith(('"', "'")) or (": " not in value and " #" not in value), path
+
+
+def copy_of_skills(tmp_path: Path) -> Path:
+    shutil.copytree(REPO / "skills", tmp_path / "skills")
+    return tmp_path
+
+
+def test_a_description_with_yaml_syntax_is_quoted_and_escaped(tmp_path: Path) -> None:
+    repo = copy_of_skills(tmp_path / "repo")
+    source = repo / "skills" / "grill-me" / "SKILL.md"
+    lines = source.read_text().split("\n")
+    lines[2] = 'description: Say "hi": a \\ b'
+    source.write_text("\n".join(lines))
+    out = tmp_path / "out"
+    content.render_content(repo, out)
+    written = (out / "commands" / "coven-grill-me.md").read_text().split("\n")[1]
+    assert written == 'description: "Say \\"hi\\": a \\\\ b"'
+
+
+def test_a_skill_without_a_name_line_is_an_error(tmp_path: Path) -> None:
+    repo = copy_of_skills(tmp_path / "repo")
+    source = repo / "skills" / "clean-code" / "SKILL.md"
+    source.write_text(source.read_text().replace("name: clean-code\n", "", 1))
+    with pytest.raises(content.ContentError, match=r"skills/clean-code/SKILL\.md: .*name"):
+        content.render_content(repo, tmp_path / "out")

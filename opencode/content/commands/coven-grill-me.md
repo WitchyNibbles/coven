@@ -1,5 +1,5 @@
 ---
-description: A relentless interview to sharpen a plan or design. User-invoked only: the user starts it by name, an agent never starts it on its own.
+description: "A relentless interview to sharpen a plan or design. User-invoked only: the user starts it by name, an agent never starts it on its own."
 ---
 
 <!-- Adapted from mattpocock/skills (MIT), see LICENSE and the repo's NOTICE. -->
