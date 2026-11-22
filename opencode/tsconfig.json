@@ -8,5 +8,10 @@
     "types": ["node"],
     "allowJs": true
   },
-  "include": ["src", "test", "eslint.config.mjs"]
+  "include": [
+    "src",
+    "test",
+    "test/e2e/project/.opencode/plugins/coven-join/index.ts",
+    "eslint.config.mjs"
+  ]
 }
