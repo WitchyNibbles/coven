@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -205,7 +206,7 @@ def test_run_refuses_a_binary_that_is_not_the_pinned_version(
 
 def test_run_without_a_profile_is_refused(home: Layout, binary: Path):
     fake = Exec()
-    with pytest.raises(runtime.OpencodeError, match="no profile yet; run coven opencode setup"):
+    with pytest.raises(runtime.OpencodeError, match=re.escape("no profile yet; run coven opencode setup --preset ...")):
         runtime.run([], exec_fn=fake)
     assert fake.calls == []
 

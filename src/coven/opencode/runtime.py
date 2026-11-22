@@ -31,7 +31,7 @@ VERSION_LINE: Final = re.compile(r"(?:opencode )?v?(\d+\.\d+\.\d+\S*)")
 BINARY_OVERRIDE: Final = "COVEN_OPENCODE_BIN"
 
 MISSING = "the OpenCode runtime is missing; run coven opencode install"
-NO_PROFILE = "no profile yet; run coven opencode setup"
+NO_PROFILE = "no profile yet; run coven opencode setup --preset ..."
 
 
 def binary_path(layout: Layout) -> Path:

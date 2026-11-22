@@ -19,7 +19,6 @@ from coven.opencode.profile import (
     make_profile,
 )
 
-NO_PROFILE = "no profile yet; run coven opencode setup --preset ..."
 FLAGS_NEED_PRESET = "pass --preset with the other flags, or no flags to regenerate"
 
 
@@ -30,7 +29,7 @@ def _chosen_profile(args: argparse.Namespace) -> Profile:
             raise OpencodeError(FLAGS_NEED_PRESET)
         saved = load_profile(layout())
         if saved is None:
-            raise OpencodeError(NO_PROFILE)
+            raise OpencodeError(runtime.NO_PROFILE)
         return saved
     return make_profile(args.preset, args.base_url, args.key_env, args.model)
 
