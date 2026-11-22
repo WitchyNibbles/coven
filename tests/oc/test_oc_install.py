@@ -140,6 +140,19 @@ def test_npm_without_a_profile_still_loses_the_opencode_api_key(
     assert npm_env_log(npm_dir).read_text().splitlines() == ["OPENCODE_API_KEY unset"]
 
 
+def test_npm_does_not_see_the_server_login(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("OPENCODE_SERVER_PASSWORD", "OPENCODE_SERVER_USERNAME"):
+        monkeypatch.setenv(name, "test-value")
+    monkeypatch.setenv("FAKE_NPM_WATCH", "OPENCODE_SERVER_PASSWORD,OPENCODE_SERVER_USERNAME")
+    installer.install(home, "2.3.2")
+    assert npm_env_log(npm_dir).read_text().splitlines() == [
+        "OPENCODE_SERVER_PASSWORD unset",
+        "OPENCODE_SERVER_USERNAME unset",
+    ]
+
+
 def test_install_does_not_need_a_valid_profile(home: Layout, npm_dir: Path):
     home.root.mkdir(parents=True)
     home.profile_file.write_text("not json")

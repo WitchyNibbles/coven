@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -40,18 +40,28 @@ def binary_path(layout: Layout) -> Path:
     return Path(override) if override else layout.runtime_binary(PINNED_VERSION)
 
 
-def binary_version(binary: Path, env: Mapping[str, str]) -> str | None:
-    """The version token of `binary --version`, or None when it cannot run or prints no version."""
+def probe(
+    binary: Path, args: Sequence[str], env: Mapping[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run `binary args` with a short timeout; OpencodeError when it cannot run."""
     try:
-        done = subprocess.run(
-            [str(binary), "--version"],
+        return subprocess.run(
+            [str(binary), *args],
             env=dict(env),
             capture_output=True,
             text=True,
             timeout=VERSION_TIMEOUT,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
+        raise OpencodeError(f"cannot run {binary} {' '.join(args)}: {error}") from error
+
+
+def binary_version(binary: Path, env: Mapping[str, str]) -> str | None:
+    """The version token of `binary --version`, or None when it cannot run or prints no version."""
+    try:
+        done = probe(binary, ["--version"], env)
+    except OpencodeError:
         return None
     lines = done.stdout.strip().splitlines()
     if done.returncode != 0 or not lines:
@@ -61,9 +71,12 @@ def binary_version(binary: Path, env: Mapping[str, str]) -> str | None:
 
 
 def isolated_env(
-    layout: Layout, base: Mapping[str, str], keep: Sequence[str] = ()
+    layout: Layout,
+    base: Mapping[str, str],
+    keep: Sequence[str] = (),
+    drop: Collection[str] = (),
 ) -> dict[str, str]:
-    """`base` without OpenCode settings, pointed at the profile's folders."""
+    """`base` without OpenCode settings, pointed at the profile's folders, minus the `drop` names."""
     kept = (*PASSED_THROUGH, *keep)
     env = {k: v for k, v in base.items() if not k.startswith("OPENCODE_") or k in kept}
     env.update(
@@ -75,6 +88,8 @@ def isolated_env(
         OPENCODE_TEST_HOME=str(layout.home),
         TMPDIR=str(layout.tmp),
     )
+    for name in drop:
+        env.pop(name, None)
     return env
 
 

@@ -8,9 +8,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
 
+from coven.doctor import one_line
 from coven.errors import CovenError
 from coven.opencode.canary import read_server
-from coven.opencode.check_types import Context, Outcome, Read, Server, one_line
+from coven.opencode.check_types import Context, Outcome, Read, Server
 from coven.opencode.checks_runtime import (
     config_check,
     coven_root_check,

@@ -66,7 +66,7 @@ def _ok(detail: str) -> Outcome:
     return Outcome("ok", detail)
 
 
-def _one_line(text: str, limit: int = DETAIL_LIMIT) -> str:
+def one_line(text: str, limit: int = DETAIL_LIMIT) -> str:
     """`text` as one short printable line: log and tool output is data, never trusted layout."""
     flat = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
     return flat if len(flat) <= limit else flat[: limit - 3] + "..."
@@ -86,7 +86,7 @@ def _tool(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _first_line(done: subprocess.CompletedProcess[str]) -> str:
-    return _one_line(done.stdout.strip().split("\n", 1)[0])
+    return one_line(done.stdout.strip().split("\n", 1)[0])
 
 
 # ---- the checks -----------------------------------------------------------------------------
@@ -164,7 +164,7 @@ def _has_install(data: object, plugin: str) -> bool:
 
 
 def _unreadable(error: Exception) -> str:
-    return f"{paths.installed_plugins_file()} cannot be read: {_one_line(str(error))}"
+    return f"{paths.installed_plugins_file()} cannot be read: {one_line(str(error))}"
 
 
 def _superpowers(_now: datetime) -> Outcome:
@@ -204,7 +204,7 @@ def _config(_now: datetime) -> Outcome:
     try:
         load_config()
     except CovenError as error:
-        return Outcome("fail", _one_line(str(error)))
+        return Outcome("fail", one_line(str(error)))
     return _ok("valid")
 
 
@@ -223,14 +223,14 @@ def _store_state(path: Path) -> Outcome | None:
     if not path.exists():
         return Outcome("warn", NOT_SET_UP)  # a fresh install runs doctor before setup
     if not store.is_store(path):
-        shown = _one_line(str(path))
+        shown = one_line(str(path))
         return Outcome("fail", f"{shown} is not a coven memory store; run coven memory init")
     return None
 
 
 def _memory_store(_now: datetime) -> Outcome:
     path = _store_path()
-    return _store_state(path) or _ok(_one_line(str(path)))
+    return _store_state(path) or _ok(one_line(str(path)))
 
 
 def _memory_hook(_now: datetime) -> Outcome:
@@ -239,8 +239,8 @@ def _memory_hook(_now: datetime) -> Outcome:
         return missing
     problem = store.hook_problem(path)
     if problem:
-        shown = _one_line(str(path))
-        return Outcome("fail", f"{_one_line(problem)}; run coven memory init --path {shown}")
+        shown = one_line(str(path))
+        return Outcome("fail", f"{one_line(problem)}; run coven memory init --path {shown}")
     return _ok("current")
 
 
@@ -248,22 +248,22 @@ def _cross_session(_now: datetime) -> Outcome:
     try:
         value = settings.read_setting(settings.CROSS_SESSION_KEY)
     except CovenError as error:
-        return Outcome("warn", _one_line(str(error)))
+        return Outcome("warn", one_line(str(error)))
     if value is settings.MISSING:
         return Outcome(
             "warn",
             "not set; messages between the GM and PMs wait for approval (offered by coven setup)",
         )
-    return _ok(_one_line(json.dumps(value)))
+    return _ok(one_line(json.dumps(value)))
 
 
 def _owned(_now: datetime) -> Outcome:
     try:
         restores, skipped = settings.preview_undo()
     except CovenError as error:
-        return Outcome("warn", _one_line(str(error)))
+        return Outcome("warn", one_line(str(error)))
     if skipped:
-        return Outcome("warn", _one_line("; ".join(skipped), 2 * DETAIL_LIMIT))
+        return Outcome("warn", one_line("; ".join(skipped), 2 * DETAIL_LIMIT))
     if not restores:
         return _ok("nothing recorded")
     return _ok(f"{len(restores)} change(s) still as written")
@@ -298,7 +298,7 @@ def _hook_errors() -> list[tuple[datetime | None, str]]:
     for file in sorted([*folder.glob("*.jsonl"), *folder.glob("*.jsonl.1")]):
         if not file.is_file():  # a FIFO or device named like a log would block the read
             continue
-        hook = _one_line(file.name.split(".jsonl", 1)[0])
+        hook = one_line(file.name.split(".jsonl", 1)[0])
         try:
             lines = _log_lines(file)
         except OSError:
@@ -312,7 +312,7 @@ def _hook_errors() -> list[tuple[datetime | None, str]]:
                 continue
             when = _stamp(record.get("ts"))
             shown = when.isoformat(timespec="seconds") if when else "unknown time"
-            found.append((when, f"{hook} {shown}: {_one_line(record['error'])}"))
+            found.append((when, f"{hook} {shown}: {one_line(record['error'])}"))
     return sorted(found, key=lambda item: item[0] or EARLIEST)
 
 
@@ -343,11 +343,11 @@ def _guard_targets(hook: ModuleType, store_path: Path) -> tuple[bool, list[str]]
     try:
         enforced = hook.load_targets(store_path)
     except hook.GuardError as error:  # invalid at HEAD, and no earlier version is valid
-        return True, [_warning(f"guard.json at HEAD is not valid: {_one_line(str(error))}")]
+        return True, [_warning(f"guard.json at HEAD is not valid: {one_line(str(error))}")]
     if enforced.targets is None:
         return False, [_warning("guard.json is not committed; commit it, or the guard refuses")]
     if enforced.invalid_head:
-        reason = _one_line(enforced.invalid_head)
+        reason = one_line(enforced.invalid_head)
         return True, [
             _warning(f"guard.json at HEAD is not valid ({reason}); an older valid one is enforced")
         ]
@@ -363,7 +363,7 @@ def _live_approvals(hook: ModuleType, store_path: Path, now: datetime) -> list[s
         return ["  no live approvals"]
     return [
         "  "
-        + _one_line(
+        + one_line(
             f"approval {a.id} ({a.system}) until "
             f"{a.expires.astimezone(UTC).isoformat(timespec='seconds')}",
             2 * DETAIL_LIMIT,
@@ -378,7 +378,7 @@ def _remote_warning(store_path: Path) -> list[str]:
     if load_config().memory_remote:
         where.append("memory_remote in the config")
     if names:
-        where.append(f"git remote {_one_line(' '.join(names), 40)}")
+        where.append(f"git remote {one_line(' '.join(names), 40)}")
     if not where:
         return []
     return [
@@ -398,7 +398,7 @@ def _guard_on(hook: ModuleType, config: Any, now: datetime) -> Outcome:
             )
         lines += _remote_warning(config.store)
     except hook.StoreError as error:
-        return Outcome("warn", _one_line(f"on; cannot read the store: {error}"))
+        return Outcome("warn", one_line(f"on; cannot read the store: {error}"))
     if config.latch:
         why = "latch set"
     elif committed:
@@ -414,11 +414,11 @@ def _guard_report(hook: ModuleType, now: datetime) -> Outcome:
     try:
         config = hook.read_config()
     except hook.ConfigError as error:
-        return Outcome("warn", _one_line(f"cannot read the config: {error}"))
+        return Outcome("warn", one_line(f"cannot read the config: {error}"))
     off = hook.off_reason(config)
     if off is None:
         return _guard_on(hook, config, now)
-    shown = f"off ({_one_line(off)})"
+    shown = f"off ({one_line(off)})"
     if store.is_guarded(config.store):  # committed at HEAD, yet nothing switches the hook on
         return Outcome("warn", shown, (_warning(f"guard.json is committed; {SETUP_FIX}"),))
     return Outcome("ok", shown)
@@ -429,7 +429,7 @@ def _guard(now: datetime) -> Outcome:
         hook = guard.load_guard()
         return guard.run_with_deadline(lambda: _guard_report(hook, now))
     except CovenError as error:  # a timeout, an unloadable hook, git or the config failing
-        return Outcome("warn", _one_line(f"cannot check the guard: {error}"))
+        return Outcome("warn", one_line(f"cannot check the guard: {error}"))
 
 
 def _refusal_role(record: dict[str, object]) -> str:
@@ -444,7 +444,7 @@ def _refusal_system(record: dict[str, object]) -> str | None:
     if record.get("system") is None:
         return "system not logged"
     system = record["system"]
-    return _one_line(system, REFUSAL_FIELD_LIMIT) if isinstance(system, str) else None
+    return one_line(system, REFUSAL_FIELD_LIMIT) if isinstance(system, str) else None
 
 
 def _refusal(line: str) -> str | None:
@@ -465,7 +465,7 @@ def _refusal(line: str) -> str | None:
         when.isoformat(timespec="seconds"),
         _refusal_role(record),
         system,
-        _one_line(command or tool, REFUSAL_FIELD_LIMIT),
+        one_line(command or tool, REFUSAL_FIELD_LIMIT),
     )
     return "  " + " | ".join(fields)
 
@@ -510,7 +510,7 @@ CHECKS: Final[tuple[tuple[str, Status, Callable[[datetime], Outcome]], ...]] = (
 
 
 def _crash(error: Exception) -> str:
-    text = _one_line((str(error).splitlines() or [""])[0])
+    text = one_line((str(error).splitlines() or [""])[0])
     return text if isinstance(error, CovenError) else f"{type(error).__name__}: {text}".rstrip(": ")
 
 

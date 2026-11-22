@@ -105,12 +105,10 @@ def stop_server(process: Stoppable, grace: float) -> None:
 
 def _watch(stream: Iterable[str], found: queue.Queue[str | None]) -> None:
     """Pass on the server's URL, then keep draining so a chatty server never blocks on a pipe."""
-    announced = False
     try:
         for line in stream:
             match = LISTENING.match(line.strip())
-            if match and not announced:
-                announced = True
+            if match:
                 found.put(match.group(1))
     except (OSError, ValueError):
         pass

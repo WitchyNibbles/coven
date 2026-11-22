@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from coven.doctor import one_line
 from coven.opencode.canary import COVEN_PLUGIN
-from coven.opencode.check_types import RESET, Context, Outcome, one_line
+from coven.opencode.check_types import RESET, Context, Outcome
 
 
 def plugin_check(ctx: Context) -> Outcome:

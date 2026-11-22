@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +12,7 @@ from urllib.parse import urlsplit
 
 from coven import paths, safe_json
 from coven.errors import CovenError, warn
+from coven.settings import write_atomic
 
 PINNED_VERSION: Final = "2.3.2"
 ROLES: Final = ("lead", "implementer", "reviewer", "explorer", "final-reviewer", "title")
@@ -23,7 +22,7 @@ PRESETS: Final = ("litellm", "opencode")
 FORMAT: Final = 1
 
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
-_RESET_HINT = "re-run coven opencode setup"
+RESET_HINT = "re-run coven opencode setup"
 
 
 class OpencodeError(CovenError):
@@ -71,6 +70,10 @@ class Layout:
     @property
     def profile_file(self) -> Path:
         return self.root / "profile.json"
+
+    def folders(self) -> tuple[Path, ...]:
+        """The folders the run env points at; the postinstall step makes a temp folder in `tmp`."""
+        return (self.config_dir, self.data, self.cache, self.state, self.home, self.tmp)
 
     def runtime_dir(self, version: str) -> Path:
         return self.root / "runtime" / version
@@ -201,15 +204,8 @@ def save_profile(layout: Layout, profile: Profile) -> None:
         "keyEnv": profile.key_env,
         "models": dict(profile.models),
     }
-    layout.root.mkdir(parents=True, exist_ok=True)
-    handle, temp_name = tempfile.mkstemp(dir=layout.root, prefix="profile.", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(document, indent=2) + "\n")
-        os.replace(temp_name, layout.profile_file)
-    except BaseException:
-        Path(temp_name).unlink(missing_ok=True)
-        raise
+    text = json.dumps(document, indent=2) + "\n"
+    write_atomic(layout.profile_file, text.encode("utf-8"), mode=0o600, backup=False)
 
 
 def _from_document(document: object) -> Profile | None:
@@ -242,15 +238,15 @@ def load_profile(layout: Layout) -> Profile | None:
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError) as error:
-        raise OpencodeError(f"cannot read {layout.profile_file}: {error}; {_RESET_HINT}") from error
+        raise OpencodeError(f"cannot read {layout.profile_file}: {error}; {RESET_HINT}") from error
     try:
         loaded = _from_document(safe_json.loads(text))
     except OpencodeError as error:
         raise OpencodeError(
-            f"{layout.profile_file} is not valid ({error}); {_RESET_HINT}"
+            f"{layout.profile_file} is not valid ({error}); {RESET_HINT}"
         ) from error
     except ValueError:
         loaded = None
     if loaded is None:
-        raise OpencodeError(f"{layout.profile_file} is not a valid coven profile; {_RESET_HINT}")
+        raise OpencodeError(f"{layout.profile_file} is not a valid coven profile; {RESET_HINT}")
     return loaded

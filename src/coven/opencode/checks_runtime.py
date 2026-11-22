@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
 from coven import paths, safe_json
-from coven.opencode.check_types import RESET, SETUP, Context, Outcome, one_line
+from coven.doctor import one_line
+from coven.opencode.check_types import RESET, SETUP, Context, Outcome
 from coven.opencode.generate import CONFIG_FILE, config_data
 from coven.opencode.profile import AGENT_ROLES, PINNED_VERSION, Layout, OpencodeError, Profile
-from coven.opencode.runtime import BINARY_OVERRIDE, VERSION_TIMEOUT, binary_version
+from coven.opencode.runtime import BINARY_OVERRIDE, binary_version, probe
 
 PROJECT_CONFIG: Final = (".opencode", "opencode.json", "opencode.jsonc")
 GUARD_HOOK: Final = "hooks/deny_secrets.py"
@@ -36,17 +36,7 @@ def runtime_check(ctx: Context) -> Outcome:
 
 def read_paths(binary: Path, env: Mapping[str, str]) -> list[tuple[str, str]]:
     """The (name, path) lines of `opencode debug paths`."""
-    try:
-        done = subprocess.run(
-            [str(binary), "debug", "paths"],
-            env=dict(env),
-            capture_output=True,
-            text=True,
-            timeout=VERSION_TIMEOUT,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise OpencodeError(f"cannot run {binary} debug paths: {error}") from error
+    done = probe(binary, ["debug", "paths"], env)
     if done.returncode != 0:
         raise OpencodeError(f"{binary} debug paths exited {done.returncode}")
     pairs = (line.split(None, 1) for line in done.stdout.splitlines())
@@ -68,16 +58,17 @@ def paths_check(ctx: Context) -> Outcome:
     return Outcome("ok", f"{len(found)} paths, all under {root}")
 
 
-def _read_config(layout: Layout) -> dict[str, object]:
+def _read_config(layout: Layout) -> dict[str, object] | Outcome:
+    """The generated config as a JSON object, or the fail that says why it cannot be read."""
     path = layout.config_dir / CONFIG_FILE
     try:
         data = safe_json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise OpencodeError(f"{path} is missing") from None
+        return Outcome("fail", f"{path} is missing", RESET)
     except (OSError, ValueError) as error:
-        raise OpencodeError(f"{path} is not valid JSON: {one_line(str(error))}") from error
+        return Outcome("fail", f"{path} is not valid JSON: {one_line(str(error))}", RESET)
     if not isinstance(data, dict):
-        raise OpencodeError(f"{path} is not a JSON object")
+        return Outcome("fail", f"{path} is not a JSON object", RESET)
     return data
 
 
@@ -106,10 +97,9 @@ def _watched(profile: Profile) -> Fields:
 def config_check(ctx: Context) -> Outcome:
     if ctx.profile is None:
         return Outcome("fail", ctx.profile_note or "no profile yet", SETUP)
-    try:
-        written = _read_config(ctx.layout)
-    except OpencodeError as error:
-        return Outcome("fail", str(error), RESET)
+    written = _read_config(ctx.layout)
+    if isinstance(written, Outcome):
+        return written
     wanted = config_data(ctx.profile, ctx.layout, paths.root())
     for label, path in _watched(ctx.profile):
         if _field(written, *path) != _field(wanted, *path):
@@ -127,10 +117,9 @@ def key_check(ctx: Context) -> Outcome:
 
 
 def coven_root_check(ctx: Context) -> Outcome:
-    try:
-        written = _read_config(ctx.layout)
-    except OpencodeError as error:
-        return Outcome("fail", str(error), RESET)
+    written = _read_config(ctx.layout)
+    if isinstance(written, Outcome):
+        return written
     root = _field(written, "plugins", "0", "options", "covenRoot")
     if not isinstance(root, str) or not root:
         return Outcome("fail", f"{CONFIG_FILE} names no covenRoot", RESET)

@@ -45,13 +45,13 @@ def _provider(profile: Profile) -> dict[str, object]:
 def config_data(profile: Profile, layout: Layout, coven_root: Path) -> dict[str, object]:
     """The `opencode.jsonc` content, keys in the order the file shows them."""
 
-    def chosen(role: str) -> dict[str, str]:
-        return {"model": f"{profile.provider_id}/{profile.model(role)}"}
+    def model_ref(role: str) -> str:
+        return f"{profile.preset}/{profile.model(role)}"
 
     data: dict[str, object] = {
         "update": "disable",
-        "model": chosen("lead")["model"],
-        "agents": {role: chosen(role) for role in (*AGENT_ROLES, "title")},
+        "model": model_ref("lead"),
+        "agents": {role: {"model": model_ref(role)} for role in (*AGENT_ROLES, "title")},
     }
     if profile.preset == "litellm":
         data["providers"] = {"litellm": _provider(profile)}

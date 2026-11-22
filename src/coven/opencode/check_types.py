@@ -8,15 +8,14 @@ from pathlib import Path
 from typing import Final, Literal
 
 from coven.opencode.canary import ServerOptions, ServerView
-from coven.opencode.profile import Layout, OpencodeError, Profile
+from coven.opencode.profile import RESET_HINT, Layout, OpencodeError, Profile
 
 type Status = Literal["ok", "warn", "fail"]
 type Read = Callable[[Path, Mapping[str, str], Path, ServerOptions], ServerView]
 
-RESET: Final = "re-run coven opencode setup"
+RESET: Final = RESET_HINT
 SETUP: Final = "run coven opencode setup"
 SKIPPED: Final = "skipped: no profile — run `coven opencode setup`"
-DETAIL_LIMIT: Final = 200
 
 
 @dataclass(frozen=True)
@@ -24,12 +23,6 @@ class Outcome:
     status: Status
     detail: str
     fix: str = ""
-
-
-def one_line(text: str, limit: int = DETAIL_LIMIT) -> str:
-    """`text` as one short printable line: server and tool output is data, never layout."""
-    flat = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
-    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
 
 
 class Server:
