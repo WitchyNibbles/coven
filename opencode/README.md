@@ -57,8 +57,8 @@ name, and the one holding the key.
   `P`), `config` (the config matches `profile.json`), `key` (the variable is set), `plugin`
   (a server started for the check lists `coven` as active; it polls up to 10 s, because 2.3.2 lists
   no plugin until they have loaded), `skills` (the same server lists only built-in skills and the
-  profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and `project
-  config`.
+  profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and
+  `project config` (a warning for a repo config that is ignored here).
 
 ## The tool_choice hook
 

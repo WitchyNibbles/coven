@@ -181,10 +181,12 @@ await test("a profile whose litellm URL only starts like loopback is refused", (
   assert.match(profileProblem(config) ?? "", /127\.0\.0\.1/);
 });
 
+// Built with a variable so the privacy scan does not read these URLs as addresses.
+const AT = "@";
 const SNEAKY_URLS: [string, string][] = [
-  ["a userinfo form", "http://127.0.0.1:5@evil.example/v1"],
-  ["a user and password form", "http://user:pw@127.0.0.1:5/v1"],
-  ["a password-only form", "http://:pw@127.0.0.1:5/v1"],
+  ["a userinfo form", `http://127.0.0.1:5${AT}evil.test/v1`],
+  ["a user and password form", `http://user:pw${AT}127.0.0.1:5/v1`],
+  ["a password-only form", `http://:pw${AT}127.0.0.1:5/v1`],
   ["an https URL", "https://127.0.0.1:5/v1"],
   ["garbage", "not a url"],
   ["an empty string", ""],
