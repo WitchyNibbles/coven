@@ -77,7 +77,10 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
 
   The `.env` rules are the second layer. The first is the plugin's guard, which runs coven's
   `deny_secrets.py` before each `read`, `grep`, `glob`, `shell`, `write`, `edit` and `patch`.
-  Config rules cannot read a shell line, so `shell` is covered by the plugin layer only. The guard
+  Config rules cannot read a shell line, so `shell` is covered by the plugin layer only. So are
+  `grep` and `glob`: in 2.3.2 they check `external_directory` and then their own permission with
+  the search pattern as the resource, never `read` on the files they search, so the `read` rules
+  above do not apply to them (`grep` returns line previews; `glob` returns paths only). The guard
   fails closed: an error or a timeout (`guardTimeoutMs`, 5 s) refuses the call. Other tools (MCP,
   `webfetch`, `subagent`, `skill`) pass, as on Claude Code.
 

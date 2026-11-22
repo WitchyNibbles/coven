@@ -241,8 +241,11 @@ generated config loads it with `plugins: [{package: "<P>/plugin/coven", options}
   names the cause. The Python stays in one place, the coven checkout or install, and is not copied.
   If coven moves, the `coven root` check (item 6 above) says so.
 
-Config `permissions` are the second layer and hold even if the plugin fails to load. They are
-global, so 2.3.2 appends them to every agent, subagents included. The generated list, in order:
+Config `permissions` are the second layer and hold even if the plugin fails to load, for the tools
+that check them (`read` checks `read` rules; `write`, `edit` and `patch` check `edit` rules).
+`grep` and `glob` do not check `read` in 2.3.2: each asserts `external_directory`, then its own
+action with the search pattern as the resource. Like `shell` they are covered by the plugin layer
+only. The rules are global, so 2.3.2 appends them to every agent, subagents included. The generated list, in order:
 
 ```jsonc
 "permissions": [
@@ -254,8 +257,8 @@ global, so 2.3.2 appends them to every agent, subagents included. The generated 
 ]
 ```
 
-M1 adds no shell rules to the config. `shell` is covered by the plugin layer only, and the README says
-so. A config rule cannot see what a shell line reads, so a partial copy would look like coverage
+M1 adds no shell rules to the config. `shell`, `grep` and `glob` are covered by the plugin layer only, and the
+README says so. A config rule cannot see what a shell line reads, so a partial copy would look like coverage
 it is not.
 
 ### Content: routing, skills, agents
