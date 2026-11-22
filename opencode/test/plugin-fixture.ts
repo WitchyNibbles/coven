@@ -171,7 +171,7 @@ function makeWorld({
 }
 
 function drive(world: ReturnType<typeof makeWorld>, cleanup: () => void) {
-  const { clock, streams, tools, hooks } = world;
+  const { streams, tools, hooks } = world;
   const reminder = (sessionID: string): string[] => {
     const event: ContextHookEvent = { sessionID, system: [] };
     hooks.forEach((hook) => hook(event));
@@ -220,10 +220,9 @@ export async function boot(clock = { now: 1_000_000 }) {
 export function bootCoven(setup: Setup = {}) {
   const world = makeWorld(setup);
   const logs: string[] = [];
-  const clock = world.clock;
   const outcome = covenSetup(
     world.ctx,
-    { now: () => clock.now, log: (line) => logs.push(line) },
+    { now: () => world.clock.now, log: (line) => logs.push(line) },
     world.ctx.options,
   );
   return { ...world, logs, outcome };
