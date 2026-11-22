@@ -61,7 +61,15 @@ export function configProblem(config: ProjectConfig): string | undefined {
   return providerProblem(config) ?? policyProblem(config.policies ?? []);
 }
 
+const STRING_OR_TRAILING_COMMA = /("(?:[^"\\]|\\.)*")|,(\s*[}\]])/g;
+
 /** Parses the project config: JSON with the trailing commas the formatter adds. */
 export function parseConfig(text: string): ProjectConfig {
-  return JSON.parse(text.replace(/,(\s*[}\]])/g, "$1")) as ProjectConfig;
+  // Strings match first, so a ",}" inside a value is kept as it is.
+  const json = text.replace(
+    STRING_OR_TRAILING_COMMA,
+    (_match: string, quoted: string | undefined, close: string | undefined) =>
+      quoted ?? close ?? "",
+  );
+  return JSON.parse(json) as ProjectConfig;
 }
