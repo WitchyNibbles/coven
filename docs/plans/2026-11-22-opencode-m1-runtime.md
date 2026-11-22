@@ -434,7 +434,7 @@ In PR 2, setup writes only `opencode.jsonc` and the plugin copy, and PR 3 extend
     `$GATEWAY_KEY` and exec is still called. With it set to `sk-test-value`, that value is in no
     output.
   - `install` with a fake npm first on PATH: the log holds exactly `install --prefix
-    <P>/runtime/2.3.2 --save-exact @opencode/cli@2.3.2`, and the return value is the binary. A
+    <P>/runtime/2.3.2 --save-exact @opencode/cli@<v>` with v = 2.3.2, and the return value is the binary. A
     second call adds no log line. `FAKE_NPM_EXIT=3` gives an error containing `exit 3` and the
     three stderr lines. `FAKE_OPENCODE_VERSION=2.3.1` gives `reports 2.3.1, expected 2.3.2`.
     `PATH` without npm gives `npm not found`. `--version 2.x` is refused. `--version 2.4.0`

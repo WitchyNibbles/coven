@@ -62,7 +62,7 @@ GM/PM hierarchy, M3 the production guard and M4 aquelarre.
 
 Source-read from the 2.3.2 tree; file:line receipts are in the research notes the plan carries.
 
-- Package `@opencode/cli@2.3.2`. The platform binary comes from an optional dependency and is
+- Package `@opencode/cli`, version `2.3.2`. The platform binary comes from an optional dependency and is
   hard-linked by postinstall. The self-updater runs only in the default TUI command; it is off with
   config `update: "disable"` plus env `OPENCODE_DISABLE_AUTOUPDATE=1`.
 - Paths: config dir `OPENCODE_CONFIG_DIR` (else `$XDG_CONFIG_HOME/opencode`); data, cache and state
@@ -126,7 +126,7 @@ real 1.x folders were the same before and after.
 `P = ${XDG_DATA_HOME:-~/.local/share}/coven/opencode`, override `COVEN_OPENCODE_HOME`.
 
 ```
-P/runtime/2.3.2/          npm prefix: node_modules/@opencode/cli@2.3.2 (save-exact)
+P/runtime/2.3.2/          npm prefix: node_modules/@opencode/cli, version 2.3.2 (save-exact)
 P/config/opencode/        OPENCODE_CONFIG_DIR: opencode.jsonc, AGENTS.md, agents/, skills/, commands/
 P/plugin/coven/           coven's plugin, loaded only through the `plugins` entry (outside the
                           auto-load `plugins/` folder, so it never loads twice or without options)
