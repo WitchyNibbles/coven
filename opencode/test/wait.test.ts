@@ -217,6 +217,24 @@ await test("a hanging last-text read does not hold off abort or the timeout", as
   await assert.rejects(aborted.promise, (error) => error === reason);
 });
 
+await test("a timeout during a hanging read is not timedOut when the mode is met", async () => {
+  const w = setup([A, B]);
+  w.hang.lastText = true;
+  w.start(B);
+  w.end(B);
+  await w.advance(10_000);
+  const { promise } = w.run({ ids: [B, A], mode: "any", timeoutSeconds: 5 });
+  await tick();
+  w.report(A, "completed");
+  await w.advance(5_000);
+  const result = await promise;
+  assert.equal(result.timedOut, false);
+  assert.deepEqual(
+    result.done.map((child) => child.sessionID),
+    [A],
+  );
+});
+
 await test("a hanging session lookup does not hold off abort or the timeout", async () => {
   const w = setup([A]);
   w.hang.session = true;

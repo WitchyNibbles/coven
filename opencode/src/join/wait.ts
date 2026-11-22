@@ -88,26 +88,17 @@ class Wait {
 
   private async execute(): Promise<AwaitResult> {
     if (await this.checkChildren()) {
-      return this.result(
-        snapshot(this.record, this.call.callerID, this.input.ids),
-        true,
-      );
+      return this.timedOutResult();
     }
     for (;;) {
       this.call.signal.throwIfAborted();
       if (this.host.now() >= this.nextHistory && (await this.readHistory())) {
-        return this.result(
-          snapshot(this.record, this.call.callerID, this.input.ids),
-          true,
-        );
+        return this.timedOutResult();
       }
       this.changed = false;
       const view = await this.evaluate(this.host.now());
       if (view === TIMED_OUT) {
-        return this.result(
-          snapshot(this.record, this.call.callerID, this.input.ids),
-          true,
-        );
+        return this.timedOutResult();
       }
       const now = this.host.now();
       if (this.isDone(view)) {
@@ -174,6 +165,12 @@ class Wait {
     return this.input.mode === "all"
       ? view.pending.length === 0
       : view.done.length > 0;
+  }
+
+  /** The record as it stands when the timeout cut a host call short. */
+  private timedOutResult(): AwaitResult {
+    const view = snapshot(this.record, this.call.callerID, this.input.ids);
+    return this.result(view, !this.isDone(view));
   }
 
   private result(view: View, timedOut: boolean): AwaitResult {
