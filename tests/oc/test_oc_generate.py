@@ -76,6 +76,9 @@ def source(tmp_path: Path) -> Path:
     (folder / "notes.md").write_text("not copied")
     (folder / "node_modules").mkdir()
     (folder / "node_modules" / "dep.js").write_text("not copied")
+    (folder / "node_modules" / "x.ts").write_text("not copied")
+    (folder / "join" / "node_modules").mkdir()
+    (folder / "join" / "node_modules" / "y.ts").write_text("not copied")
     return folder
 
 

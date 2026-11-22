@@ -70,7 +70,7 @@ def _copy_plugin(source: Path, target: Path) -> None:
     if not (source / "index.ts").is_file():
         raise OpencodeError(f"the coven plugin source is missing: {source / 'index.ts'}")
     for file in sorted(source.rglob("*.ts")):
-        if file.is_file():
+        if file.is_file() and "node_modules" not in file.relative_to(source).parts:
             destination = target / file.relative_to(source)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(file, destination)
