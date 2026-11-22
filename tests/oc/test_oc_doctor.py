@@ -8,9 +8,11 @@ import pytest
 from doctor_kit import KEY_NAME, KEY_VALUE, NAMES, Good, Reader, results_by_name
 from fakes import fake_opencode
 
+from coven import paths
+from coven.opencode import checks_runtime
 from coven.opencode.canary import ServerOptions
 from coven.opencode.checks import Outcome, exit_code, render, run_doctor
-from coven.opencode.profile import load_profile
+from coven.opencode.profile import Layout, Profile, load_profile
 from coven.opencode.runtime import run_env
 
 type Change = Callable[[dict[str, Any]], object]
@@ -157,6 +159,36 @@ def test_project_config_above_cwd_warns_naming_it(good: Good, tmp_path: Path):
     assert str(parent / "opencode.jsonc") in found.detail
     assert "ignored in the coven profile (project config is off)" in found.detail
     assert exit_code(done) == 0
+
+
+@pytest.mark.parametrize(
+    ("entries", "status"), [(["bin"], "ok"), ([], "warn"), (["bin", "opencode.json"], "warn")]
+)
+def test_an_opencode_folder_holding_only_bin_is_not_project_config(
+    good: Good, tmp_path: Path, entries: list[str], status: str
+):
+    """The 1.x curl installer leaves `.opencode/bin`; that is no config."""
+    repo = tmp_path / "repo"
+    for name in entries:
+        (repo / ".opencode" / name).mkdir(parents=True)
+    (repo / ".opencode").mkdir(parents=True, exist_ok=True)
+    found = dict(run_doctor(good.layout, repo, read=Reader()))["project config"]
+    assert found.status == status
+
+
+def test_config_is_compared_with_the_config_of_coven_s_real_root(
+    good: Good, monkeypatch: pytest.MonkeyPatch
+):
+    asked: list[Path] = []
+    real = checks_runtime.config_data
+
+    def spy(profile: Profile, layout: Layout, coven_root: Path) -> dict[str, object]:
+        asked.append(coven_root)
+        return real(profile, layout, coven_root)
+
+    monkeypatch.setattr(checks_runtime, "config_data", spy)
+    assert dict(run_doctor(good.layout, good.cwd, read=Reader()))["config"].status == "ok"
+    assert asked == [paths.root()]
 
 
 def test_a_check_that_raises_fails_alone(good: Good, monkeypatch: pytest.MonkeyPatch):

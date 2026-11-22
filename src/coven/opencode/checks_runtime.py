@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-from coven import safe_json
+from coven import paths, safe_json
 from coven.opencode.check_types import RESET, SETUP, Context, Outcome, one_line
 from coven.opencode.generate import CONFIG_FILE, config_data
 from coven.opencode.profile import AGENT_ROLES, PINNED_VERSION, Layout, OpencodeError, Profile
@@ -110,7 +110,7 @@ def config_check(ctx: Context) -> Outcome:
         written = _read_config(ctx.layout)
     except OpencodeError as error:
         return Outcome("fail", str(error), RESET)
-    wanted = config_data(ctx.profile, ctx.layout, ctx.layout.root)
+    wanted = config_data(ctx.profile, ctx.layout, paths.root())
     for label, path in _watched(ctx.profile):
         if _field(written, *path) != _field(wanted, *path):
             return Outcome("fail", f"{label} differs from profile.json", RESET)
@@ -140,13 +140,22 @@ def coven_root_check(ctx: Context) -> Outcome:
     return Outcome("ok", f"{root} holds {GUARD_HOOK}")
 
 
+def _holds_config(path: Path) -> bool:
+    """Whether `path` exists and is not a bare `.opencode/bin`, which the 1.x installer leaves."""
+    if not path.exists():
+        return False
+    if path.name == ".opencode" and path.is_dir():
+        return [entry.name for entry in path.iterdir()] != ["bin"]
+    return True
+
+
 def project_config_check(ctx: Context) -> Outcome:
     here = ctx.cwd.resolve()
     found = [
         str(folder / name)
         for folder in (here, *here.parents)
         for name in PROJECT_CONFIG
-        if (folder / name).exists()
+        if _holds_config(folder / name)
     ]
     if not found:
         return Outcome("ok", "no project config above the working directory")
