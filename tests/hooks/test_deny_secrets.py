@@ -170,6 +170,95 @@ def test_allows_a_name_that_is_only_data(bash: Run, command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
+        "echo x.env",
+        'python3 -c "print(os.env)"',
+        "echo process.env.HOME",
+        'node -e "console.log(process.env.PATH)"',
+        'echo "note: read cfg.env later"',
+        'echo "task: spawned[0].env was refused"',
+        'python3 -c "print(rows[0].env)"',
+        'node -e "console.log(load().env)"',
+        "python3 -c \"import os; print(os.environ['HOME'])\"",
+        "python3 -c \"import os; print(os.environ.get('HOME'))\"",
+        "echo a[0][1].env",
+        "echo f()[0].env",
+        "python3 - <<'EOF'\nassert spawned[0].env == {}\nEOF",
+        "echo conn[0].ssh",
+        "echo x\\\nrows[0].env",
+        # zsh applies no subscript after a modifier (`:h`), so nothing leaks
+        "echo $x:h[1,0].env",
+    ],
+)
+def test_allows_a_name_that_is_an_attribute_of_a_call_or_an_index(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat $(true).env",
+        "cat $a[1].env",
+        "cat <(x).env",
+        "cat @(|x).env",
+        "cat (|x).env",
+        "cat ().env",
+        "cat ].env",
+        "cat ).env",
+        "cat $((0)).env",
+        "ls $(true).ssh",
+        # a quoted bracket inside `$(...)` is not the opener of the call
+        "cat $(true 'a(').env",
+        "cat $(true 'a(' ).env",
+        'cat $(true "a(").env',
+        "cat <(true 'a(').env",
+        "cat app/$(true 'a(').env",
+        "ls $(true 'a(').ssh",
+        "ls -d ~/$(true 'a(').ssh",
+        "cat $(true 'a(')[0].env",
+        "cat $(echo 'x[' ].env",
+        "cat a$(true 'b(' ).env",
+        "cat '$(' 'a(' ).env",
+        # a heredoc inside the substitution holds the opener
+        "cat $(cat <<E\na(\nE\n).env",
+        # a zsh parameter with flags still takes a subscript
+        "cat $~a[1].env",
+        "cat $=a[1].env",
+        "cat $^a[1].env",
+        "cat $^~a[1].env",
+        "cat $~a[1,2].env",
+        "cat $==a[1].env",
+        "cat $~a[1].ssh",
+        "cat $~h[k].env",
+        # zsh drops a backslash-newline, so the variable is still one
+        "cat $\\\nx[1,0].env",
+        "cat $~\\\nx[1].env",
+        "cat $a\\\nb[1].env",
+        "cat $\\\nx[1].ssh",
+        "cat $\\\n~x[1,0].env",
+        "cat $~\\\n\\\nx[1,0].env",
+        # zsh glob qualifiers
+        "cat x(#c0).env",
+        "cat x(#a0).env",
+        "cat x(|).env",
+        # kept refused on purpose: a group with a quote, a blank or a bracket in it
+        'echo cfg["k"].env',
+        "node -e \"console.log(require('x')().env.PATH)\"",
+        "echo f(a, b).env",
+        "echo f(g(x)).env",
+    ],
+)
+def test_still_blocks_a_name_after_a_bracket_that_is_not_a_call_or_an_index(
+    bash: Run, command: str
+) -> None:
+    proc = bash(command)
+    assert proc.returncode == 2
+    assert "coven deny-secrets: access to" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "cat .env",
         "source .env",
         ". .env",

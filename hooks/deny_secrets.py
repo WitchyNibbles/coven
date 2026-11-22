@@ -9,7 +9,11 @@ Python older than 3.12) into exit 2 as well; any other non-zero exit would let t
 It matches text, not meaning. Every string of the call is searched for `.env…` or `.ssh` as a
 separate word. A name glued to a letter, digit, `.`, `_` or `-` (`secrets.env`) passes, and so does
 a regex that escapes the dot of such a name (a backslash between `app` and `.env`); a backslash
-before a name that starts a word does not.
+before a name that starts a word does not. A name after a `)` or `]` that closes a call or an index
+on a name (`rows[0].env`, `load().env`) passes too, when the group holds only letters, digits, `_`,
+`.`, `,` and `-`; one after a shell expansion (`$(…)`, `$name[…]`), a bare group, or a group with
+a quote, blank or bracket in it (`cfg["k"].env`) does not. This holds for Read, Grep, Glob and Bash
+text, not for a write target.
 
 A Bash call is checked a little differently: its `description` is never run, so it is skipped, and
 its `command` is checked without the parts that are only data, found by the shell_words module
@@ -67,7 +71,8 @@ Limits. This is defence in depth, not a boundary; these get through:
   basename counts;
 - a write through a hard link, to a symlink made after the check (a race), or through a symlink
   whose text points into `/proc/self` (the hook resolves its own process there, not Claude's);
-- an interpreter payload, such as a `python3 -c "..."` string, that builds a path.
+- an interpreter payload, such as a `python3 -c "..."` string, that builds a path;
+- a variable glued to the name (`$d.env`, where `d` ends in `/`), which reads `dir/.env`.
 
 The hook's matcher in hooks.json is `Read|Grep|Glob|Bash|Edit|Write|NotebookEdit`; `MultiEdit` is
 handled in case a call still arrives under that name.
@@ -91,6 +96,17 @@ hook_support = importlib.import_module("hook_support")
 HOOK = "deny-secrets"
 ENV_FILE = re.compile(r"(?<![\w.\-])(?<![\w.\-]\\)(\.env[\w.\-]*)(?=$|[^\w.\-])")
 SSH_DIR = re.compile(r"(?<![\w.\-])(?<![\w.\-]\\)(\.ssh)(?=$|[^\w.\-])")
+# A `)` or `]` before a name closes a call or an index when the bracket opens right after a name
+# (`load(`, `rows[`) that is not a shell variable (`$rows[`, zsh's subscript), and holds only
+# letters, digits, `_`, `.`, `,` and `-`: anything else (a quote, a blank, `#`, `|`, a newline)
+# could hide the real opener of a `$(...)` or be a zsh glob qualifier (`x(#c0)`, `x(|)`).
+GROUP_OPENING = {
+    ")": re.compile(r"\([\w.,\-]*\Z"),
+    "]": re.compile(r"\[[\w.,\-]*\Z"),
+}
+NAME_CHAR = re.compile(r"\w")
+# `$name`, or `$~name`, `$=name`, `$^name` and the like (zsh parameter flags between `$` and the name).
+SHELL_VARIABLE = re.compile(r"\$[^\w\s]*\w+\Z")
 HOME_VARIABLE = re.compile(r"^(?:\$\{HOME\}|\$HOME(?!\w))")
 PROC = "/proc"
 PATH_KEYS = frozenset({"file_path", "notebook_path", "path"})
@@ -325,6 +341,41 @@ def is_template_path(path: str, cwd: object, home: Path) -> bool:
     return target_hit(path, cwd, home) is None
 
 
+def _opener(text: str, close: int) -> int | None:
+    """The index of the bracket that `text[close]` (`)` or `]`) closes, when only name characters
+    lie between them."""
+    opening = GROUP_OPENING[text[close]].search(text, 0, close)
+    return opening.start() if opening else None
+
+
+def closes_call_or_index(text: str, close: int) -> bool:
+    """The `)` or `]` at `close` ends a call or an index on a name (`load()`, `rows[0]`,
+    `a[0][1]`), not a shell expansion (`$(x)`, `$name[1]`) or a group (`(x)`, `<(x)`). Each group
+    holds only name characters, so a quote, blank or bracket in it means the opener found is not
+    the real one (`$(true 'a(').env`) and the name stays refused."""
+    while True:
+        opener = _opener(text, close)
+        if opener is None or opener == 0:
+            return False
+        before = text[opener - 1]
+        if before not in GROUP_OPENING:
+            # zsh drops a backslash-newline before it reads the line (`$\<NL>x[1,0]` is `$x[1,0]`).
+            joined_before = text[:opener].replace("\\\n", "")
+            return bool(NAME_CHAR.match(before)) and not SHELL_VARIABLE.search(joined_before)
+        close = opener - 1
+
+
+def follows_call_or_index(text: str, start: int) -> bool:
+    """The match at `start` is an attribute of a call or an index (`rows[0].env`)."""
+    return start > 0 and text[start - 1] in GROUP_OPENING and closes_call_or_index(text, start - 1)
+
+
+def unglued_match(pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+    """The first match of `pattern` that is not an attribute of a call or an index."""
+    matches = pattern.finditer(text)
+    return next((m for m in matches if not follows_call_or_index(text, m.start())), None)
+
+
 def text_hit(checked: Checked, cwd: object, home: Path) -> Hit | None:
     """A `.env…` or `.ssh` word in one string of a Read, Grep, Glob or Bash call, or a short name
     in one of its paths or as a word of its command (the data parts blanked, as for `.env`). The
@@ -333,7 +384,7 @@ def text_hit(checked: Checked, cwd: object, home: Path) -> Hit | None:
     if checked.kind == PATH and is_template_path(text, cwd, home):
         text = os.path.dirname(text)
     for pattern in (ENV_FILE, SSH_DIR):
-        match = pattern.search(text)
+        match = unglued_match(pattern, text)
         if match:
             return Hit(match.group(1), "secrets")
     words = {PATH: [text], COMMAND: SHELL_WORD_BREAK.split(text)}.get(checked.kind, [])
