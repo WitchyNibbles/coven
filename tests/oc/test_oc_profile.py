@@ -202,10 +202,10 @@ def test_load_of_a_missing_file_is_none(tmp_path: Path):
     [
         "{not json",
         "[]",
-        '{"format": 2, "preset": "opencode", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {"lead": "x"}}',
-        '{"format": 1, "preset": "nope", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {"lead": "x"}}',
-        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {}}',
-        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {"boss": "x"}}',
+        '{"format": 2, "preset": "opencode", "baseURL": null, "keyEnv": "K", "models": {"lead": "x"}}',
+        '{"format": 1, "preset": "nope", "baseURL": null, "keyEnv": "K", "models": {"lead": "x"}}',
+        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "K", "models": {}}',
+        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "K", "models": {"boss": "x"}}',
         '{"format": 1, "preset": "opencode", "baseURL": null, "models": {"lead": "x"}}',
     ],
 )
