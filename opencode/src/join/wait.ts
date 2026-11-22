@@ -32,7 +32,6 @@ type TimedOut = typeof TIMED_OUT;
 class Wait {
   private changed = false;
   private wake: (() => void) | undefined;
-  private historyRead = false;
   private readonly start: number;
   private readonly deadline: number | undefined;
   private nextHistory: number;
@@ -88,9 +87,15 @@ class Wait {
       return this.timedOutResult();
     }
     this.watchPending();
+    if (await this.readHistory(false)) {
+      return this.timedOutResult();
+    }
     for (;;) {
       this.call.signal.throwIfAborted();
-      if (this.host.now() >= this.nextHistory && (await this.readHistory())) {
+      if (
+        this.host.now() >= this.nextHistory &&
+        (await this.readHistory(true))
+      ) {
         return this.timedOutResult();
       }
       this.changed = false;
@@ -197,19 +202,19 @@ class Wait {
   }
 
   /**
-   * Feeds a report only while the record has seen fewer of them than the history holds.
-   * True when the timeout came first.
+   * Feeds a report only while the record has seen fewer of them than the history holds. The
+   * first read is strict, so a history that cannot be read at all fails the call; later reads
+   * keep going on an empty history. True when the timeout came first.
    */
-  private async readHistory(): Promise<boolean> {
+  private async readHistory(tolerant: boolean): Promise<boolean> {
     const { callerID } = this.call;
     const read = this.host.history(callerID);
     const fetched = await this.guarded(
-      this.historyRead ? read.catch((): HistoryItem[] => []) : read,
+      tolerant ? read.catch((): HistoryItem[] => []) : read,
     );
     if (fetched === TIMED_OUT) {
       return true;
     }
-    this.historyRead = true;
     this.nextHistory = this.host.now() + HISTORY_EVERY_MS;
     feedReports(this.record, callerID, this.input.ids, fetched);
     return false;
