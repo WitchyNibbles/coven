@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Final
 
 from coven import paths
-from coven.opencode.rewrite import AGENTS, COMMANDS, COVEN_SKILLS, rewrite_text
+from coven.opencode.rewrite import COMMANDS, COVEN_SKILLS, rewrite_text
 
 SKILLS: Final = COVEN_SKILLS
+AGENTS: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
 # Skills whose override is not written yet: rendered from the source without the rewrite table.
 PENDING_OVERRIDE: Final = ("subagent-driven-development",)
 PREFIX: Final = "coven-"
