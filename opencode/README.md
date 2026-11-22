@@ -75,7 +75,9 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
 
   The `.env` rules are the second layer. The first is the plugin's guard, which runs coven's
   `deny_secrets.py` before each `read`, `grep`, `glob`, `shell`, `write`, `edit` and `patch`.
-  Config rules cannot read a shell line, so `shell` is covered by the plugin layer only.
+  Config rules cannot read a shell line, so `shell` is covered by the plugin layer only. The guard
+  fails closed: an error or a timeout (`guardTimeoutMs`, 5 s) refuses the call. Other tools (MCP,
+  `webfetch`, `subagent`, `skill`) pass, as on Claude Code.
 
 - `run` checks that the runtime reports the pinned version, warns by name when the key variable is
   unset, and replaces itself with OpenCode in the profile's environment. Arguments for OpenCode
@@ -90,8 +92,8 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   (a server started for the check lists `coven` as active; it polls up to 10 s, because 2.3.2 lists
   no plugin until they have loaded), `skills` (the same server lists only built-in skills and the
   profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and
-  `project config` (a warning for a repo config that is ignored here) and `superpowers` (a warning
-  when a `superpowers-<x>` skill is missing from the profile).
+  `project config` (a warning for a repo config that is ignored here) and `superpowers` (check 9, a
+  warning when a `superpowers-<x>` skill is missing from the profile).
 
 ## The tool_choice hook
 
@@ -187,5 +189,5 @@ is not shipped, `${CLAUDE_SKILL_DIR}`) stops the generator with the file and lin
 For such a file, write an override: `opencode/overrides/skills/<name>/<file>` replaces the source
 file of the same path. Its first line is `<!-- opencode override of skills/<name>/<file> sha256:HEX -->`,
 with the sha256 of that source file; the generator strips it. When the source changes, a test fails
-until the override is updated and its hash with it. `subagent-driven-development` has no override
-yet and is rendered from its source untouched (`PENDING_OVERRIDE` in `content.py`).
+until the override is updated and its hash with it. Overrides exist for `subagent-driven-development`,
+`shared-memory`, `handoff` and the routing (`AGENTS.md`).
