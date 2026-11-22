@@ -104,7 +104,8 @@ GROUP_OPENING = {
     "]": re.compile(r"\[[\w.,\-]*\Z"),
 }
 NAME_CHAR = re.compile(r"\w")
-SHELL_VARIABLE = re.compile(r"\$\w+$")
+# `$name`, or `$~name`, `$=name`, `$^name` and the like (zsh parameter flags between `$` and the name).
+SHELL_VARIABLE = re.compile(r"\$[^\w\s]*\w+\Z")
 HOME_VARIABLE = re.compile(r"^(?:\$\{HOME\}|\$HOME(?!\w))")
 PROC = "/proc"
 PATH_KEYS = frozenset({"file_path", "notebook_path", "path"})

@@ -218,6 +218,15 @@ def test_allows_a_name_that_is_an_attribute_of_a_call_or_an_index(bash: Run, com
         "cat '$(' 'a(' ).env",
         # a heredoc inside the substitution holds the opener
         "cat $(cat <<E\na(\nE\n).env",
+        # a zsh parameter with flags still takes a subscript
+        "cat $~a[1].env",
+        "cat $=a[1].env",
+        "cat $^a[1].env",
+        "cat $^~a[1].env",
+        "cat $~a[1,2].env",
+        "cat $==a[1].env",
+        "cat $~a[1].ssh",
+        "cat $~h[k].env",
         # zsh glob qualifiers
         "cat x(#c0).env",
         "cat x(#a0).env",
