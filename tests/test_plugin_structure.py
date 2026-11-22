@@ -55,7 +55,8 @@ def load(path: Path) -> Any:
 
 
 def load_hook(name: str) -> ModuleType:
-    """Import hooks/<name>.py by path, leaving no bytecode, sys.path entry or module behind."""
+    """Import hooks/<name>.py by path: no bytecode is written, sys.path is restored and the loaded
+    module is not registered in sys.modules. Modules it imports itself stay loaded."""
     path = REPO / "hooks" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"coven_test_{name}", path)
     assert spec is not None
