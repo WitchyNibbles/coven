@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Final
 
 from coven import paths
+from coven.opencode import memory, superpowers
+from coven.opencode.content import CONTENT
 from coven.opencode.profile import AGENT_ROLES, ROLES, Layout, OpencodeError, Profile, save_profile
 
 GUARD_TIMEOUT_MS: Final = 5000
@@ -17,6 +19,15 @@ GUARD_TIMEOUT_MS: Final = 5000
 OPENAI_COMPATIBLE: Final = "@opencode/ai/providers/openai-compatible"
 CONFIG_FILE: Final = "opencode.jsonc"
 RUN_FOLDERS: Final = ("data", "cache", "state", "home", "tmp")
+AGENTS_FILE: Final = "AGENTS.md"
+# The second guard layer, global so OpenCode adds it to every agent; last match wins.
+SECRET_RULES: Final = (
+    ("read", "*.env", "deny"),
+    ("read", "*.env.*", "deny"),
+    ("read", "*.env.example", "allow"),
+    ("edit", "*.env", "deny"),
+    ("edit", "*.env.*", "deny"),
+)
 
 
 def plugin_source() -> Path:
@@ -42,7 +53,20 @@ def _provider(profile: Profile) -> dict[str, object]:
     }
 
 
-def config_data(profile: Profile, layout: Layout, coven_root: Path) -> dict[str, object]:
+def _rule(action: str, resource: str, effect: str) -> dict[str, str]:
+    return {"action": action, "resource": resource, "effect": effect}
+
+
+def permissions(layout: Layout, store: Path | None) -> list[dict[str, str]]:
+    """The secret rules, then the allows for the files the prompts and the routing point at."""
+    rules = [_rule(*rule) for rule in SECRET_RULES]
+    outside = [layout.config_dir / "skills", *([store] if store else [])]
+    return rules + [_rule("external_directory", f"{folder}/*", "allow") for folder in outside]
+
+
+def config_data(
+    profile: Profile, layout: Layout, coven_root: Path, store: Path | None = None
+) -> dict[str, object]:
     """The `opencode.jsonc` content, keys in the order the file shows them."""
 
     def model_ref(role: str) -> str:
@@ -58,12 +82,16 @@ def config_data(profile: Profile, layout: Layout, coven_root: Path) -> dict[str,
     data["plugins"] = [
         {"package": str(layout.plugin_dir), "options": plugin_options(profile, coven_root)}
     ]
+    data["experimental"] = {"todo": True}
+    data["permissions"] = permissions(layout, store)
     return data
 
 
-def render_config(profile: Profile, layout: Layout, coven_root: Path) -> str:
+def render_config(
+    profile: Profile, layout: Layout, coven_root: Path, store: Path | None = None
+) -> str:
     """Plain JSON, no comments, so doctor and the guard test parse it with a JSON parser."""
-    return json.dumps(config_data(profile, layout, coven_root), indent=2) + "\n"
+    return json.dumps(config_data(profile, layout, coven_root, store), indent=2) + "\n"
 
 
 def _copy_plugin(source: Path, target: Path) -> None:
@@ -115,15 +143,40 @@ def _swap_and_save(targets: list[tuple[Path, Path]], save: Callable[[], None]) -
         raise
 
 
-def write_profile(profile: Profile, layout: Layout, coven_root: Path, source: Path) -> None:
-    """Write the config dir, the plugin copy and `profile.json`, all of them or none."""
+def _write_config_dir(
+    config_new: Path, profile: Profile, layout: Layout, coven_root: Path, content: Path
+) -> list[str]:
+    """Fill the new config dir; returns the superpowers skills that were not found."""
+    if not (content / AGENTS_FILE).is_file():
+        raise OpencodeError(f"the generated content is missing: {content / AGENTS_FILE}")
+    store = memory.store_path()
+    shutil.copytree(content, config_new)
+    missing = superpowers.copy(superpowers.find(), config_new / "skills")
+    routing = (content / AGENTS_FILE).read_text(encoding="utf-8").rstrip("\n")
+    tail = memory.agents_tail(store, missing)
+    (config_new / AGENTS_FILE).write_text(f"{routing}\n\n{tail}", encoding="utf-8")
+    (config_new / CONFIG_FILE).write_text(render_config(profile, layout, coven_root, store))
+    return missing
+
+
+def write_profile(
+    profile: Profile,
+    layout: Layout,
+    coven_root: Path,
+    source: Path,
+    *,
+    content: Path = CONTENT,
+) -> list[str]:
+    """Write the config dir, the plugin copy and `profile.json`, all of them or none.
+
+    Returns the superpowers skills setup could not find.
+    """
     work = layout.root / f".tmp-{os.getpid()}"
     config_new, plugin_new = work / "config-opencode", work / "plugin-coven"
     targets = [(config_new, layout.config_dir), (plugin_new, layout.plugin_dir)]
     shutil.rmtree(work, ignore_errors=True)
     try:
-        config_new.mkdir(parents=True)
-        (config_new / CONFIG_FILE).write_text(render_config(profile, layout, coven_root))
+        missing = _write_config_dir(config_new, profile, layout, coven_root, content)
         _copy_plugin(source, plugin_new)
         for _, target in targets:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -132,5 +185,6 @@ def write_profile(profile: Profile, layout: Layout, coven_root: Path, source: Pa
             shutil.rmtree(_old(target), ignore_errors=True)
         for name in RUN_FOLDERS:
             (layout.root / name).mkdir(exist_ok=True)
+        return missing
     finally:
         shutil.rmtree(work, ignore_errors=True)

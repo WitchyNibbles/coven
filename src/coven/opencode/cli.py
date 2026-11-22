@@ -40,14 +40,23 @@ def _preset_line(profile: Profile) -> str:
     return f"preset: opencode (key from ${profile.key_env} or a stored login)"
 
 
+def _superpowers_warning(missing: list[str]) -> str:
+    return (
+        f"warning: superpowers skills not found: {', '.join(missing)} "
+        "(install the superpowers plugin in Claude Code, then re-run coven opencode setup)"
+    )
+
+
 def run_setup(args: argparse.Namespace) -> int:
     profile = _chosen_profile(args)
     home = layout()
-    generate.write_profile(profile, home, paths.root(), generate.plugin_source())
+    missing = generate.write_profile(profile, home, paths.root(), generate.plugin_source())
     print(f"profile: {home.root}")
     print(_preset_line(profile))
     for role in ROLES:
         print(f"{role}: {profile.model(role)}")
+    if missing:
+        print(_superpowers_warning(missing))
     print("next: coven opencode doctor")
     return 0
 

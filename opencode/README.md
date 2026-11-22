@@ -11,7 +11,9 @@ OpenCode, its config and coven's plugin, apart from any OpenCode you already use
   and the end-to-end run use it to prove the plugin loaded;
 - a `tool_choice` hook for gateways (see below).
 
-PR 3 adds the skills, the agents, the routing and deny-secrets.
+Setup also copies coven's skills, role agents, commands and routing (`opencode/content/`, generated
+from the Claude Code content by `python -m coven.opencode.content`) and the deny-secrets guard,
+described below.
 
 ## The profile
 
@@ -19,7 +21,7 @@ The profile folder `P` is `$XDG_DATA_HOME/coven/opencode`, which is `~/.local/sh
 when `XDG_DATA_HOME` is unset, or the folder in `COVEN_OPENCODE_HOME`.
 
     P/runtime/<version>/   npm prefix holding the pinned OpenCode
-    P/config/opencode/     OPENCODE_CONFIG_DIR: the generated opencode.jsonc
+    P/config/opencode/     OPENCODE_CONFIG_DIR: opencode.jsonc, AGENTS.md, skills/, agents/, commands/
     P/plugin/coven/        a copy of src/, loaded only through the config's `plugins` entry
     P/config, data, cache, state   the four XDG folders OpenCode sees
     P/home/                OPENCODE_TEST_HOME: an empty home, so no .agents or .claude is read
@@ -48,11 +50,32 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm cache
   still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2
   binary instead.
-- `setup` writes the config, the plugin copy and `profile.json`, all or none. The preset
+- `setup` writes the config (with the content below), the plugin copy and `profile.json`, all or
+  none. The preset
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
   value) and `--model lead=ID`; the preset `opencode` takes only models and reads
   `OPENCODE_API_KEY`. Roles are lead, implementer, reviewer, explorer, final-reviewer and title,
   and a role with no model uses the lead's. With no flags it regenerates from `profile.json`.
+  What setup puts in `P/config/opencode/`:
+  - `skills/coven-*`, `agents/` and `commands/`, copied from `opencode/content/`;
+  - `skills/superpowers-<x>` for brainstorming, writing-plans, test-driven-development,
+    systematic-debugging and verification-before-completion, copied from your Claude Code
+    superpowers plugin (found through its installed-plugins file). Only the skill names in the
+    text are renamed, so wording that is Claude Code's (its tool names) stays; that is a known gap.
+    When the plugin is not installed, setup prints one warning, appends a note to `AGENTS.md` and
+    leaves the copies out. A re-run after installing it adds them; a re-run after removing it
+    drops them;
+  - `AGENTS.md`: the routing, then a pointer to your memory store (the folder of `memory_path` in
+    the coven config; with no folder, one line says so). A coven config that cannot be read makes
+    setup fail;
+  - in `opencode.jsonc`: `experimental.todo` (turns on the task-list tool) and `permissions`: deny
+    read and edit of `.env` files (an example file stays readable), then allow file access outside
+    the session's folder for the profile's skills and the memory store, which OpenCode would
+    otherwise ask about and a headless run cannot answer.
+
+  The `.env` rules are the second layer. The first is the plugin's guard, which runs coven's
+  `deny_secrets.py` before each `read`, `grep`, `glob`, `shell`, `write`, `edit` and `patch`.
+  Config rules cannot read a shell line, so `shell` is covered by the plugin layer only.
 - `run` checks that the runtime reports the pinned version, warns by name when the key variable is
   unset, and replaces itself with OpenCode in the profile's environment. Arguments for OpenCode
   follow `--`.
@@ -66,7 +89,8 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   (a server started for the check lists `coven` as active; it polls up to 10 s, because 2.3.2 lists
   no plugin until they have loaded), `skills` (the same server lists only built-in skills and the
   profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and
-  `project config` (a warning for a repo config that is ignored here).
+  `project config` (a warning for a repo config that is ignored here) and `superpowers` (a warning
+  when a `superpowers-<x>` skill is missing from the profile).
 
 ## The tool_choice hook
 

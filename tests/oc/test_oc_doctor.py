@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ def test_a_good_profile_passes_every_check_in_order(good: Good):
     reader = Reader()
     done = run_doctor(good.layout, good.cwd, read=reader)
     assert [name for name, _ in done] == NAMES
-    assert [outcome.status for _, outcome in done] == ["ok"] * 8
+    assert [outcome.status for _, outcome in done] == ["ok"] * 9
     assert exit_code(done) == 0
     assert len(reader.calls) == 1
 
@@ -191,6 +192,29 @@ def test_config_is_compared_with_the_config_of_coven_s_real_root(
     assert asked == [paths.root()]
 
 
+def test_a_missing_superpowers_folder_warns_with_the_fix_and_exits_zero(good: Good):
+    shutil.rmtree(good.layout.config_dir / "skills" / "superpowers-writing-plans")
+    shutil.rmtree(good.layout.config_dir / "skills" / "superpowers-brainstorming")
+    done = run_doctor(good.layout, good.cwd, read=Reader())
+    found = dict(done)["superpowers"]
+    assert found.status == "warn"
+    assert found.detail == "missing superpowers-brainstorming, superpowers-writing-plans"
+    assert found.fix == (
+        "install the superpowers plugin in Claude Code, then re-run `coven opencode setup`"
+    )
+    assert exit_code(done) == 0
+
+
+def test_every_superpowers_folder_present_passes(good: Good):
+    found = results_by_name(good)["superpowers"]
+    assert found == Outcome("ok", "5 superpowers skills copied")
+
+
+def test_the_superpowers_check_needs_no_profile(good: Good):
+    good.layout.profile_file.unlink()
+    assert results_by_name(good)["superpowers"].status == "ok"
+
+
 def test_a_check_that_raises_fails_alone(good: Good, monkeypatch: pytest.MonkeyPatch):
     def boom(*_args: object) -> None:
         raise RuntimeError("kaboom\nsecond line")
@@ -198,7 +222,7 @@ def test_a_check_that_raises_fails_alone(good: Good, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("coven.opencode.checks_runtime.read_paths", boom)
     done = dict(run_doctor(good.layout, good.cwd, read=Reader()))
     assert done["paths"] == Outcome("fail", "RuntimeError: kaboom")
-    assert [done[name].status for name in NAMES if name != "paths"] == ["ok"] * 7
+    assert [done[name].status for name in NAMES if name != "paths"] == ["ok"] * 8
 
 
 def test_render_prints_one_line_per_check_with_the_fix_when_not_ok():

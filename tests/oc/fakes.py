@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import stat
 import sys
 from collections.abc import Mapping
@@ -172,3 +173,30 @@ def fake_npm(dir: Path) -> Path:
         opencode=opencode,
     )
     return _make_executable(dir / "npm", f"#!{sys.executable}\n{body}")
+
+
+SUPERPOWERS_KEY: Final = "superpowers@claude-plugins-official"
+SUPERPOWERS_NAMES: Final = (
+    "brainstorming",
+    "writing-plans",
+    "test-driven-development",
+    "systematic-debugging",
+    "verification-before-completion",
+)
+
+
+def install_superpowers(
+    plugins: Path, names: tuple[str, ...] = SUPERPOWERS_NAMES, *, as_list: bool = True
+) -> Path:
+    """A fake Claude Code plugins folder with superpowers installed; returns its `skills/`."""
+    install = plugins / "cache" / "superpowers" / "5.0.0"
+    for name in names:
+        folder = install / "skills" / name
+        folder.mkdir(parents=True)
+        body = f"---\nname: {name}\n---\nNext, use superpowers:writing-plans and `Read`.\n"
+        (folder / "SKILL.md").write_text(body)
+        (folder / "notes.txt").write_text("kept as is: superpowers:writing-plans\n")
+    entry = {"installPath": str(install), "version": "5.0.0"}
+    data = {"version": 2, "plugins": {SUPERPOWERS_KEY: [entry] if as_list else entry}}
+    (plugins / "installed_plugins.json").write_text(json.dumps(data))
+    return install / "skills"
