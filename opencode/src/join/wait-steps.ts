@@ -1,4 +1,3 @@
-import { noop } from "./noop.ts";
 import type { JoinRecord } from "./record.ts";
 import { reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
@@ -70,24 +69,27 @@ export function feedReports(
   }
 }
 
-/** Resolves when the signal aborts; the caller rethrows `signal.reason` itself. */
-export function abortion(signal: AbortSignal): {
-  aborted: Promise<undefined>;
-  dispose: () => void;
-} {
-  let onAbort: () => void = noop;
-  const aborted = new Promise<undefined>((resolve) => {
-    onAbort = () => {
+/**
+ * Resolves when `signal` aborts, and stops listening once `until` aborts; the caller rethrows
+ * `signal.reason` itself.
+ */
+export function whenAborted(
+  signal: AbortSignal,
+  until: AbortSignal,
+): Promise<undefined> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
       resolve(undefined);
-    };
+      return;
+    }
+    signal.addEventListener(
+      "abort",
+      () => {
+        resolve(undefined);
+      },
+      { once: true, signal: until },
+    );
   });
-  signal.addEventListener("abort", onAbort, { once: true });
-  return {
-    aborted,
-    dispose: () => {
-      signal.removeEventListener("abort", onAbort);
-    },
-  };
 }
 
 /** The record as it stands, with no host call: what a timeout reports. */

@@ -3,11 +3,11 @@ import type { AwaitInput } from "./input.ts";
 import { noop } from "./noop.ts";
 import type { ChildStatus, JoinRecord } from "./record.ts";
 import {
-  abortion,
   checkChild,
   feedReports,
   lookupFailed,
   snapshot,
+  whenAborted,
 } from "./wait-steps.ts";
 import type {
   AwaitResult,
@@ -45,7 +45,6 @@ class Wait {
   private readonly call: CallContext;
   private readonly record: JoinRecord;
   private readonly host: Host;
-  private readonly abortion: ReturnType<typeof abortion>;
   private readonly idleWatch = new AbortController();
 
   constructor(
@@ -58,7 +57,14 @@ class Wait {
     this.call = call;
     this.record = record;
     this.host = host;
-    this.abortion = abortion(call.signal);
+    // the idle watch ends with the call, so the listener goes with it
+    call.signal.addEventListener(
+      "abort",
+      () => {
+        this.wake?.();
+      },
+      { once: true, signal: this.idleWatch.signal },
+    );
     this.start = host.now();
     this.nextHistory = this.start;
     this.nextProgress = this.start + PROGRESS_EVERY_MS;
@@ -83,7 +89,6 @@ class Wait {
     } finally {
       off();
       this.idleWatch.abort();
-      this.abortion.dispose();
     }
   }
 
@@ -147,7 +152,7 @@ class Wait {
     try {
       const outcome = await Promise.race([
         op.then((value) => ({ value })),
-        this.abortion.aborted,
+        whenAborted(this.call.signal, sleeper.signal),
         this.deadlineHit(sleeper.signal),
       ]);
       this.call.signal.throwIfAborted();
@@ -277,7 +282,7 @@ class Wait {
 
   /** Waits for a record change, the next deadline or the abort, whichever comes first. */
   private async pause(now: number, view: View): Promise<void> {
-    if (this.changed) {
+    if (this.changed || this.call.signal.aborted) {
       return;
     }
     const sleeper = new AbortController();
@@ -288,7 +293,7 @@ class Wait {
       .sleep(Math.max(0, this.nextWake(view) - now), sleeper.signal)
       .catch(noop);
     try {
-      await Promise.race([woken, slept, this.abortion.aborted]);
+      await Promise.race([woken, slept]);
     } finally {
       this.wake = undefined;
       sleeper.abort();
