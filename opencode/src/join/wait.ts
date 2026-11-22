@@ -19,13 +19,7 @@ import type {
 } from "./wait-types.ts";
 
 export { NotAChildError, UnknownSessionError } from "./wait-types.ts";
-export type {
-  AwaitResult,
-  CallContext,
-  DoneChild,
-  HistoryItem,
-  Host,
-} from "./wait-types.ts";
+export type { AwaitResult, HistoryItem, Host } from "./wait-types.ts";
 
 const HISTORY_EVERY_MS = 15_000;
 const PROGRESS_EVERY_MS = 30_000;
