@@ -94,7 +94,7 @@ await test("an allowed call resolves and the payload carries the session directo
     [
       {
         tool_name: "Bash",
-        tool_input: { command: "ls" },
+        tool_input: { command: "ls", workdir: "/x" },
         cwd: DIRECTORY,
         hook_event_name: "PreToolUse",
       },

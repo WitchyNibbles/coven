@@ -178,7 +178,7 @@ await test("a non-object input for a checked tool fails closed", () => {
 
 function paths(patchText: string): string[] {
   const result = payloads("patch", { patchText }, CWD);
-  assert.notEqual(result, "unchecked");
+  assert.ok(Array.isArray(result));
   return result.map((entry) => String(entry.tool_input["file_path"]));
 }
 
