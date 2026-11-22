@@ -8,7 +8,7 @@ new breakage. It is not a fresh review — the full review already happened.
 that the fix itself broke nothing.
 
 ```
-Subagent (coven:reviewer):
+subagent (agent: reviewer):
   description: "Re-review Task N fix round R"
   model: [MODEL — leave out for a routine re-review: the reviewer role's
          default applies; name one per SKILL.md Model Selection if the fix is risky]

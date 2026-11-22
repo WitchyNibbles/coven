@@ -21,8 +21,6 @@ from coven.opencode.rewrite import COMMANDS, COVEN_SKILLS, rewrite_text
 SKILLS: Final = COVEN_SKILLS
 # The rendered order of the agent files; `rewrite.AGENTS` is the same set, whose order only the table reads.
 AGENTS: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
-# Skills whose override is not written yet: rendered from the source without the rewrite table.
-PENDING_OVERRIDE: Final = ("subagent-driven-development",)
 PREFIX: Final = "coven-"
 OVERRIDES_REL: Final = Path("opencode/overrides")
 OVERRIDES: Final = paths.root() / OVERRIDES_REL
@@ -133,7 +131,7 @@ def _copy(repo: Path, skill: str, rel: Path, target: Path) -> None:
     if rel.suffix != ".md":
         shutil.copy2(_file(repo, skill, rel), target)
         return
-    text = _read(repo, skill, rel, rewrite=skill not in PENDING_OVERRIDE)
+    text = _read(repo, skill, rel)
     if rel.name == "SKILL.md":
         text = _with_name(
             text, PREFIX + skill, _file(repo, skill, rel).relative_to(repo).as_posix()

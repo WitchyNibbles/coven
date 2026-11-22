@@ -8,7 +8,7 @@ code quality.
 more, nothing less) and is well-built (clean, tested, maintainable)
 
 ```
-Subagent (coven:reviewer):
+subagent (agent: reviewer):
   description: "Review Task N (spec + quality)"
   model: [MODEL — leave out for a routine task review: the reviewer role's
          default applies; name one per SKILL.md Model Selection for a risky diff]
@@ -208,7 +208,7 @@ Subagent (coven:reviewer):
 - `[MODEL]` — leave out for a routine task review (the reviewer role's default
   applies); name one per SKILL.md Model Selection for a risky diff. A final
   whole-branch review is not dispatched from this template: it uses the
-  `coven:final-reviewer` role and names no model
+  `final-reviewer` role and names no model
 - `[BRIEF_FILE]` — REQUIRED: the task brief file (the path the controller gives you; same
   file the implementer worked from)
 - `[GLOBAL_CONSTRAINTS]` — the binding requirements copied verbatim from

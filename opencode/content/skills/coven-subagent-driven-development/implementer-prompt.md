@@ -3,7 +3,7 @@
 Use this template when dispatching an implementer subagent.
 
 ```
-Subagent (coven:implementer):
+subagent (agent: implementer):
   description: "Implement Task N: [task name]"
   model: [MODEL — leave out for the role's default (Sonnet); name one per
          SKILL.md Model Selection to go up (fix rounds 4-5, design work) or down]

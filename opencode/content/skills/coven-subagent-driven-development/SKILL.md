@@ -3,7 +3,7 @@ name: coven-subagent-driven-development
 description: Use when executing implementation plans with independent tasks in the current session
 ---
 
-<!-- Adapted from obra/superpowers @ bb92a77 (MIT), see LICENSE and the repo's NOTICE. coven changes: roles are the plugin agents `coven:implementer`, `coven:reviewer` and `coven:final-reviewer`; reviewers re-run targeted checks and verify `.coven/check.py` receipts; routine reviews leave the model out (the reviewer's default), final whole-branch reviews use `coven:final-reviewer` and name no model. -->
+<!-- Adapted from obra/superpowers @ bb92a77 (MIT), see LICENSE and the repo's NOTICE. coven changes: roles are the agents `implementer`, `reviewer` and `final-reviewer`; reviewers re-run targeted checks and verify `.coven/check.py` receipts; routine reviews leave the model out (the reviewer's configured model), final whole-branch reviews use `final-reviewer` and name no model. OpenCode changes: dispatch is the `subagent` tool, children are awaited with `await_agents`, fix rounds 1-3 resume the implementer by `sessionID`, scripts are called by the skill's base directory. -->
 
 # Subagent-Driven Development
 
@@ -39,16 +39,16 @@ digraph when_to_use {
     "Have implementation plan?" [shape=diamond];
     "Tasks mostly independent?" [shape=diamond];
     "Partner chose inline, or no subagent tool?" [shape=diamond];
-    "coven:subagent-driven-development" [shape=box];
-    "superpowers:executing-plans" [shape=box];
+    "coven-subagent-driven-development" [shape=box];
+    "superpowers-executing-plans" [shape=box];
     "Manual execution or brainstorm first" [shape=box];
 
     "Have implementation plan?" -> "Tasks mostly independent?" [label="yes"];
     "Have implementation plan?" -> "Manual execution or brainstorm first" [label="no"];
     "Tasks mostly independent?" -> "Partner chose inline, or no subagent tool?" [label="yes"];
     "Tasks mostly independent?" -> "Manual execution or brainstorm first" [label="no - tightly coupled"];
-    "Partner chose inline, or no subagent tool?" -> "superpowers:executing-plans" [label="yes"];
-    "Partner chose inline, or no subagent tool?" -> "coven:subagent-driven-development" [label="no"];
+    "Partner chose inline, or no subagent tool?" -> "superpowers-executing-plans" [label="yes"];
+    "Partner chose inline, or no subagent tool?" -> "coven-subagent-driven-development" [label="no"];
 }
 ```
 
@@ -90,7 +90,7 @@ digraph process {
     "Dispatch final code reviewer (../requesting-code-review/code-reviewer.md)" [shape=box];
     "Final findings? ONE fix dispatch, one scoped re-review, adjudicate residuals" [shape=box];
     "Final review clean: delete this plan's workspace" [shape=box];
-    "Use superpowers:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
+    "Use superpowers-finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Setup: worktree, ledger check, read plan, pre-flight review" -> "Dispatch implementer subagent (./implementer-prompt.md)";
     "Dispatch implementer subagent (./implementer-prompt.md)" -> "Implementer asks questions?";
@@ -119,14 +119,14 @@ digraph process {
     "More tasks remain?" -> "Dispatch final code reviewer (../requesting-code-review/code-reviewer.md)" [label="no"];
     "Dispatch final code reviewer (../requesting-code-review/code-reviewer.md)" -> "Final findings? ONE fix dispatch, one scoped re-review, adjudicate residuals";
     "Final findings? ONE fix dispatch, one scoped re-review, adjudicate residuals" -> "Final review clean: delete this plan's workspace";
-    "Final review clean: delete this plan's workspace" -> "Use superpowers:finishing-a-development-branch";
+    "Final review clean: delete this plan's workspace" -> "Use superpowers-finishing-a-development-branch";
 }
 ```
 
 ## Setup
 
 Ensure the work happens in an isolated workspace: use
-superpowers:using-git-worktrees to create one or verify the existing one.
+superpowers-using-git-worktrees to create one or verify the existing one.
 Never start implementation on a main/master branch without your human
 partner's explicit consent.
 
@@ -135,9 +135,10 @@ controllers that lost their place have re-dispatched entire completed task
 sequences — the single most expensive failure observed. Track progress in
 a ledger file, not only in todos.
 
-- Each plan owns a workspace (`${CLAUDE_SKILL_DIR}` below is this skill's folder; Claude Code fills
-  it in): at skill start, run
-  `bash "${CLAUDE_SKILL_DIR}/scripts/sdd-workspace" PLAN_FILE` — it prints the plan's git-ignored
+- Each plan owns a workspace (`<base directory of this skill>` below is this skill's folder; the
+  `skill` tool prints it as `Base directory for this skill: <dir>` when the skill loads): at skill
+  start, run
+  `bash "<base directory of this skill>/scripts/sdd-workspace" PLAN_FILE` — it prints the plan's git-ignored
   directory (under `<repo-root>/.superpowers/sdd/`), home to
   every artifact for THIS plan: ledger, briefs, reports, review packages.
   Another plan's directory is never yours to read or write.
@@ -157,7 +158,7 @@ a ledger file, not only in todos.
   that happens, recover from `git log`.
 
 Read the plan once, note its context and Global Constraints, and create a
-todo per task. If the plan names a Spec, read that too: the spec is the
+todo per task with `todowrite`. If the plan names a Spec, read that too: the spec is the
 authority the plan argues from, and conflicts inside the plan resolve
 against it. A plan with no reachable spec gets a ledger note saying so —
 rulings made without one are provisional.
@@ -193,25 +194,26 @@ Use the least powerful model that can handle each role to conserve cost and incr
 **Integration and judgment tasks** (multi-file coordination, pattern matching, debugging): use a standard model.
 
 **Architecture and design tasks**: use the most capable available model.
-The final whole-branch review is one of these — it dispatches the `final-reviewer` role
-(`subagent_type: "coven:final-reviewer"`) and names no model. The role carries the most capable
-model at effort high; the `coven:reviewer` role defaults to a lower tier, so a final review sent
+The final whole-branch review is one of these — it dispatches the `final-reviewer` agent
+(`agent: "final-reviewer"`) and names no model. That agent's configured model is the most capable
+one in the profile; the `reviewer` agent's configured model is a lower tier, so a final review sent
 to it would not get one.
 
 **Review tasks**: choose the model with the same judgment, scaled to the
 diff's size, complexity, and risk. A routine task review leaves the model out
-and runs on the reviewer role's own default; a subtle concurrency change
+and runs on the `reviewer` agent's configured model; a subtle concurrency change
 names a more capable model. Scoped re-reviews of small fix diffs take a
 cheap-to-mid tier.
 
 **Fix-loop escalation (rounds 4-5)**: use a model at least one tier above
 the implementer that got stuck.
 
-**Dispatch with `subagent_type: "coven:implementer"` and pass `model` only to depart from its
-default** (Sonnet): up for rounds 4-5 and design tasks, down for transcription work. A review
-(`coven:reviewer` or `coven:final-reviewer`) leaves the model out too: the role's own default
-applies. Never dispatch an implementer as `general-purpose` with no model: it would inherit your
-session's model — often the most capable and most expensive — which silently defeats this section.
+**Dispatch with `agent: "implementer"` and pass `model` only to depart from the agent's
+configured model** (`agents.implementer.model` in the profile config): up for rounds 4-5 and design
+tasks, down for transcription work. A review (`agent: "reviewer"` or `agent: "final-reviewer"`)
+leaves the model out too: the agent's configured model applies. Never dispatch an implementer
+under any other agent id: it would run on that agent's own model or your session's — often the
+most capable and most expensive — which silently defeats this section.
 
 **Turn count beats token price.** Wall-clock and context cost scale with how
 many turns a subagent takes, and the cheapest models routinely take 2-3× the
@@ -240,24 +242,44 @@ Everything you paste into a dispatch prompt — and everything a subagent
 prints back — stays resident in your context for the rest of the session
 and is re-read on every later turn. Hand artifacts over as files.
 
-**Waiting on dispatched subagents:** never poll a wait interface with
+**Dispatching and awaiting:** the `subagent` tool takes `agent` (the agent id),
+`description`, `prompt`, an optional `model` and an optional `sessionID` (a
+follow-up to an existing child session). It always runs in the background and
+returns the child's `sessionID` at once, not its report. Keep each returned id
+in the ledger beside its role and task: the ids not yet reported are your
+pending set. Before you read any report or act on a child's work, call
+`await_agents({ids: <pending only>, mode: "all"})` — pass only the ids still
+pending (the result lists them under `pending`); the tool keeps no cursor, so
+an id that already reported comes back at once. `mode: "any"` returns as soon
+as one of several independent children has reported. The result lists each
+child's `sessionID` and `state` under `done`; each child's report follows as a
+`<subagent>` message. `completed`, `error` and `cancelled` are final.
+A `running` or progress report is not a result. The child still has background
+work, and the wait goes on. A child that ended with `ended-without-report`
+gave no status — its last text is in the result's `report`; resume it with its
+`sessionID` and ask for the report. A child that came back as `removed` is
+gone: dispatch it again.
+
+**Waiting on dispatched subagents:** never poll `await_agents` with
 short timeouts, and never sit in one silent, open-ended wait either.
 While you have local work — ledger updates, packaging the next review,
 reading reports — keep working; child results arrive on their own.
 When you are genuinely idle, wait in bounded stretches (five to ten
-minutes, where your platform allows), and between stretches post one
-line of status and reconcile your live children: list them, and chase
-any that finished without reporting. A bounded stretch keeps nearly
+minutes: pass `timeoutSeconds` of 300 to 600; a timeout is a result with
+`timedOut: true` and the ids still pending, not an error), and between
+stretches post one line of status and reconcile your live children: call
+`await_agents` again with the pending ids, and chase any that finished
+without reporting. A bounded stretch keeps nearly
 all of a long wait's efficiency while guaranteeing a stuck or lost
 child is noticed within minutes, not at the end of the session.
 
 ### 1. Dispatch the implementer
 
-Dispatch it as `subagent_type: "coven:implementer"`. Record BASE (`git rev-parse HEAD`) before dispatching — the review package
+Dispatch it with the `subagent` tool as `agent: "implementer"`, with a `description` and a `prompt`. Record BASE (`git rev-parse HEAD`) before dispatching — the review package
 and fix-round diffs need it.
 
 - **Task brief:** before dispatching an implementer, run
-  `bash "${CLAUDE_SKILL_DIR}/scripts/task-brief" PLAN_FILE N` — it extracts the task's full text to a
+  `bash "<base directory of this skill>/scripts/task-brief" PLAN_FILE N` — it extracts the task's full text to a
   uniquely named file and prints the path. Compose the dispatch so the
   brief stays the single source of
   requirements. Your dispatch should contain: (1) one line on where this
@@ -282,11 +304,13 @@ and fix-round diffs need it.
   not helpers, and never a reviewer. Review arrives from you, after the
   report. In real sessions, every reviewer a worker spawned duplicated
   the task review the controller dispatched anyway — a full extra
-  review seat per task.
+  review seat per task. Here `experimental.subagent_depth` is 1, so a subagent
+  cannot start another subagent at all.
 - If an earlier task parked a finding in the area this task touches, carry
   a pointer to that ledger entry in the dispatch.
-- Record the implementer's agent identity from the dispatch result —
-  fix-loop rounds 1-3 resume this agent.
+- Record the implementer's `sessionID` from the dispatch result in the
+  ledger — fix-loop rounds 1-3 resume this child by passing it to `subagent`
+  as `sessionID`.
 - Never dispatch multiple implementation subagents in parallel (conflicts).
 
 Template: [implementer-prompt.md](implementer-prompt.md)
@@ -295,7 +319,7 @@ Template: [implementer-prompt.md](implementer-prompt.md)
 
 Implementer subagents report one of four statuses. Handle each appropriately:
 
-**DONE:** Generate the review package (`bash "${CLAUDE_SKILL_DIR}/scripts/review-package" PLAN_FILE BASE HEAD` — it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer — never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
+**DONE:** Generate the review package (`bash "<base directory of this skill>/scripts/review-package" PLAN_FILE BASE HEAD` — it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer — never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
 
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
 
@@ -315,9 +339,9 @@ rush it into implementation.
 
 ### 3. Review the task
 
-Every review dispatch (task reviewer, re-review) uses the `coven:reviewer`
-subagent role (`subagent_type: "coven:reviewer"`), never `general-purpose`;
-the final whole-branch review uses the `coven:final-reviewer` role (see Final Review).
+Every review dispatch (task reviewer, re-review) uses the `reviewer`
+agent (`agent: "reviewer"`), never another agent id;
+the final whole-branch review uses the `final-reviewer` agent (see Final Review).
 
 Per-task reviews are task-scoped gates. The broad review happens once, at the
 final whole-branch review. Never skip the task review, and never accept a
@@ -326,7 +350,7 @@ required. Implementer self-review never replaces the task review; both are
 needed.
 
 - Hand the reviewer its diff as a file: run
-  `bash "${CLAUDE_SKILL_DIR}/scripts/review-package" PLAN_FILE BASE HEAD` and pass the reviewer the file path
+  `bash "<base directory of this skill>/scripts/review-package" PLAN_FILE BASE HEAD` and pass the reviewer the file path
   it prints (or, without bash: `git log --oneline`, `git diff --stat`,
   and `git diff -U10` for the range, redirected to one uniquely named
   file). The output never enters your own context, and the reviewer sees
@@ -397,12 +421,15 @@ scoped re-review. Five rounds maximum per task:
 
 **Rounds 1-3 — resume the original implementer.** Send it the open findings
 verbatim. Its context is intact: it knows the task, the code, and its own
-choices. If your harness cannot send another message to a live subagent,
-dispatch a fresh implementer carrying the brief path, the report-file path,
-and the findings — the report file is the persistent memory either way.
+choices. Call `subagent` with `agent: "implementer"`, the recorded `sessionID`
+and the findings as the `prompt`; the resumed child is pending again, so put
+its id back in your pending set and await it. If that session is gone
+(`removed`), dispatch a fresh implementer carrying the brief path, the
+report-file path, and the findings — the report file is the persistent memory
+either way.
 
 **Rounds 4-5 — dispatch a fresh implementer on a more capable model** (per
-Model Selection), with the brief path, the report-file path, the open
+Model Selection; a new `subagent` call with no `sessionID`), with the brief path, the report-file path, the open
 findings, and this framing: "A prior implementer attempted this task
 [N] times; you own it now. Read the report file for what was tried." A loop
 that survives three resumes usually means the implementer cannot see its
@@ -416,7 +443,7 @@ and the receipt line; dispatch the re-review once all three are present. Name th
 covering test files in the fix message — a one-line fix does not need the
 whole suite.
 
-**The re-review is scoped.** Run `bash "${CLAUDE_SKILL_DIR}/scripts/review-package" PLAN_FILE FIX_BASE HEAD`
+**The re-review is scoped.** Run `bash "<base directory of this skill>/scripts/review-package" PLAN_FILE FIX_BASE HEAD`
 where FIX_BASE is the head the previous review saw, and dispatch
 [re-review-prompt.md](re-review-prompt.md) with the findings list, the
 brief, the report file, and the printed diff path. The re-reviewer verdicts
@@ -468,12 +495,12 @@ parked-with-ruling at the cap.
 ## Final Review
 
 The final whole-branch review gets a package too: run
-`bash "${CLAUDE_SKILL_DIR}/scripts/review-package" PLAN_FILE MERGE_BASE HEAD` (MERGE_BASE = the commit the
+`bash "<base directory of this skill>/scripts/review-package" PLAN_FILE MERGE_BASE HEAD` (MERGE_BASE = the commit the
 branch started from, e.g. `git merge-base main HEAD`) and include the
 printed path in the final review dispatch, so the final reviewer reads
 one file instead of re-deriving the branch diff with git commands. Dispatch
-the `coven:final-reviewer` role (`subagent_type: "coven:final-reviewer"`) and name no model, as
-Model Selection says, using the template of `coven:requesting-code-review`,
+the `final-reviewer` agent (`agent: "final-reviewer"`) and name no model, as
+Model Selection says, using the template of `coven-requesting-code-review`,
 [code-reviewer.md](../requesting-code-review/code-reviewer.md), which
 requires the full-mode check receipt for the branch HEAD. Point it at
 the ledger's deferred-minor and parked lines so it can triage which must be
@@ -483,8 +510,8 @@ If the final whole-branch review returns findings, dispatch ONE fix subagent
 with the complete findings list — not one fixer per finding.
 Per-finding fixers each rebuild context and re-run suites; a real
 session's final-review fix wave cost more than all its tasks combined.
-Then run exactly one scoped re-review of the fix wave on the `coven:reviewer` role
-(`bash "${CLAUDE_SKILL_DIR}/scripts/review-package" PLAN_FILE FIX_BASE HEAD` over the fix range,
+Then run exactly one scoped re-review of the fix wave on the `reviewer` agent
+(`bash "<base directory of this skill>/scripts/review-package" PLAN_FILE FIX_BASE HEAD` over the fix range,
 [re-review-prompt.md](re-review-prompt.md)).
 Adjudicate any residual findings as in the task loop's breaker: park with
 rulings, or rule on the load-bearing ones and ledger what you decided. Only
@@ -508,7 +535,7 @@ delete this plan's workspace (`rm -rf <workspace>`) — the git history is
 the record now. Sibling directories belong to other plans; leave them
 alone.
 
-Use superpowers:finishing-a-development-branch.
+Use superpowers-finishing-a-development-branch.
 
 ## Common Rationalizations
 
@@ -531,12 +558,12 @@ You: I'm using Subagent-Driven Development to execute this plan.
 
 [Setup: worktree verified]
 [Read plan file once: docs/superpowers/plans/feature-plan.md]
-[Resolve workspace: bash "${CLAUDE_SKILL_DIR}/scripts/sdd-workspace" docs/superpowers/plans/feature-plan.md — no ledger inside, fresh start]
+[Resolve workspace: bash "<base directory of this skill>/scripts/sdd-workspace" docs/superpowers/plans/feature-plan.md — no ledger inside, fresh start]
 [Create todos for all tasks]
 
 Task 1: Hook installation script
 
-[Run task-brief for Task 1; dispatch implementer with brief + report paths + context]
+[Run task-brief for Task 1; dispatch the implementer (`subagent`, `agent: "implementer"`) with brief + report paths + context; ledger its `sessionID`; `await_agents` on it]
 
 Implementer: "Before I begin - should the hook be installed at user or system level?"
 
@@ -548,7 +575,7 @@ Implementer: [Later]
   - Self-review: Found I missed --force flag, added it
   - Committed
 
-[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
+[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer (`agent: "reviewer"`) with the printed path; `await_agents` on it]
 Task reviewer: Spec ✅ - all requirements met, nothing extra.
   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
 
@@ -556,23 +583,23 @@ Task reviewer: Spec ✅ - all requirements met, nothing extra.
 
 Task 2: Recovery modes
 
-[Run task-brief for Task 2; dispatch implementer with brief + report paths + context]
+[Run task-brief for Task 2; dispatch the implementer (`subagent`, `agent: "implementer"`) with brief + report paths + context; ledger its `sessionID`; `await_agents` on it]
 
 Implementer: [No questions]
   - Added verify/repair modes
   - 8/8 tests passing
   - Committed
 
-[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
+[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer (`agent: "reviewer"`) with the printed path; `await_agents` on it]
 Task reviewer: Spec ❌:
   - Missing: Progress reporting (spec says "report every 100 items")
   Issues (Important): Magic number (100)
 
-[Fix round 1: resume the implementer with both findings]
+[Fix round 1: resume the implementer (`subagent` with its `sessionID`) with both findings; `await_agents` on it]
 Implementer: Added progress reporting, extracted PROGRESS_INTERVAL constant.
   Re-ran test/recovery.test.js — 10/10 passing. Fix report appended.
 
-[Run review-package PLAN_FILE FIX_BASE HEAD; dispatch scoped re-review]
+[Run review-package PLAN_FILE FIX_BASE HEAD; dispatch scoped re-review (`agent: "reviewer"`); `await_agents` on it]
 Re-reviewer: Missing progress reporting — ADDRESSED (src/recovery.js:41).
   Magic number — ADDRESSED (src/recovery.js:7). New breakage: none.
   Verdict: all findings addressed.
@@ -583,10 +610,10 @@ Re-reviewer: Missing progress reporting — ADDRESSED (src/recovery.js:41).
 ...
 
 [After all tasks]
-[Run review-package PLAN_FILE MERGE_BASE HEAD; dispatch the final code review on the `coven:final-reviewer` role, no model named]
+[Run review-package PLAN_FILE MERGE_BASE HEAD; dispatch the final code review with `agent: "final-reviewer"`, no model named; `await_agents` on it]
 Final reviewer: All requirements met. Deferred minors triaged: none block merge.
 
 [Delete this plan's workspace — the record now lives in git]
 
-Done! Using superpowers:finishing-a-development-branch.
+Done! Using superpowers-finishing-a-development-branch.
 ```

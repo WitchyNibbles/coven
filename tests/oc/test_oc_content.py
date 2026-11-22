@@ -127,15 +127,43 @@ def test_overrides_mirror_a_source_path() -> None:
 
 
 def test_no_machine_paths() -> None:
-    # Task 2 removes this skip together with PENDING_OVERRIDE.
-    skipped = {("skills", f"coven-{name}") for name in content.PENDING_OVERRIDE}
-    pattern = re.compile(r"/home/|/Users/|~/\.")
+    # The shipped sources use generic example paths; only this machine's paths are leaks.
+    machine = (str(REPO), str(Path.home()))
     hits = [
         str(rel)
         for rel in files_under(RENDERED)
-        if rel.parts[:2] not in skipped and pattern.search((RENDERED / rel).read_text())
+        if any(path in (RENDERED / rel).read_text() for path in machine)
     ]
     assert not hits
+
+
+SDD = RENDERED / "skills" / "coven-subagent-driven-development"
+SDD_FORBIDDEN = ("${CLAUDE_", "subagent_type", "Claude Code", "SendMessage")
+
+
+def test_sdd_dispatch_words() -> None:
+    text = (SDD / "SKILL.md").read_text()
+    assert "`subagent` tool" in text
+    for agent in ("implementer", "reviewer", "final-reviewer"):
+        assert f'agent: "{agent}"' in text, agent
+    assert 'await_agents({ids: <pending only>, mode: "all"})' in text
+    assert "A `running` or progress report is not a result." in text
+    assert [word for word in SDD_FORBIDDEN if word in text] == []
+
+
+def test_sdd_scripts_by_base_dir() -> None:
+    text = (SDD / "SKILL.md").read_text()
+    calls = re.findall(r"bash \"[^\"]*/scripts/[\w-]+\"", text)
+    assert calls
+    assert all(
+        re.fullmatch(r'bash "<base directory of this skill>/scripts/[\w-]+"', c) for c in calls
+    )
+    assert len(calls) == len(re.findall(r"/scripts/", text))
+    assert "Base directory for this skill" in text
+
+
+def test_no_pending_override() -> None:
+    assert not hasattr(content, "PENDING_OVERRIDE")
 
 
 def descriptions() -> list[tuple[Path, str]]:
