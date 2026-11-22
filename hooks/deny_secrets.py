@@ -74,8 +74,8 @@ Limits. This is defence in depth, not a boundary; these get through:
 - an interpreter payload, such as a `python3 -c "..."` string, that builds a path;
 - a variable glued to the name (`$d.env`, where `d` ends in `/`), which reads `dir/.env`.
 
-The hook's matcher in hooks.json is `Read|Grep|Glob|Bash|Edit|Write|NotebookEdit`; `MultiEdit` is
-handled in case a call still arrives under that name.
+The hook's matcher in hooks.json is `Read|Grep|Glob|Bash|Write|Edit|NotebookEdit|MultiEdit`;
+`MultiEdit` is there for older Claude Code versions that still offer that tool.
 """
 
 import errno
