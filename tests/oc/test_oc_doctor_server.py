@@ -47,6 +47,15 @@ def test_skills_under_the_profile_config_are_coven_s(good: Good):
     assert found["skills"].status == "ok"
 
 
+def test_a_skill_path_that_climbs_out_of_the_profile_config_is_foreign(good: Good):
+    climbing = {"id": "sneaky", "path": f"{good.layout.config_dir}/skills/../../x/SKILL.md"}
+    found = results_by_name(
+        good, view([{"id": "coven", "state": {"status": "active"}}], [climbing])
+    )
+    assert found["skills"].status == "fail"
+    assert "sneaky" in found["skills"].detail
+
+
 def test_a_skill_without_a_path_counts_as_foreign(good: Good):
     found = results_by_name(
         good, view([{"id": "coven", "state": {"status": "active"}}], [{"id": "x"}])

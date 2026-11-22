@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from coven.opencode.canary import COVEN_PLUGIN
@@ -32,7 +33,8 @@ def _is_coven_skill(path: object, config_dir: Path) -> bool:
     if path.startswith("skill://"):
         return True
     own = config_dir / "skills"
-    return any(Path(path).is_relative_to(folder) for folder in (own, own.resolve()))
+    where = Path(os.path.normpath(path))  # `skills/../../x` must not read as inside `skills`
+    return any(where.is_relative_to(folder) for folder in (own, own.resolve()))
 
 
 def skills_check(ctx: Context) -> Outcome:
