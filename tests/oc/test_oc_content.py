@@ -71,7 +71,12 @@ def test_commands(name: str) -> None:
         for line in frontmatter(REPO / "skills" / name / "SKILL.md")
         if line.startswith("description:")
     )
-    assert frontmatter(path) == [source_description]
+    (written,) = frontmatter(path)
+    # The generator may quote the value for YAML; the text is the source's.
+    assert (
+        written.removeprefix("description:").strip().strip('"')
+        == source_description.removeprefix("description:").strip()
+    )
     assert path.read_text().endswith("\n$ARGUMENTS\n")
 
 
