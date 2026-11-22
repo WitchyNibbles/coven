@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ExecuteBeforeEvent } from "./context.ts";
 import { payloads } from "./deny-secrets.ts";
 import type { Payload } from "./deny-secrets.ts";
+import { messageOf } from "./join/fields.ts";
 
 /** The part of a child process the guard uses; `ChildProcess` fits, so a test can stand in for it. */
 export interface GuardChild {
@@ -37,13 +38,9 @@ function cut(message: string): Error {
   return new Error(message.slice(0, MAX_MESSAGE));
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function startFailure(error: unknown): Error {
   return cut(
-    `coven deny-secrets: could not start the guard (${describe(error)}); blocking`,
+    `coven deny-secrets: could not start the guard (${messageOf(error)}); blocking`,
   );
 }
 
@@ -63,23 +60,24 @@ function verdict(
   return cut(`coven deny-secrets: guard failed (${how}); blocking`);
 }
 
-/**
- * Runs the Python guard on one payload through `fail-closed.sh`. Resolves when it allows; rejects
- * with the text the model should see when it refuses, fails, times out or cannot start.
- */
-export function runGuard(
-  covenRoot: string,
+/** The arguments of `sh`: `fail-closed.sh` and the Python guard it runs. */
+function scriptArgs(covenRoot: string): readonly string[] {
+  return [
+    join(covenRoot, "hooks", "fail-closed.sh"),
+    join(covenRoot, "hooks", "deny_secrets.py"),
+  ];
+}
+
+function runScript(
+  args: readonly string[],
   payload: Payload,
   timeoutMs: number,
-  spawnFn: SpawnFn = spawnShell,
+  spawnFn: SpawnFn,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let child: GuardChild;
     try {
-      child = spawnFn("sh", [
-        join(covenRoot, "hooks", "fail-closed.sh"),
-        join(covenRoot, "hooks", "deny_secrets.py"),
-      ]);
+      child = spawnFn("sh", args);
     } catch (error) {
       reject(startFailure(error));
       return;
@@ -108,7 +106,9 @@ export function runGuard(
     }, timeoutMs);
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
-      stderr = (stderr + chunk).slice(0, MAX_STDERR);
+      if (stderr.length < MAX_STDERR) {
+        stderr = (stderr + chunk).slice(0, MAX_STDERR);
+      }
     });
     // A guard that exits before reading breaks the pipe; its exit code still decides.
     child.stdin.on("error", () => undefined);
@@ -120,6 +120,19 @@ export function runGuard(
     });
     child.stdin.end(JSON.stringify(payload));
   });
+}
+
+/**
+ * Runs the Python guard on one payload through `fail-closed.sh`. Resolves when it allows; rejects
+ * with the text the model should see when it refuses, fails, times out or cannot start.
+ */
+export function runGuard(
+  covenRoot: string,
+  payload: Payload,
+  timeoutMs: number,
+  spawnFn: SpawnFn = spawnShell,
+): Promise<void> {
+  return runScript(scriptArgs(covenRoot), payload, timeoutMs, spawnFn);
 }
 
 export interface DenySecretsOptions {
@@ -141,17 +154,18 @@ export function denySecretsHook(
   options: DenySecretsOptions,
   deps: DenySecretsDeps,
 ): (event: ExecuteBeforeEvent) => Promise<void> {
+  const args = scriptArgs(options.covenRoot);
   return async (event) => {
     const checked = payloads(event.tool, event.input, deps.directory);
     if (checked === "unchecked") {
       return;
     }
     for (const payload of checked) {
-      await runGuard(
-        options.covenRoot,
+      await runScript(
+        args,
         payload,
         options.guardTimeoutMs,
-        deps.spawn,
+        deps.spawn ?? spawnShell,
       );
     }
   };

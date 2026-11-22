@@ -1,12 +1,9 @@
+import { messageOf } from "./fields.ts";
 import type { JoinRecord } from "./record.ts";
 import { reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
 import { NotAChildError, UnknownSessionError } from "./wait-types.ts";
 import type { HistoryItem, View } from "./wait-types.ts";
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function lookupFailed(id: string): (error: unknown) => never {
   return (error) => {
