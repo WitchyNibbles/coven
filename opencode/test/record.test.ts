@@ -251,3 +251,14 @@ await test("a listener sees the state already changed", () => {
   record.observe(report("completed"));
   assert.equal(seen, "completed");
 });
+
+await test("reportCount counts the reports seen for one child from its parent", () => {
+  const { record } = setup();
+  assert.equal(record.reportCount("ses_p", "ses_c"), 0);
+  record.observe(started);
+  record.observe(report("running"));
+  record.observe(report("completed"));
+  assert.equal(record.reportCount("ses_p", "ses_c"), 2);
+  assert.equal(record.reportCount("ses_other", "ses_c"), 0);
+  assert.equal(record.reportCount("ses_p", "ses_d"), 0);
+});

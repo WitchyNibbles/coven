@@ -26,6 +26,7 @@ interface Child {
   description: string;
   startSeq: number;
   reportSeq: number;
+  reportCount: number;
   reportState?: ReportState;
   endedSeq: number;
   endedAt: number;
@@ -38,6 +39,7 @@ function newChild(now: number): Child {
     description: "",
     startSeq: 0,
     reportSeq: 0,
+    reportCount: 0,
     endedSeq: 0,
     endedAt: 0,
     removed: false,
@@ -101,6 +103,14 @@ export class JoinRecord {
       return { sessionID: childID, description: "" };
     }
     return describe(child, childID);
+  }
+
+  /** How many reports the record has seen for this child from this parent. */
+  reportCount(parentID: string, childID: string): number {
+    const child = this.children.get(childID);
+    return child !== undefined && child.parentID === parentID
+      ? child.reportCount
+      : 0;
   }
 
   running(parentID: string): ChildStatus[] {
@@ -186,6 +196,7 @@ export class JoinRecord {
         child.parentID = event.parentID;
         child.description = event.description;
         child.reportSeq = this.seq;
+        child.reportCount += 1;
         child.reportState = event.state;
         return;
       }
