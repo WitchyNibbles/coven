@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 from typing import Any
 
 from coven import paths
-from coven.opencode import generate, install, runtime
+from coven.opencode import checks, generate, install, runtime
 from coven.opencode.profile import (
     PINNED_VERSION,
     ROLES,
@@ -63,6 +64,13 @@ def run_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_doctor_command(_args: argparse.Namespace) -> int:
+    results = checks.run_doctor(layout(), Path.cwd())
+    for line in checks.render(results):
+        print(line)
+    return checks.exit_code(results)
+
+
 def register(subparsers: Any) -> None:
     parser = subparsers.add_parser(
         "opencode", help="set up, check and run coven's own OpenCode profile"
@@ -95,3 +103,7 @@ def register(subparsers: Any) -> None:
         "--version", default=PINNED_VERSION, metavar="X.Y.Z", help=f"default {PINNED_VERSION}"
     )
     install_parser.set_defaults(handler=run_install)
+    doctor = commands.add_parser(
+        "doctor", help="check the runtime, the profile's isolation and coven's plugin"
+    )
+    doctor.set_defaults(handler=run_doctor_command)

@@ -41,7 +41,7 @@ def serve():
     if SERVE == "ignore-term":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if SERVE != "silent":
-        print("opencode server listening on http://127.0.0.1:0", flush=True)
+        print("server listening on http://127.0.0.1:1", flush=True)
     while True:
         time.sleep(0.1)
 
