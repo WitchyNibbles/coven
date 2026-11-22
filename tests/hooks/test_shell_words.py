@@ -2,29 +2,18 @@
 deny-secrets; `code_text`, `heredoc_bodies`, `without_patterns` and `simple_commands` serve the
 production guard. The scanner only reads command strings: no test runs one."""
 
-import importlib.util
-import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+from support import load_module
 
 SCRIPT = Path(__file__).resolve().parents[2] / "hooks" / "shell_words.py"
 
 
 def load() -> ModuleType:
     """Import the module by path, without writing a __pycache__ next to the hook."""
-    spec = importlib.util.spec_from_file_location("shell_words_under_test", SCRIPT)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
+    return load_module(SCRIPT, "shell_words_under_test", register=True)
 
 
 module = load()

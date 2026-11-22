@@ -11,7 +11,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from support import CHECK_MODULES, REAL_RUNNER, REPO, commit_all, receipt
+from support import CHECK_MODULES, REAL_RUNNER, REPO, commit_all, load_module, receipt
 
 STANDARD = REPO / "standard"
 # The siblings check.py loads when it starts.
@@ -246,13 +246,7 @@ def load_copy(directory: Path, name: str) -> ModuleType:
     directory.mkdir(parents=True)
     for module in CHECK_MODULES:
         shutil.copy(STANDARD / module, directory / module)
-    spec = importlib.util.spec_from_file_location(name, directory / "check.py")
-    assert spec is not None
-    assert spec.loader is not None
-    loaded = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = loaded
-    spec.loader.exec_module(loaded)
-    return loaded
+    return load_module(directory / "check.py", name, register=True)
 
 
 @pytest.fixture

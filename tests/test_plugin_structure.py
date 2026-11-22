@@ -1,18 +1,16 @@
 """The plugin's manifest, marketplace, hook wiring and agent definitions."""
 
-import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
-from support import REPO, commit_all, git
+from support import REPO, commit_all, git, load_module
 
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = REPO / ".claude-plugin" / "marketplace.json"
@@ -57,19 +55,7 @@ def load(path: Path) -> Any:
 def load_hook(name: str) -> ModuleType:
     """Import hooks/<name>.py by path: no bytecode is written, sys.path is restored and the loaded
     module is not registered in sys.modules. Modules it imports itself stay loaded."""
-    path = REPO / "hooks" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(f"coven_test_{name}", path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    path_before, bytecode_before = list(sys.path), sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = path_before
-        sys.dont_write_bytecode = bytecode_before
-    return module
+    return load_module(REPO / "hooks" / f"{name}.py", f"coven_test_{name}", restore_path=True)
 
 
 def split_agent(name: str) -> tuple[dict[str, str], str]:

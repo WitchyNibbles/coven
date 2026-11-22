@@ -1,4 +1,3 @@
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -6,18 +5,14 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from support import load_module
 
 PROJECT_KEY = Path(__file__).resolve().parents[2] / "hooks" / "project_key.py"
 
 
 @pytest.fixture(scope="module")
 def key_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("coven_test_project_key", PROJECT_KEY)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module(PROJECT_KEY, "coven_test_project_key")
 
 
 def git(cwd: Path, *args: str) -> None:

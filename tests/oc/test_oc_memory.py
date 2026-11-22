@@ -1,9 +1,8 @@
-import importlib.util
 import json
 from pathlib import Path
 
 import pytest
-from support import REPO
+from support import REPO, load_module
 
 from coven import paths
 from coven.errors import CovenError
@@ -13,13 +12,7 @@ NO_STORE = "No shared memory store on this machine (run `coven setup`)."
 
 
 def hook_head() -> tuple[str, ...]:
-    spec = importlib.util.spec_from_file_location(
-        "coven_test_memory_context", REPO / "hooks" / "memory_context.py"
-    )
-    assert spec
-    assert spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_module(REPO / "hooks" / "memory_context.py", "coven_test_memory_context")
     return module.HEAD
 
 

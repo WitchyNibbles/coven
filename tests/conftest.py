@@ -1,6 +1,5 @@
 import copy
 import hashlib
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -21,6 +20,7 @@ from support import (
     dump_toml,
     git,
     install_once,
+    load_module,
     npm_ci,
 )
 
@@ -82,13 +82,7 @@ def few_nested_workers(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(scope="session")
 def check() -> ModuleType:
     """The standard's check script, loaded from the repo without installing it."""
-    spec = importlib.util.spec_from_file_location("coven_check", CHECK)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_module(CHECK, "coven_check", register=True)
 
 
 @pytest.fixture(scope="session")

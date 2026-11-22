@@ -2,7 +2,6 @@
 at module top, so a missing or broken one crashes the hook, and fail-closed.sh must turn that crash
 into a block."""
 
-import importlib.util
 import json
 import os
 import shutil
@@ -15,6 +14,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from support import load_module
 
 from coven import safe_json
 
@@ -54,12 +54,7 @@ def break_module(folder: Path, name: str, source: str | None) -> None:
 
 
 def load(path: Path, name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module(path, name)
 
 
 @pytest.fixture
