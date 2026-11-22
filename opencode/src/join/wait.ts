@@ -185,8 +185,10 @@ class Wait {
     };
   }
 
-  /** Feeds a report only while the record has seen fewer of them than the history holds. */
-  /** True when the timeout came first. */
+  /**
+   * Feeds a report only while the record has seen fewer of them than the history holds.
+   * True when the timeout came first.
+   */
   private async readHistory(): Promise<boolean> {
     const { callerID } = this.call;
     const read = this.host.history(callerID);
