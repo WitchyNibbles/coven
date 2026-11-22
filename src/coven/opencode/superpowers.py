@@ -20,7 +20,12 @@ SKILLS: Final = (
     "executing-plans",
 )
 PLUGIN_PREFIX: Final = "superpowers@"
-FOLDER_PREFIX: Final = "superpowers-"
+_FOLDER_PREFIX: Final = "superpowers-"
+
+
+def folder_id(name: str) -> str:
+    """The folder and skill id of the copied superpowers skill `name`."""
+    return f"{_FOLDER_PREFIX}{name}"
 
 
 def _install_paths(entry: object) -> list[Path]:
@@ -72,5 +77,5 @@ def copy(source: Path | None, skills_dir: Path) -> list[str]:
         if source is None or not (source / name / "SKILL.md").is_file():
             missing.append(name)
         else:
-            _copy_skill(source / name, skills_dir / f"{FOLDER_PREFIX}{name}")
+            _copy_skill(source / name, skills_dir / folder_id(name))
     return missing

@@ -7,7 +7,7 @@ from typing import Final
 
 from coven.config import load_config
 from coven.opencode.rewrite import rename_skills
-from coven.opencode.superpowers import FOLDER_PREFIX
+from coven.opencode.superpowers import folder_id
 
 # The header of hooks/memory_context.py (`HEAD`), a test keeps the two in step.
 HEAD: Final = (
@@ -40,7 +40,7 @@ def _pointer(store: Path | None) -> str:
 
 
 def _superpowers_note(missing: list[str]) -> str:
-    names = ", ".join(f"{FOLDER_PREFIX}{name}" for name in missing)
+    names = ", ".join(folder_id(name) for name in missing)
     return (
         f"Superpowers skills not found on this machine: {names}. Steps that tell you to load "
         "one are skipped until `coven opencode setup` finds them."
