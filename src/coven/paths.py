@@ -23,6 +23,16 @@ def cache_dir() -> Path:
     return base / "coven"
 
 
+def opencode_home() -> Path:
+    """`${COVEN_OPENCODE_HOME:-${XDG_DATA_HOME:-~/.local/share}/coven/opencode}`: the OpenCode profile."""
+    override = os.environ.get("COVEN_OPENCODE_HOME")
+    if override:
+        return Path(override)
+    configured = os.environ.get("XDG_DATA_HOME")
+    base = Path(configured) if configured else Path.home() / ".local" / "share"
+    return base / "coven" / "opencode"
+
+
 def logs_dir() -> Path:
     return cache_dir() / "logs"
 
