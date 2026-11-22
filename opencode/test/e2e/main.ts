@@ -1,6 +1,6 @@
 /**
  * The end-to-end runs on OpenCode 2.3.2 with the scripted fake model.
- * Run it with `npm run e2e [-- join]`: `npm run e2e` enters a network namespace with only the
+ * Run it with `npm run e2e [-- runtime|join]`: `npm run e2e` enters a network namespace with only the
  * loopback interface and starts this file there. It does nothing unless COVEN_E2E=1, and it
  * refuses to start outside that namespace.
  */
@@ -21,6 +21,7 @@ import { CHECKS } from "./checks.ts";
 import type { Runs } from "./checks.ts";
 import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
+import { runtimeSuite } from "./runtime/checks.ts";
 import { decide } from "./script.ts";
 
 const PROJECT = fileURLToPath(new URL("./project", import.meta.url));
@@ -76,7 +77,10 @@ const joinSuite: Suite = async (harness) => {
 
 /** The suites in the order they run when none is named: the runtime suite comes first. */
 const SUITE_ORDER = ["runtime", "join"];
-const SUITES: Record<string, Suite> = { join: joinSuite };
+const SUITES: Record<string, Suite> = {
+  runtime: runtimeSuite,
+  join: joinSuite,
+};
 
 /** The suites to run, or the refusal when one is not known. */
 function chosenSuites(argv: readonly string[]): readonly string[] | string {

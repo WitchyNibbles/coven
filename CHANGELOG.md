@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `coven opencode install | setup | run | doctor`: coven's own OpenCode 2.3.2 in a profile of its
+  own, apart from any OpenCode you use, with coven's plugin (`coven_ping`, `await_agents` and a
+  `tool_choice` hook for LiteLLM and vLLM gateways) and an offline end-to-end run.
 - A production guard: name your live systems in the memory store (`systems/guard.json`), and a
   PreToolUse hook refuses any tool call that reaches one unless a live approval names the exact
   command. It also holds project manager sessions off the store, coven's config, Claude Code's
