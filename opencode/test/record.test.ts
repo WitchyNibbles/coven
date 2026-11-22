@@ -89,6 +89,13 @@ await test("a report from before the newest start does not hide ended", () => {
   assert.equal(status.endedAt, 7_000);
 });
 
+await test("ended alone, with no start or report seen, sets endedAt", () => {
+  const { record, clock } = setup();
+  clock.now = 9_000;
+  record.observe(ended);
+  assert.equal(record.status("ses_p", "ses_c").endedAt, 9_000);
+});
+
 await test("a final report after ended replaces endedAt with the end", () => {
   const { record } = setup();
   record.observe(started);

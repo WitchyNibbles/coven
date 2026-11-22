@@ -54,7 +54,7 @@ function finalReport(child: Child): EndState | undefined {
 }
 
 function endedWithoutReport(child: Child): boolean {
-  return child.endedSeq > child.startSeq && child.reportSeq < child.startSeq;
+  return child.endedSeq > child.startSeq && child.reportSeq <= child.startSeq;
 }
 
 function describe(child: Child, sessionID: string): ChildStatus {
@@ -77,7 +77,6 @@ export class JoinRecord {
   private readonly children = new Map<string, Child>();
   private readonly listeners = new Set<() => void>();
   private seq = 0;
-
   private readonly now: () => number;
 
   constructor(now: () => number) {
