@@ -44,6 +44,22 @@ await test("any ends on the first, and a second any returns at once", async () =
   );
 });
 
+await test("any with two children already done returns both in done", async () => {
+  const w = setup();
+  w.report(A, "completed");
+  w.report(C, "error");
+  const result = await w.run({ mode: "any" }).promise;
+  assert.deepEqual(
+    result.done.map((child) => [child.sessionID, child.state]),
+    [
+      [A, "completed"],
+      [C, "error"],
+    ],
+  );
+  assert.deepEqual(result.pending, [B]);
+  assert.equal(result.timedOut, false);
+});
+
 await test("a final report present only in history ends the wait at once", async () => {
   const w = setup([A]);
   w.history.push({
