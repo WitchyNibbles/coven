@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
+import { setImmediate as tick } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import type { Payload } from "../src/deny-secrets.ts";
 import { runGuard } from "../src/guard.ts";
@@ -7,7 +9,7 @@ import { exits, fakeSpawn, never } from "./guard-fake.ts";
 import type { Behaviour } from "./guard-fake.ts";
 
 const ROOT = "/opt/coven";
-const REPO = new URL("../..", import.meta.url).pathname;
+const REPO = fileURLToPath(new URL("../..", import.meta.url));
 
 function payload(tool_name: string, file: string): Payload {
   return {
@@ -89,31 +91,55 @@ await test("a child killed by a signal blocks", async () => {
   );
 });
 
+/** Runs `body` with `setTimeout` mocked, so a timeout is a tick of the clock and not a wait. */
+async function withClock(body: () => Promise<void>): Promise<void> {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    await body();
+  } finally {
+    mock.timers.reset();
+  }
+}
+
 await test("a timeout kills the child with SIGKILL and blocks", async () => {
-  const { calls, outcome } = run(never, 20);
-  await assert.rejects(
-    outcome,
-    /^Error: coven deny-secrets: guard timed out after 20 ms; blocking$/,
-  );
-  assert.deepEqual(calls[0]?.kills, ["SIGKILL"]);
+  await withClock(async () => {
+    const { calls, outcome } = run(never, 20);
+    const refused = assert.rejects(
+      outcome,
+      /^Error: coven deny-secrets: guard timed out after 20 ms; blocking$/,
+    );
+    await tick();
+    mock.timers.tick(19);
+    assert.deepEqual(calls[0]?.kills, []);
+    mock.timers.tick(1);
+    await refused;
+    assert.deepEqual(calls[0]?.kills, ["SIGKILL"]);
+  });
 });
 
 await test("a close after the timeout changes nothing", async () => {
-  const { calls, outcome } = run((child) => {
-    setTimeout(() => {
-      child.finish(0);
-    }, 60);
-  }, 20);
-  await assert.rejects(outcome, /timed out after 20 ms/);
-  await new Promise((resolve) => setTimeout(resolve, 80));
-  assert.deepEqual(calls[0]?.kills, ["SIGKILL"]);
+  await withClock(async () => {
+    const { calls, outcome } = run((child) => {
+      setTimeout(() => {
+        child.finish(0);
+      }, 60);
+    }, 20);
+    const refused = assert.rejects(outcome, /timed out after 20 ms/);
+    await tick();
+    mock.timers.tick(20);
+    await refused;
+    mock.timers.tick(60);
+    assert.deepEqual(calls[0]?.kills, ["SIGKILL"]);
+  });
 });
 
 await test("a finished guard does not leave the timer or a kill behind", async () => {
-  const { calls, outcome } = run(exits(0), 20);
-  await outcome;
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual(calls[0]?.kills, []);
+  await withClock(async () => {
+    const { calls, outcome } = run(exits(0), 20);
+    await outcome;
+    mock.timers.tick(50);
+    assert.deepEqual(calls[0]?.kills, []);
+  });
 });
 
 await test("a spawn error blocks with its message", async () => {
@@ -175,4 +201,22 @@ await test("the real guard refuses an env file and allows a readme", async () =>
     /^Error: coven deny-secrets: /,
   );
   await runGuard(REPO, payload("Read", "README.md"), 30_000);
+});
+
+await test("the real guard refuses a shell whose workdir is the ssh directory", async () => {
+  const shell: Payload = {
+    tool_name: "Bash",
+    tool_input: { command: "cat id_rsa", workdir: `${REPO}/.ssh` },
+    cwd: REPO,
+    hook_event_name: "PreToolUse",
+  };
+  await assert.rejects(
+    runGuard(REPO, shell, 30_000),
+    /^Error: coven deny-secrets: /,
+  );
+  const plain: Payload = {
+    ...shell,
+    tool_input: { command: "cat id_rsa", workdir: `${REPO}/docs` },
+  };
+  await runGuard(REPO, plain, 30_000);
 });

@@ -19,13 +19,19 @@ function pre(tool_name: string, tool_input: Record<string, unknown>) {
 await test("shell maps to Bash with the command", () => {
   assert.deepEqual(
     one("shell", { command: "cat x", workdir: "/elsewhere", timeout: 5 }),
-    pre("Bash", { command: "cat x" }),
+    pre("Bash", { command: "cat x", workdir: "/elsewhere" }),
   );
 });
 
-await test("the shell workdir is never the payload cwd", () => {
-  const result = one("shell", { command: "ls", workdir: "/elsewhere" });
-  assert.deepEqual(result, pre("Bash", { command: "ls" }));
+await test("the shell workdir is checked text and never the payload cwd", () => {
+  assert.deepEqual(
+    one("shell", { command: "ls", workdir: "/elsewhere" }),
+    pre("Bash", { command: "ls", workdir: "/elsewhere" }),
+  );
+  assert.deepEqual(
+    one("shell", { command: "ls" }),
+    pre("Bash", { command: "ls" }),
+  );
 });
 
 await test("read maps to Read with file_path", () => {
@@ -168,4 +174,41 @@ await test("a non-object input for a checked tool fails closed", () => {
       /^Error: coven deny-secrets: unreadable patch input; blocking$/,
     );
   }
+});
+
+function paths(patchText: string): string[] {
+  const result = payloads("patch", { patchText }, CWD);
+  assert.notEqual(result, "unchecked");
+  return result.map((entry) => String(entry.tool_input["file_path"]));
+}
+
+await test("an indented header is still a header", () => {
+  const patch =
+    "*** Begin Patch\n*** Add File: a.txt\n+x\n  *** Add File: .env\n+S=1\n*** End Patch";
+  assert.deepEqual(paths(patch), ["a.txt", ".env"]);
+});
+
+await test("a tab, no-break space or BOM before a header is trimmed", () => {
+  assert.deepEqual(paths("*** Begin Patch\n\t*** Delete File: .env"), [".env"]);
+  assert.deepEqual(paths("*** Begin Patch\n *** Update File: .env"), [".env"]);
+  assert.deepEqual(paths("*** Begin Patch\n﻿*** Add File: .env\n+x"), [".env"]);
+});
+
+await test("a carriage return inside a header path stays in the path", () => {
+  const patch =
+    "*** Begin Patch\n*** Add File: x\r/../.env\n+S=1\n*** End Patch";
+  assert.deepEqual(paths(patch), ["x\r/../.env"]);
+});
+
+await test("line and paragraph separators do not cut a header path", () => {
+  const patch = "*** Add File: x /../.env\n+S\n*** Move to: y .env";
+  assert.deepEqual(paths(patch), ["x /../.env", "y .env"]);
+});
+
+await test("a header with no space after the colon is still checked", () => {
+  assert.deepEqual(paths("*** Update File:.env"), [".env"]);
+});
+
+await test("a body line that only looks like a header is not a header", () => {
+  assert.deepEqual(paths("*** Add File: a\n+*** Add File: b\n"), ["a"]);
 });

@@ -18,7 +18,11 @@ interface Mapping {
 }
 
 const MAPPINGS: ReadonlyMap<string, Mapping> = new Map([
-  ["shell", { name: "Bash", fields: { command: "command" } }],
+  [
+    "shell",
+    // `workdir` rides along: the guard searches every string of the call, so a `.ssh` workdir counts.
+    { name: "Bash", fields: { command: "command", workdir: "workdir" } },
+  ],
   ["read", { name: "Read", fields: { file_path: "path" } }],
   [
     "write",
@@ -45,8 +49,17 @@ const MAPPINGS: ReadonlyMap<string, Mapping> = new Map([
   ["glob", { name: "Glob", fields: { pattern: "pattern", path: "path" } }],
 ]);
 
-const PATCH_HEADER =
-  /^\*\*\* (?:Add File|Update File|Move to|Delete File):(.*)$/gm;
+/**
+ * The header labels of OpenCode's patch grammar. Its parser (`util/src/patch.ts`) trims a line
+ * before it matches one, so this does too, and the labels leave out the space after the colon so
+ * that a header it would reject is still checked.
+ */
+const PATCH_LABELS = [
+  "*** Add File:",
+  "*** Update File:",
+  "*** Move to:",
+  "*** Delete File:",
+];
 
 function blocked(reason: string): Error {
   return new Error(`coven deny-secrets: ${reason}; blocking`);
@@ -67,14 +80,19 @@ function pick(input: Input, fields: Mapping["fields"]): Input {
   return picked;
 }
 
+/** The path a patch line names when it is a file header, as OpenCode reads it; else `undefined`. */
+function headerPath(line: string): string | undefined {
+  const header = line.trim();
+  const label = PATCH_LABELS.find((known) => header.startsWith(known));
+  return label === undefined ? undefined : header.slice(label.length).trim();
+}
+
 /** Every path the patch adds, updates, moves to or deletes, in order. */
 function patchPaths(input: Input): string[] {
   const text = input["patchText"];
-  const paths =
-    typeof text === "string"
-      ? [...text.matchAll(PATCH_HEADER)].map((match) => (match[1] ?? "").trim())
-      : [];
-  const named = paths.filter((path) => path !== "");
+  const named = (typeof text === "string" ? text.split("\n") : [])
+    .map(headerPath)
+    .filter((path): path is string => path !== undefined && path !== "");
   if (named.length === 0) {
     throw blocked("no file in patch");
   }
