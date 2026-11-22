@@ -1,10 +1,10 @@
 import { noop } from "./noop.ts";
+import { isOpen } from "./record.ts";
 import type { JoinRecord } from "./record.ts";
 import type { Host } from "./wait-types.ts";
 
 function markEnded(record: JoinRecord, parentID: string, id: string): void {
-  const { end, endedAt } = record.status(parentID, id);
-  if (end === undefined && endedAt === undefined) {
+  if (isOpen(record.status(parentID, id))) {
     record.observe({ kind: "ended", sessionID: id });
   }
 }

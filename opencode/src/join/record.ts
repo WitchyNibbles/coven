@@ -19,6 +19,11 @@ export interface ChildStatus {
   endedAt?: number;
 }
 
+/** True while the child has neither ended nor been given up on. */
+export function isOpen(status: ChildStatus): boolean {
+  return status.end === undefined && status.endedAt === undefined;
+}
+
 const FORGET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 interface Child {
@@ -119,7 +124,7 @@ export class JoinRecord {
     for (const [childID, child] of this.children) {
       if (child.parentID === parentID) {
         const status = describe(child, childID);
-        if (status.end === undefined && status.endedAt === undefined) {
+        if (isOpen(status)) {
           open.push(status);
         }
       }
