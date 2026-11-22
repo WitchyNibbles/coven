@@ -6,7 +6,9 @@ export interface AwaitInput {
   timeoutSeconds?: number;
 }
 
-export class InputError extends Error {}
+export class InputError extends Error {
+  override name = "InputError";
+}
 
 const MAX_IDS = 16;
 const MAX_TIMEOUT_SECONDS = 86400;

@@ -65,20 +65,23 @@ await test("an unknown id throws UnknownSessionError naming it", async () => {
     w.run({ ids: [A, "ses_gone"] }).promise,
     (error) =>
       error instanceof UnknownSessionError &&
+      error.name === "UnknownSessionError" &&
       error.message.includes("ses_gone"),
   );
 });
 
-await test("a session with another parent throws NotAChildError naming both", async () => {
+await test("a session with another parent throws NotAChildError naming only it", async () => {
   const w = setup([A, B]);
   w.sessions.set(B, { id: B, parentID: "ses_other" });
-  await assert.rejects(
-    w.run({ ids: [A, B] }).promise,
-    (error) =>
-      error instanceof NotAChildError &&
-      error.message.includes(B) &&
-      error.message.includes("ses_other"),
-  );
+  await assert.rejects(w.run({ ids: [A, B] }).promise, (error) => {
+    assert.ok(error instanceof NotAChildError);
+    assert.equal(error.name, "NotAChildError");
+    assert.equal(
+      error.message,
+      `session ${B} is not a child of the calling session`,
+    );
+    return true;
+  });
 });
 
 await test("a failed lookup is an error naming the id", async () => {

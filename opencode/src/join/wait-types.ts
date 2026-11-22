@@ -40,8 +40,13 @@ export interface AwaitResult {
   note: string;
 }
 
-export class UnknownSessionError extends Error {}
-export class NotAChildError extends Error {}
+export class UnknownSessionError extends Error {
+  override name = "UnknownSessionError";
+}
+
+export class NotAChildError extends Error {
+  override name = "NotAChildError";
+}
 
 export interface View {
   done: DoneChild[];

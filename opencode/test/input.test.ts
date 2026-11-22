@@ -13,6 +13,14 @@ function rejected(raw: unknown, mentions: string): void {
   );
 }
 
+await test("an input error carries the stable name InputError", () => {
+  assert.throws(
+    () => parseInput({ ids: [] }, CALLER),
+    (error: unknown) =>
+      error instanceof InputError && error.name === "InputError",
+  );
+});
+
 await test("ids alone default to mode all", () => {
   assert.deepEqual(parseInput({ ids: ["ses_a"] }, CALLER), {
     ids: ["ses_a"],

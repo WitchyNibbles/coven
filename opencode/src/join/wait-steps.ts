@@ -30,7 +30,7 @@ export function checkChild(
   }
   if (session.parentID !== callerID) {
     throw new NotAChildError(
-      `session ${id} is not a child of the calling session ${callerID}, its parent is ${session.parentID ?? "none"}`,
+      `session ${id} is not a child of the calling session`,
     );
   }
 }
