@@ -108,6 +108,21 @@ def test_run_env_passes_the_key_and_server_settings_through(home: Layout):
     )
 
 
+def test_run_env_does_not_keep_an_opencode_setting_named_as_the_key_env(home: Layout):
+    hand_built = Profile("litellm", "http://127.0.0.1:4000/v1", "OPENCODE_CONFIG_CONTENT", {})
+    base = {**BASE, "OPENCODE_CONFIG_CONTENT": "{}"}
+    env = runtime.run_env(hand_built, home, base, offline=False)
+    assert "OPENCODE_CONFIG_CONTENT" not in env
+
+
+def test_run_env_keeps_the_opencode_api_key_as_a_litellm_key_env(home: Layout):
+    profile = Profile("litellm", "http://127.0.0.1:4000/v1", "OPENCODE_API_KEY", {})
+    env = runtime.run_env(
+        profile, home, {**BASE, "OPENCODE_API_KEY": "sk-test-value"}, offline=False
+    )
+    assert env["OPENCODE_API_KEY"] == "sk-test-value"
+
+
 def test_binary_path_defaults_to_the_pinned_runtime(home: Layout):
     assert runtime.binary_path(home) == home.runtime_binary("2.3.2")
 
@@ -213,3 +228,43 @@ def test_run_never_prints_the_key_value(
     runtime.run([], exec_fn=Exec())
     shown = capsys.readouterr()
     assert "sk-test-value" not in shown.out + shown.err
+
+
+def strict_opencode(folder: Path, config_dir: Path) -> Path:
+    """An opencode whose `--version` fails unless it runs in the profile's env."""
+    path = folder / "opencode"
+    folder.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "#!/bin/sh\n"
+        f'[ "$OPENCODE_CONFIG_DIR" = "{config_dir}" ] || exit 1\n'
+        '[ -z "$OPENCODE_CONFIG_CONTENT" ] || exit 1\n'
+        "echo 2.3.2\n"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def test_the_version_probe_runs_in_the_isolated_env(
+    home: Layout, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    saved(home)
+    path = strict_opencode(tmp_path / "strict", home.config_dir)
+    monkeypatch.setenv("COVEN_OPENCODE_BIN", str(path))
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", "/old")
+    monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", "{}")
+    fake = Exec()
+    assert runtime.run([], exec_fn=fake) == 0
+    assert len(fake.calls) == 1
+
+
+def test_a_missing_override_names_the_path_and_the_variable(
+    home: Layout, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    gone = tmp_path / "gone" / "opencode"
+    monkeypatch.setenv("COVEN_OPENCODE_BIN", str(gone))
+    with pytest.raises(runtime.OpencodeError) as caught:
+        runtime.run([], exec_fn=Exec())
+    message = str(caught.value)
+    assert f"{gone} is missing" in message
+    assert "COVEN_OPENCODE_BIN" in message
+    assert "coven opencode install" not in message

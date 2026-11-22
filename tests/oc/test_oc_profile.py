@@ -131,6 +131,19 @@ def test_key_env_must_be_a_name(name: str):
     assert "sk-live-abc123" not in message
 
 
+@pytest.mark.parametrize("name", ["OPENCODE_CONFIG_CONTENT", "OPENCODE_DB"])
+def test_key_env_must_not_be_an_opencode_setting(name: str):
+    message = refused("litellm", LITELLM_URL, name, ["lead=x"])
+    assert "OPENCODE_" in message
+    assert "OPENCODE_API_KEY" in message
+    assert name not in message.replace("OPENCODE_API_KEY", "")
+
+
+def test_key_env_may_be_the_opencode_api_key():
+    made = make_profile("litellm", LITELLM_URL, "OPENCODE_API_KEY", ["lead=x"])
+    assert made.key_env == "OPENCODE_API_KEY"
+
+
 def test_longest_key_env_name_is_accepted():
     assert make_profile("litellm", LITELLM_URL, "K" * 64, ["lead=x"]).key_env == "K" * 64
 
@@ -244,6 +257,7 @@ def test_load_of_good_documents_works_quietly(tmp_path: Path, capsys: pytest.Cap
         {"baseURL": "https://u:sk-secret-1@h/v1"},
         {"keyEnv": "sk-live-abc123"},
         {"keyEnv": "gateway_key"},
+        {"keyEnv": "OPENCODE_CONFIG_CONTENT"},
         {"models": {"lead": "a b"}},
     ],
 )
@@ -252,7 +266,7 @@ def test_load_applies_the_litellm_rules_of_setup(tmp_path: Path, change: dict[st
     message = str(error)
     assert str(Layout(tmp_path).profile_file) in message
     assert "re-run coven opencode setup" in message
-    for value in ("sk-live-abc123", "sk-secret-1", "gateway_key", "a b"):
+    for value in ("sk-live-abc123", "sk-secret-1", "gateway_key", "a b", "CONFIG_CONTENT"):
         assert value not in message
 
 

@@ -10,6 +10,7 @@ from typing import Final
 
 from coven.errors import warn
 from coven.opencode.profile import (
+    OPENCODE_KEY_ENV,
     PINNED_VERSION,
     Layout,
     OpencodeError,
@@ -71,11 +72,18 @@ def isolated_env(
     return env
 
 
+def _may_pass_through(name: str) -> bool:
+    """Whether a key env of this name may come from `base`: never another OPENCODE_ setting."""
+    return name == OPENCODE_KEY_ENV or not name.startswith("OPENCODE_")
+
+
 def run_env(
     profile: Profile, layout: Layout, base: Mapping[str, str], *, offline: bool
 ) -> dict[str, str]:
     """The environment OpenCode runs in: the profile's folders and switches, nothing inherited."""
-    env = isolated_env(layout, base, (profile.key_env,))
+    key_env = profile.key_env
+    kept = (key_env,) if _may_pass_through(key_env) else ()
+    env = isolated_env(layout, base, kept)
     env.update(
         OPENCODE_DISABLE_AUTOUPDATE="1",
         OPENCODE_DISABLE_CLAUDE_CODE="1",
@@ -93,6 +101,10 @@ def checked_binary(home: Layout, base: Mapping[str, str]) -> Path:
     """The runtime binary, once it exists and reports the pinned version."""
     binary = binary_path(home)
     if not binary.is_file():
+        if BINARY_OVERRIDE in os.environ:
+            raise OpencodeError(
+                f"{binary} is missing; fix {BINARY_OVERRIDE} or unset it to use the profile's runtime"
+            )
         raise OpencodeError(MISSING)
     found = binary_version(binary, isolated_env(home, base))
     if found != PINNED_VERSION:

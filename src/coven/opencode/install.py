@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Final
 
 from coven.errors import warn
-from coven.opencode.profile import PINNED_VERSION, Layout, OpencodeError
+from coven.opencode.profile import (
+    OPENCODE_KEY_ENV,
+    PINNED_VERSION,
+    Layout,
+    OpencodeError,
+    load_profile,
+)
 from coven.opencode.runtime import binary_version, isolated_env
 
 PACKAGE: Final = "@opencode/cli"
@@ -23,16 +29,30 @@ def _failure(code: int, stderr: str) -> OpencodeError:
     return OpencodeError(f"npm install failed (exit {code}): {tail}")
 
 
-def _run_npm(npm: str, prefix: Path, version: str, timeout: float) -> None:
+def _run_npm(npm: str, prefix: Path, version: str, env: dict[str, str], timeout: float) -> None:
     command = [npm, "install", "--prefix", str(prefix), "--save-exact", f"{PACKAGE}@{version}"]
     try:
-        done = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        done = subprocess.run(
+            command, env=env, capture_output=True, text=True, timeout=timeout, check=False
+        )
     except subprocess.TimeoutExpired as error:
         raise OpencodeError(f"npm install did not finish within {timeout:.0f} s") from error
     except OSError as error:
         raise OpencodeError(f"cannot run npm: {error}") from error
     if done.returncode != 0:
         raise _failure(done.returncode, done.stderr)
+
+
+def _npm_env(layout: Layout) -> dict[str, str]:
+    """This process's env without the key: npm runs package scripts and must not see it."""
+    secret_names = {OPENCODE_KEY_ENV}
+    try:
+        profile = load_profile(layout)
+    except OpencodeError:
+        profile = None  # a broken profile must not block the install
+    if profile is not None:
+        secret_names.add(profile.key_env)
+    return {k: v for k, v in os.environ.items() if k not in secret_names}
 
 
 def install(layout: Layout, version: str, *, timeout: float = 900.0) -> Path:
@@ -49,7 +69,7 @@ def install(layout: Layout, version: str, *, timeout: float = 900.0) -> Path:
     npm = shutil.which("npm")
     if npm is None:
         raise OpencodeError("npm not found on PATH; install Node.js with npm and re-run")
-    _run_npm(npm, layout.runtime_dir(version), version, timeout)
+    _run_npm(npm, layout.runtime_dir(version), version, _npm_env(layout), timeout)
     found = binary_version(binary, env)
     if found != version:
         raise OpencodeError(f"installed opencode reports {found}, expected {version}")

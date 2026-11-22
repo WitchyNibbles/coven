@@ -70,10 +70,14 @@ import sys
 from pathlib import Path
 
 LOG = Path({log!r})
+ENV_LOG = Path({env_log!r})
 OPENCODE = {opencode!r}
 
 with LOG.open("a") as stream:
     stream.write(" ".join(sys.argv[1:]) + "\\n")
+with ENV_LOG.open("a") as stream:
+    for name in filter(None, os.environ.get("FAKE_NPM_WATCH", "").split(",")):
+        stream.write(name + (" set" if name in os.environ else " unset") + "\\n")
 exit_code = os.environ.get("FAKE_NPM_EXIT")
 if exit_code:
     for number in (1, 2, 3):
@@ -122,13 +126,19 @@ def npm_log(dir: Path) -> Path:
     return dir / "npm.log"
 
 
+def npm_env_log(dir: Path) -> Path:
+    """For each name in `$FAKE_NPM_WATCH` (comma separated), `NAME set` or `NAME unset`: by name only."""
+    return dir / "npm.env"
+
+
 def fake_npm(dir: Path) -> Path:
     """An `npm` that logs its argv and installs a fake opencode into `--prefix`.
 
     The installed opencode reports the version of the package spec it was given, or
-    `$FAKE_OPENCODE_VERSION` when that is set. `$FAKE_NPM_EXIT` makes it print three stderr
+    `$FAKE_OPENCODE_VERSION` when that is set. It notes whether each variable named in
+    `$FAKE_NPM_WATCH` is in its env. `$FAKE_NPM_EXIT` makes it print three stderr
     lines and exit with that code.
     """
     opencode = _opencode_source("__VERSION__", None, "ok")
-    body = _NPM_BODY.format(log=str(npm_log(dir)), opencode=opencode)
+    body = _NPM_BODY.format(log=str(npm_log(dir)), env_log=str(npm_env_log(dir)), opencode=opencode)
     return _make_executable(dir / "npm", f"#!{sys.executable}\n{body}")

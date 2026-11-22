@@ -144,3 +144,14 @@ def test_the_key_value_is_nowhere(
     seen = capsys.readouterr()
     assert "sk-test-value" not in seen.out + seen.err
     assert not any(b"sk-test-value" in data for data in snapshot(home).values())
+
+
+def test_setup_refuses_a_key_env_that_is_an_opencode_setting(
+    home: Path, capsys: pytest.CaptureFixture[str]
+):
+    flags = [flag if flag != "GATEWAY_KEY" else "OPENCODE_CONFIG_CONTENT" for flag in LITELLM_FLAGS]
+    assert setup(*flags) == 1
+    error = capsys.readouterr().err
+    assert "OPENCODE_API_KEY" in error
+    assert "CONFIG_CONTENT" not in error
+    assert not home.exists()

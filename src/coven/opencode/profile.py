@@ -135,6 +135,11 @@ def _check_key_env(name: str) -> str:
             "--key-env takes the name of an environment variable, such as GATEWAY_KEY "
             "(capitals, digits and _, at most 64 characters): the name, not its value"
         )
+    if name.startswith("OPENCODE_") and name != OPENCODE_KEY_ENV:
+        raise OpencodeError(
+            f"--key-env must not be an OPENCODE_ setting: OpenCode reads those as config, "
+            f"and {OPENCODE_KEY_ENV} is the only one allowed"
+        )
     return name
 
 

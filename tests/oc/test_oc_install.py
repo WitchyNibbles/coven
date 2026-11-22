@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import pytest
-from fakes import fake_npm, fake_opencode, npm_log
+from fakes import fake_npm, fake_opencode, npm_env_log, npm_log
 
 from coven import cli
 from coven.opencode import install as installer
-from coven.opencode.profile import Layout, OpencodeError, layout
+from coven.opencode.profile import Layout, OpencodeError, layout, make_profile, save_profile
 
 
 def spec(version: str) -> str:
@@ -109,3 +109,36 @@ def test_cli_install_defaults_to_the_pinned_version(
     assert cli.main(["opencode", "install"]) == 0
     assert str(home.runtime_binary("2.3.2")) in capsys.readouterr().out
     assert cli.main(["opencode", "install", "--version", "2.x"]) == 1
+
+
+def test_npm_does_not_inherit_the_key_env_value(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    save_profile(
+        home, make_profile("litellm", "http://127.0.0.1:4000/v1", "GATEWAY_KEY", ["lead=x"])
+    )
+    for name in ("GATEWAY_KEY", "OPENCODE_API_KEY", "HTTPS_PROXY"):
+        monkeypatch.setenv(name, "sk-test-value")
+    monkeypatch.setenv("FAKE_NPM_WATCH", "GATEWAY_KEY,OPENCODE_API_KEY,HTTPS_PROXY,PATH")
+    installer.install(home, "2.3.2")
+    assert npm_env_log(npm_dir).read_text().splitlines() == [
+        "GATEWAY_KEY unset",
+        "OPENCODE_API_KEY unset",
+        "HTTPS_PROXY set",
+        "PATH set",
+    ]
+
+
+def test_npm_without_a_profile_still_loses_the_opencode_api_key(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("OPENCODE_API_KEY", "sk-test-value")
+    monkeypatch.setenv("FAKE_NPM_WATCH", "OPENCODE_API_KEY")
+    installer.install(home, "2.3.2")
+    assert npm_env_log(npm_dir).read_text().splitlines() == ["OPENCODE_API_KEY unset"]
+
+
+def test_install_does_not_need_a_valid_profile(home: Layout, npm_dir: Path):
+    home.root.mkdir(parents=True)
+    home.profile_file.write_text("not json")
+    assert installer.install(home, "2.3.2") == home.runtime_binary("2.3.2")
