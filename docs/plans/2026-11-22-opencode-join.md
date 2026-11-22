@@ -30,8 +30,8 @@ plugin API (no `@opencode/*` dependency: a local structural type of the parts we
 - Tests never reach the network. Anything that starts OpenCode runs inside `unshare -rn` with the
   scripted fake model only.
 - Never name the private memory store or the work harness; the local pre-commit refuses one word.
-- Commits: `git -c user.name=WitchyNibbles -c user.email=eimimartinezarenas@gmail.com commit`,
-  no `Co-Authored-By`, no "Generated with" line.
+- Commits: made with the repo's public author identity, passed with `git -c` on the commit itself
+  (never by changing git config), no `Co-Authored-By`, no "Generated with" line.
 - Limits from the spec: `ids` 1-16, unique, not the caller; `mode` `all` (default) or `any`;
   `timeoutSeconds` integer 1-86400, optional; progress every 30 s; history re-read every 15 s;
   no-report grace 10 s; resubscribe backoff 1 s doubling to 30 s; record forgets a parent 24 h
