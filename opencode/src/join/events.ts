@@ -43,13 +43,15 @@ function normalizeReport(data: Fields | undefined): Observed | undefined {
   const metadata = fields(payload?.["metadata"]);
   const parentID = ownString(data, "sessionID");
   const childID = ownString(metadata, "childID");
-  const state = stateOf(ownString(payload, "text"), metadata);
   if (
     ownString(metadata, "source") !== "subagent" ||
     parentID === undefined ||
-    childID === undefined ||
-    state === undefined
+    childID === undefined
   ) {
+    return undefined;
+  }
+  const state = stateOf(ownString(payload, "text"), metadata);
+  if (state === undefined) {
     return undefined;
   }
   return {
