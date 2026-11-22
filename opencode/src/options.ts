@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import { isPlainObject, show } from "./join/fields.ts";
 
 export interface CovenOptions {
   covenRoot: string;
@@ -17,10 +18,6 @@ export class OptionsError extends Error {
 const MIN_GUARD_TIMEOUT_MS = 5000;
 const MAX_GUARD_TIMEOUT_MS = 600_000;
 const KNOWN = new Set(["covenRoot", "toolChoiceAuto", "guardTimeoutMs"]);
-
-function show(value: unknown): string {
-  return JSON.stringify(value) ?? String(value);
-}
 
 function parseRoot(raw: unknown): string {
   if (raw === undefined) {
@@ -73,10 +70,10 @@ function parseTimeout(raw: unknown): number {
 /** Checks the options object OpenCode hands the plugin and fills in the defaults. */
 export function parseOptions(raw: unknown): CovenOptions {
   const given = raw ?? {};
-  if (typeof given !== "object" || Array.isArray(given)) {
+  if (!isPlainObject(given)) {
     throw new OptionsError(`expected an object, got ${show(raw)}`);
   }
-  const fields = given as Record<string, unknown>;
+  const fields = given;
   for (const key of Object.keys(fields)) {
     if (!KNOWN.has(key)) {
       throw new OptionsError(`unknown option ${show(key)}`);

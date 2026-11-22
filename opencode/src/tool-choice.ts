@@ -1,4 +1,5 @@
 import type { HttpRequestEvent } from "./context.ts";
+import { isPlainObject } from "./join/fields.ts";
 
 /**
  * Compatibility shim for OpenCode issue #60202: 2.x sends no `tool_choice` to openai-compatible
@@ -22,10 +23,6 @@ function parseJson(body: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function wantsAuto(payload: Record<string, unknown>): boolean {
