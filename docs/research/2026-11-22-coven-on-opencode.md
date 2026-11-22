@@ -352,7 +352,7 @@ What it showed:
 | Wake a parent whose turn ended? | yes, two ways | 2.x already does it: every child sends a `<subagent>` report to the parent's inbox and wakes it. The plugin's `ctx.session.prompt` push woke it too |
 | A hook that stops the turn ending? | no | 2.x session hooks have no turn-end hook. Closest: the `context` hook adds a system reminder before each model request, plus the native wake above. The reminder was written but not run |
 | Which events see another session? | one server sees all | `ctx.event.subscribe` in a plugin and `GET /api/event` both carried events for sessions in two directories. A child created with `parentID` lands in the parent's directory |
-| Works on 1.x? | yes, and less needed | 1.19.6 `task` blocks: 3 parallel calls returned all 3 reports. The same tools load as a 1.x plugin, and its `event` hook sees each child's `session.idle` |
+| Works on 1.x? | yes, and less needed | 1.19.6 and 1.18.34 `task` blocks: 3 parallel calls returned all 3 reports. The same tools load as a 1.x plugin, and its `event` hook sees each child's `session.idle` |
 
 Gotchas for a real version:
 
