@@ -107,6 +107,7 @@ def test_litellm_needs_a_url_and_a_key_env():
 def test_opencode_preset_takes_neither():
     assert "takes no --base-url" in refused("opencode", LITELLM_URL, None, ["lead=x"])
     assert "takes no --key-env" in refused("opencode", None, "GATEWAY_KEY", ["lead=x"])
+    assert "takes no --key-env" in refused("opencode", None, "OPENCODE_API_KEY", ["lead=x"])
 
 
 def test_url_scheme_must_be_http_or_https():
@@ -188,10 +189,10 @@ def test_load_of_a_missing_file_is_none(tmp_path: Path):
     [
         "{not json",
         "[]",
-        '{"format": 2, "preset": "opencode", "baseURL": null, "keyEnv": "K", "models": {"lead": "x"}}',
-        '{"format": 1, "preset": "nope", "baseURL": null, "keyEnv": "K", "models": {"lead": "x"}}',
-        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "K", "models": {}}',
-        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "K", "models": {"boss": "x"}}',
+        '{"format": 2, "preset": "opencode", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {"lead": "x"}}',
+        '{"format": 1, "preset": "nope", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {"lead": "x"}}',
+        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {}}',
+        '{"format": 1, "preset": "opencode", "baseURL": null, "keyEnv": "OPENCODE_API_KEY", "models": {"boss": "x"}}',
         '{"format": 1, "preset": "opencode", "baseURL": null, "models": {"lead": "x"}}',
     ],
 )
@@ -202,3 +203,64 @@ def test_load_of_a_bad_file_names_it_and_the_fix(tmp_path: Path, text: str):
         profile.load_profile(lay)
     assert str(lay.profile_file) in str(caught.value)
     assert "re-run coven opencode setup" in str(caught.value)
+
+
+GOOD_LITELLM = {
+    "format": 1,
+    "preset": "litellm",
+    "baseURL": LITELLM_URL,
+    "keyEnv": "GATEWAY_KEY",
+    "models": {"lead": "big"},
+}
+GOOD_OPENCODE = {
+    **GOOD_LITELLM,
+    "preset": "opencode",
+    "baseURL": None,
+    "keyEnv": "OPENCODE_API_KEY",
+}
+
+
+def loading(tmp_path: Path, document: dict[str, object]) -> OpencodeError:
+    lay = Layout(tmp_path)
+    lay.profile_file.write_text(json.dumps(document))
+    with pytest.raises(OpencodeError) as caught:
+        profile.load_profile(lay)
+    return caught.value
+
+
+def test_load_of_good_documents_works_quietly(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    lay = Layout(tmp_path)
+    for document in (GOOD_LITELLM, GOOD_OPENCODE):
+        lay.profile_file.write_text(json.dumps(document))
+        assert profile.load_profile(lay) is not None
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"baseURL": None},
+        {"baseURL": "ftp://h/v1"},
+        {"baseURL": "https://u:sk-secret-1@h/v1"},
+        {"keyEnv": "sk-live-abc123"},
+        {"keyEnv": "gateway_key"},
+        {"models": {"lead": "a b"}},
+    ],
+)
+def test_load_applies_the_litellm_rules_of_setup(tmp_path: Path, change: dict[str, object]):
+    error = loading(tmp_path, {**GOOD_LITELLM, **change})
+    message = str(error)
+    assert str(Layout(tmp_path).profile_file) in message
+    assert "re-run coven opencode setup" in message
+    for value in ("sk-live-abc123", "sk-secret-1", "gateway_key", "a b"):
+        assert value not in message
+
+
+@pytest.mark.parametrize(
+    "change", [{"keyEnv": "GATEWAY_KEY"}, {"keyEnv": "sk-live-abc123"}, {"baseURL": LITELLM_URL}]
+)
+def test_load_applies_the_opencode_rules_of_setup(tmp_path: Path, change: dict[str, object]):
+    message = str(loading(tmp_path, {**GOOD_OPENCODE, **change}))
+    assert str(Layout(tmp_path).profile_file) in message
+    assert "re-run coven opencode setup" in message
+    assert "sk-live-abc123" not in message

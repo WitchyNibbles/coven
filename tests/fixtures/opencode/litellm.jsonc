@@ -1,0 +1,53 @@
+{
+  "update": "disable",
+  "model": "litellm/big",
+  "agents": {
+    "explorer": {
+      "model": "litellm/small"
+    },
+    "implementer": {
+      "model": "litellm/big"
+    },
+    "reviewer": {
+      "model": "litellm/big"
+    },
+    "final-reviewer": {
+      "model": "litellm/big"
+    },
+    "title": {
+      "model": "litellm/small"
+    }
+  },
+  "providers": {
+    "litellm": {
+      "name": "LiteLLM",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "env": [
+        "GATEWAY_KEY"
+      ],
+      "settings": {
+        "baseURL": "http://127.0.0.1:4000/v1"
+      },
+      "models": {
+        "big": {
+          "name": "big"
+        },
+        "small": {
+          "name": "small"
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "package": "<P>/plugin/coven",
+      "options": {
+        "covenRoot": "<COVEN_ROOT>",
+        "toolChoiceAuto": [
+          "litellm"
+        ],
+        "guardTimeoutMs": 5000
+      }
+    }
+  ]
+}

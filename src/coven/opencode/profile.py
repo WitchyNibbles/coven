@@ -100,16 +100,20 @@ class Profile:
         return self.preset
 
 
+def _check_model_id(role: str, model_id: str) -> None:
+    if not model_id:
+        raise OpencodeError(f"--model {role}= is empty: give a model id after the =")
+    if any(char.isspace() for char in model_id):
+        raise OpencodeError(f"--model {role}= id must have no spaces")
+
+
 def _parse_pair(pair: str) -> tuple[str, str]:
     role, separator, model_id = pair.partition("=")
     if not separator:
         raise OpencodeError(f"--model {pair!r} must be ROLE=ID, for example lead=my-model")
     if role not in ROLES:
         raise OpencodeError(f"unknown role {role!r} in --model: use one of {', '.join(ROLES)}")
-    if not model_id:
-        raise OpencodeError(f"--model {role}= is empty: give a model id after the =")
-    if any(char.isspace() for char in model_id):
-        raise OpencodeError(f"--model {role}= id must have no spaces")
+    _check_model_id(role, model_id)
     return role, model_id
 
 
@@ -134,7 +138,7 @@ def _check_key_env(name: str) -> str:
     return name
 
 
-def _check_base_url(url: str) -> str:
+def _check_base_url(url: str, *, announce: bool = True) -> str:
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise OpencodeError("--base-url must start with http:// or https:// and name a host")
@@ -144,32 +148,43 @@ def _check_base_url(url: str) -> str:
             "the key is read from the --key-env variable"
         )
     trimmed = url.removesuffix("/")
-    if not urlsplit(trimmed).path.endswith("/v1"):
+    if announce and not urlsplit(trimmed).path.endswith("/v1"):
         warn("--base-url does not end in /v1: OpenCode appends /chat/completions to it as given")
     return trimmed
 
 
-def make_profile(
-    preset: str, base_url: str | None, key_env: str | None, model_pairs: Sequence[str]
+def _checked_profile(
+    preset: str,
+    base_url: str | None,
+    key_env: str | None,
+    models: dict[str, str],
+    *,
+    from_file: bool,
 ) -> Profile:
-    """The checked profile for `setup`'s flags, or an OpencodeError saying what to change."""
+    """The profile for these parts: the one set of rules `setup` and `load_profile` share."""
     if preset == "opencode":
         if base_url is not None:
             raise OpencodeError("--preset opencode takes no --base-url")
-        if key_env is not None:
+        if key_env != (OPENCODE_KEY_ENV if from_file else None):
             raise OpencodeError(
                 f"--preset opencode takes no --key-env: it reads {OPENCODE_KEY_ENV}"
             )
-        return Profile("opencode", None, OPENCODE_KEY_ENV, _parse_models(model_pairs))
+        return Profile("opencode", None, OPENCODE_KEY_ENV, models)
     if preset != "litellm":
         raise OpencodeError(f"unknown preset {preset!r}: use one of {', '.join(PRESETS)}")
     if base_url is None:
         raise OpencodeError("--preset litellm needs --base-url")
     if key_env is None:
         raise OpencodeError("--preset litellm needs --key-env")
-    return Profile(
-        "litellm", _check_base_url(base_url), _check_key_env(key_env), _parse_models(model_pairs)
-    )
+    url = _check_base_url(base_url, announce=not from_file)
+    return Profile("litellm", url, _check_key_env(key_env), models)
+
+
+def make_profile(
+    preset: str, base_url: str | None, key_env: str | None, model_pairs: Sequence[str]
+) -> Profile:
+    """The checked profile for `setup`'s flags, or an OpencodeError saying what to change."""
+    return _checked_profile(preset, base_url, key_env, _parse_models(model_pairs), from_file=False)
 
 
 def save_profile(layout: Layout, profile: Profile) -> None:
@@ -193,7 +208,10 @@ def save_profile(layout: Layout, profile: Profile) -> None:
 
 
 def _from_document(document: object) -> Profile | None:
-    """The profile a parsed `profile.json` describes, or None when it is not one."""
+    """The profile a parsed `profile.json` describes, or None when it is not one.
+
+    An OpencodeError says which `setup` rule the document breaks, never the bad value.
+    """
     if not isinstance(document, dict) or document.get("format") != FORMAT:
         return None
     preset, base_url = document.get("preset"), document.get("baseURL")
@@ -207,7 +225,9 @@ def _from_document(document: object) -> Profile | None:
         for role, model_id in models.items()
     ):
         return None
-    return Profile(preset, base_url, key_env, models)
+    for role, model_id in models.items():
+        _check_model_id(role, model_id)
+    return _checked_profile(preset, base_url, key_env, dict(models), from_file=True)
 
 
 def load_profile(layout: Layout) -> Profile | None:
@@ -220,6 +240,10 @@ def load_profile(layout: Layout) -> Profile | None:
         raise OpencodeError(f"cannot read {layout.profile_file}: {error}; {_RESET_HINT}") from error
     try:
         loaded = _from_document(safe_json.loads(text))
+    except OpencodeError as error:
+        raise OpencodeError(
+            f"{layout.profile_file} is not valid ({error}); {_RESET_HINT}"
+        ) from error
     except ValueError:
         loaded = None
     if loaded is None:
