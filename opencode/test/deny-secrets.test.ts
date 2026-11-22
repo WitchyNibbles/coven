@@ -23,6 +23,19 @@ await test("shell maps to Bash with the command", () => {
   );
 });
 
+await test("bash maps exactly like shell, in case input repair stops renaming it", () => {
+  const input = { command: "cat x", workdir: "/elsewhere", timeout: 5 };
+  assert.deepEqual(one("bash", input), one("shell", input));
+  assert.deepEqual(
+    one("bash", { command: "ls" }),
+    pre("Bash", { command: "ls" }),
+  );
+  assert.throws(
+    () => payloads("bash", "cat x", CWD),
+    /^Error: coven deny-secrets: unreadable bash input; blocking$/,
+  );
+});
+
 await test("the shell workdir is checked text and never the payload cwd", () => {
   assert.deepEqual(
     one("shell", { command: "ls", workdir: "/elsewhere" }),

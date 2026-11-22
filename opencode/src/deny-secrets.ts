@@ -17,12 +17,16 @@ interface Mapping {
   fields: Readonly<Record<string, string>>;
 }
 
+// `workdir` rides along: the guard searches every string of the call, so a `.ssh` workdir counts.
+const SHELL: Mapping = {
+  name: "Bash",
+  fields: { command: "command", workdir: "workdir" },
+};
+
 const MAPPINGS: ReadonlyMap<string, Mapping> = new Map([
-  [
-    "shell",
-    // `workdir` rides along: the guard searches every string of the call, so a `.ssh` workdir counts.
-    { name: "Bash", fields: { command: "command", workdir: "workdir" } },
-  ],
+  ["shell", SHELL],
+  // 2.3.2 repairs a `bash` call to `shell`; mapping it too holds if that repair ever stops.
+  ["bash", SHELL],
   ["read", { name: "Read", fields: { file_path: "path" } }],
   [
     "write",
