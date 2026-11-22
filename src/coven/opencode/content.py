@@ -16,11 +16,9 @@ from pathlib import Path
 from typing import Final
 
 from coven import paths
+from coven.opencode.profile import AGENT_ROLES
 from coven.opencode.rewrite import COMMANDS, COVEN_SKILLS, rewrite_text
 
-SKILLS: Final = COVEN_SKILLS
-# The rendered order of the agent files; `rewrite.AGENTS` is the same set, whose order only the table reads.
-AGENTS: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
 PREFIX: Final = "coven-"
 OVERRIDES_REL: Final = Path("opencode/overrides")
 OVERRIDES: Final = paths.root() / OVERRIDES_REL
@@ -158,12 +156,7 @@ def _deny(action: str) -> str:
 
 # What each role may not do: the explorer and the reviewers never edit, the implementer never
 # starts a subagent.
-DENIED: Final = {
-    "explorer": "edit",
-    "implementer": "subagent",
-    "reviewer": "edit",
-    "final-reviewer": "edit",
-}
+DENIED: Final = {role: "subagent" if role == "implementer" else "edit" for role in AGENT_ROLES}
 
 
 def _agent(repo: Path, name: str, out: Path) -> None:
@@ -181,7 +174,7 @@ def _agent(repo: Path, name: str, out: Path) -> None:
 
 
 def _agents(repo: Path, out: Path) -> None:
-    for name in AGENTS:
+    for name in AGENT_ROLES:
         _agent(repo, name, out)
 
 
@@ -195,7 +188,7 @@ def _routing(repo: Path, out: Path) -> None:
 def render_content(repo: Path, out: Path) -> None:
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    for skill in SKILLS:
+    for skill in COVEN_SKILLS:
         _skill(repo, skill, out)
     for command in COMMANDS:
         _command(repo, command, out)

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from support import REPO
 
-from coven.opencode import content, superpowers
-from coven.opencode.rewrite import rewrite_text
+from coven.opencode import content, profile, superpowers
+from coven.opencode.rewrite import COVEN_SKILLS, rewrite_text
 
 SKILL_NAMES = (
     "ceo-review",
@@ -60,9 +60,9 @@ def test_skill_layout() -> None:
 
 
 def test_the_constants_name_the_shipped_sources() -> None:
-    assert content.SKILLS == SKILL_NAMES
+    assert COVEN_SKILLS == SKILL_NAMES
     assert content.COMMANDS == COMMAND_NAMES
-    assert content.AGENTS == ("explorer", "implementer", "reviewer", "final-reviewer")
+    assert profile.AGENT_ROLES == ("explorer", "implementer", "reviewer", "final-reviewer")
 
 
 @pytest.mark.parametrize("name", COMMAND_NAMES)

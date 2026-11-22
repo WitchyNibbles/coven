@@ -10,7 +10,8 @@ from __future__ import annotations
 import re
 from typing import Final
 
-AGENTS: Final = ("implementer", "reviewer", "final-reviewer", "explorer")
+from coven.opencode.profile import AGENT_ROLES
+
 COVEN_SKILLS: Final = (
     "ceo-review",
     "clean-code",
@@ -65,13 +66,13 @@ SKILL_NAMES: Final = [
 ]
 
 TABLE: Final = [
-    _entry(rf'subagent_type: "coven:({_any(AGENTS)})"', r'agent: "\1"'),
+    _entry(rf'subagent_type: "coven:({_any(AGENT_ROLES)})"', r'agent: "\1"'),
     _entry(
-        rf"\bSubagent \(coven:({_any(AGENTS)}) or coven:({_any(AGENTS)})\):",
+        rf"\bSubagent \(coven:({_any(AGENT_ROLES)}) or coven:({_any(AGENT_ROLES)})\):",
         r"subagent (agent: \1 or \2):",
     ),
-    _entry(rf"\bSubagent \(coven:({_any(AGENTS)})\):", r"subagent (agent: \1):"),
-    _entry(rf"\bcoven:({_any(AGENTS)}){WORD_END}", r"\1"),
+    _entry(rf"\bSubagent \(coven:({_any(AGENT_ROLES)})\):", r"subagent (agent: \1):"),
+    _entry(rf"\bcoven:({_any(AGENT_ROLES)}){WORD_END}", r"\1"),
     _entry(rf"\bcoven:({_any(COMMANDS)}){WORD_END}", r"/coven-\1"),
     *SKILL_NAMES,
     _entry(r"\bRead, Grep and Glob\b", "`read`, `grep` and `glob`"),
