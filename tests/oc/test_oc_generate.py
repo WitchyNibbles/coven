@@ -70,15 +70,16 @@ def test_permissions_hold_the_secret_rules_then_the_skill_and_store_allows(tmp_p
             "effect": "allow",
         },
         {"action": "external_directory", "resource": f"{store}/*", "effect": "allow"},
+        {"action": "edit", "resource": f"{layout.config_dir}/skills/*", "effect": "deny"},
     ]
 
 
 def test_without_a_store_there_is_no_store_allow(tmp_path: Path):
     data = generate.config_data(OPENCODE, Layout(tmp_path / "profile"), tmp_path / "coven")
     rules = data["permissions"]
-    assert len(rules) == 6
-    assert rules[-1]["action"] == "external_directory"
-    assert rules[-1]["resource"].endswith("/config/opencode/skills/*")
+    assert len(rules) == 7
+    assert [rule["action"] for rule in rules[5:]] == ["external_directory", "edit"]
+    assert all(rule["resource"].endswith("/config/opencode/skills/*") for rule in rules[5:])
 
 
 def test_plugin_options(tmp_path: Path):

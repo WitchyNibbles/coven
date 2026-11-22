@@ -61,6 +61,11 @@
       "action": "external_directory",
       "resource": "<P>/config/opencode/skills/*",
       "effect": "allow"
+    },
+    {
+      "action": "edit",
+      "resource": "<P>/config/opencode/skills/*",
+      "effect": "deny"
     }
   ]
 }

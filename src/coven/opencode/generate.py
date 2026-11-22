@@ -58,10 +58,13 @@ def _rule(action: str, resource: str, effect: str) -> dict[str, str]:
 
 
 def permissions(layout: Layout, store: Path | None) -> list[dict[str, str]]:
-    """The secret rules, then the allows for the files the prompts and the routing point at."""
+    """The secret rules, the allows for the files the prompts and the routing point at, then a
+    deny of edits to the installed skills (the allow on that folder covers writes too)."""
     rules = [_rule(*rule) for rule in SECRET_RULES]
-    outside = [layout.config_dir / "skills", *([store] if store else [])]
-    return rules + [_rule("external_directory", f"{folder}/*", "allow") for folder in outside]
+    skills = layout.config_dir / "skills"
+    outside = [skills, *([store] if store else [])]
+    allows = [_rule("external_directory", f"{folder}/*", "allow") for folder in outside]
+    return rules + allows + [_rule("edit", f"{skills}/*", "deny")]
 
 
 def config_data(

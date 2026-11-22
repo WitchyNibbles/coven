@@ -88,6 +88,11 @@
       "action": "external_directory",
       "resource": "<STORE>/*",
       "effect": "allow"
+    },
+    {
+      "action": "edit",
+      "resource": "<P>/config/opencode/skills/*",
+      "effect": "deny"
     }
   ]
 }

@@ -416,6 +416,9 @@ the text above, they win.
 3. Setup writes `external_directory` allow rules for the profile's `skills/*` (skill files) and,
    when the store exists, for `<store>/*` (the store the routing tells the model to read). Without
    them every skill prompt file read asks, and a headless `run` cannot answer.
+   The allow on the skills folder would also let agents edit installed skills, so setup appends
+   `edit` deny for `<P>/config/opencode/skills/*` after the allows (an external path's edit resource
+   is its absolute path, so the pattern matches).
 4. Skill ids: coven skills are `coven-<x>`, superpowers copies are `superpowers-<x>`. The table maps
    `coven:<skill>` and `superpowers:<x>`. `coven:<agent>` maps to the bare agent id (`explorer`,
    `implementer`, `reviewer`, `final-reviewer`), which PR 2's config already uses in
