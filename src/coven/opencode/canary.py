@@ -117,7 +117,9 @@ def _watch(stream: Iterable[str], found: queue.Queue[str | None]) -> None:
     found.put(None)
 
 
-def _start_watcher(process: subprocess.Popen[str], found: queue.Queue[str | None]) -> threading.Thread:
+def _start_watcher(
+    process: subprocess.Popen[str], found: queue.Queue[str | None]
+) -> threading.Thread:
     watcher = threading.Thread(target=_watch, args=(process.stdout or (), found), daemon=True)
     watcher.start()
     return watcher
