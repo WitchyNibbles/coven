@@ -2,10 +2,10 @@ import type { PluginContext, ToolDefinition } from "./join/context.ts";
 import { normalize } from "./join/events.ts";
 import { createHost } from "./join/host.ts";
 import { inputSchema, parseInput } from "./join/input.ts";
+import { noop } from "./join/noop.ts";
 import { JoinRecord } from "./join/record.ts";
 import { reminderText } from "./join/reminder.ts";
 import { follow } from "./join/subscription.ts";
-import { noop } from "./join/wait-steps.ts";
 import { awaitAgents } from "./join/wait.ts";
 import type { Host } from "./join/wait.ts";
 

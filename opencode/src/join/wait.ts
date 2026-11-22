@@ -1,12 +1,12 @@
 import { watchIdle } from "./idle.ts";
 import type { AwaitInput } from "./input.ts";
+import { noop } from "./noop.ts";
 import type { ChildStatus, JoinRecord } from "./record.ts";
 import {
   abortion,
   checkChild,
   feedReports,
   lookupFailed,
-  noop,
   snapshot,
 } from "./wait-steps.ts";
 import type {

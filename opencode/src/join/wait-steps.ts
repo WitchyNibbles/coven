@@ -1,12 +1,9 @@
+import { noop } from "./noop.ts";
 import type { JoinRecord } from "./record.ts";
 import { reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
 import { NotAChildError, UnknownSessionError } from "./wait-types.ts";
 import type { HistoryItem, View } from "./wait-types.ts";
-
-export function noop(): void {
-  // a sleep ended by its own abort has nothing to report
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

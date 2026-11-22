@@ -1,7 +1,7 @@
 import type { PluginContext } from "./context.ts";
 import { EVENT_TYPES } from "./events.ts";
 import { sleep } from "./host.ts";
-import { noop } from "./wait-steps.ts";
+import { noop } from "./noop.ts";
 
 const FIRST_DELAY_MS = 1000;
 const LONGEST_DELAY_MS = 30_000;

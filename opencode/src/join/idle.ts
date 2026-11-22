@@ -1,9 +1,6 @@
+import { noop } from "./noop.ts";
 import type { JoinRecord } from "./record.ts";
 import type { Host } from "./wait-types.ts";
-
-function noReconcile(): void {
-  // a failed watch leaves the child to the event stream, as before the watch
-}
 
 function markEnded(record: JoinRecord, parentID: string, id: string): void {
   const { end, endedAt } = record.status(parentID, id);
@@ -31,6 +28,6 @@ export function watchIdle(
         if (!signal.aborted) {
           markEnded(record, parentID, id);
         }
-      }, noReconcile);
+      }, noop); // a failed idle watch just means no reconcile for that child
   }
 }
