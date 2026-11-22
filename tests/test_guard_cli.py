@@ -492,8 +492,11 @@ PATH_CASES: dict[str, tuple[str, str]] = {
     "write-elsewhere": ("Write", "/tmp/x.md"),
     "write-store": ("Write", "{home}/coven-memory/systems/orders-db.md"),
     "edit-store": ("Edit", "{home}/coven-memory/approvals/a1.json"),
+    "multiedit-store": ("MultiEdit", "{home}/coven-memory/approvals/a1.json"),
+    "multiedit-elsewhere": ("MultiEdit", "/tmp/x.md"),
     "write-config": ("Write", "{home}/.config/coven/config.json"),
     "edit-settings": ("Edit", "{home}/.claude/settings.json"),
+    "multiedit-settings": ("MultiEdit", "{home}/.claude/settings.json"),
     "notebook-settings": ("NotebookEdit", "{home}/.claude/settings.local.json"),
 }
 for _name, (_tool, _path) in PATH_CASES.items():
@@ -551,6 +554,9 @@ def test_explain_judges_an_edit_by_its_path(run: Run, store: Path) -> None:
         ("Write", str(store / "systems" / "orders-db.md"), "refused for a PM"),
         ("Edit", str(home() / ".config" / "coven" / "config.json"), "refused for a PM"),
         ("Edit", str(home() / ".claude" / "settings.json"), "refused for a PM"),
+        ("MultiEdit", str(home() / ".claude" / "settings.json"), "refused for a PM"),
+        ("MultiEdit", str(store / "systems" / "orders-db.md"), "refused for a PM"),
+        ("MultiEdit", "/tmp/notes.md", "allowed"),
         ("NotebookEdit", str(home() / ".claude" / "settings.local.json"), "refused for a PM"),
         ("Write", "/tmp/notes.md", "allowed"),
     ):
@@ -558,18 +564,25 @@ def test_explain_judges_an_edit_by_its_path(run: Run, store: Path) -> None:
         assert (code, verdict_of(out)) == (0, verdict), (tool, path)
 
 
+def test_explain_knows_every_edit_tool_the_hook_guards() -> None:
+    hook = guard.load_guard()
+    assert set(guard.PATH_KEYS) == set(hook.EDIT_TOOLS)
+    assert set(guard.PATH_KEYS.values()) <= set(hook.PATH_KEYS)
+
+
 @pytest.mark.parametrize(
     ("args", "words"),
     [
         (("--tool", "Write"), "--path"),
         (("--tool", "Edit"), "--path"),
+        (("--tool", "MultiEdit"), "--path"),
         (("--tool", "NotebookEdit"), "--path"),
         (("--tool", "Read", "--path", "/tmp/x"), "--path"),
         (("--tool", "mcp__x__y", "--path", "/tmp/x"), "--path"),
         (("--path", "/tmp/x", "ls"), "--path"),
         (("--tool", "Write", "--path", ""), "--path"),
     ],
-    ids=["write", "edit", "notebook", "read", "mcp", "no-tool", "empty-path"],
+    ids=["write", "edit", "multiedit", "notebook", "read", "mcp", "no-tool", "empty-path"],
 )
 def test_explain_needs_a_path_for_an_edit_tool_and_only_for_one(
     run: Run, store: Path, args: tuple[str, ...], words: str
