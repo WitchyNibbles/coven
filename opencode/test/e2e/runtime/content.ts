@@ -128,6 +128,22 @@ function agentsOf(exported: string): string[] {
     .map((message) => message.agent ?? "(none)");
 }
 
+/** The session id of a completed `subagent` call for `role`, or the reason it is not one. */
+function startedChild(
+  call: ToolRun | undefined,
+  role: string,
+): { id: string } | { problem: string } {
+  const input = call?.input as { agent?: string } | undefined;
+  if (call?.status !== "completed" || input?.agent !== role) {
+    const seen = `${call?.status ?? "missing"} for agent ${input?.agent}`;
+    return { problem: `the ${role} subagent call was ${seen}` };
+  }
+  const id = /ses_[A-Za-z0-9_]+/.exec(call.output)?.[0];
+  return id === undefined
+    ? { problem: `the ${role} subagent call returned no session id` }
+    : { id };
+}
+
 /**
  * What is wrong with how the `subagent` call for `role` ran: it must have completed with that
  * agent, and the child session it started must have run as that agent (read from the child's
@@ -138,15 +154,11 @@ async function childProblem(
   call: ToolRun | undefined,
   role: string,
 ): Promise<string | undefined> {
-  const input = call?.input as { agent?: string } | undefined;
-  if (call?.status !== "completed" || input?.agent !== role) {
-    return `the ${role} subagent call was ${call?.status ?? "missing"} for agent ${input?.agent}`;
+  const child = startedChild(call, role);
+  if ("problem" in child) {
+    return child.problem;
   }
-  const id = call.output.match(/ses_[A-Za-z0-9_]+/)?.[0];
-  if (id === undefined) {
-    return `the ${role} subagent call returned no session id`;
-  }
-  const agents = agentsOf(await exportSession(world, id));
+  const agents = agentsOf(await exportSession(world, child.id));
   return agents.length > 0 && agents.every((agent) => agent === role)
     ? undefined
     : `the ${role} child ran as ${agents.join(", ") || "no agent"}`;
