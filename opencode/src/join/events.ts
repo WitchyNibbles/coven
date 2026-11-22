@@ -1,3 +1,4 @@
+import { ownString } from "./fields.ts";
 import type { Observed } from "./record.ts";
 import { reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
@@ -33,28 +34,23 @@ function fields(value: unknown): Fields | undefined {
     : undefined;
 }
 
-function text(value: Fields | undefined, key: string): string | undefined {
-  const found = value?.[key];
-  return typeof found === "string" ? found : undefined;
-}
-
 // The tag in the report text wins; the metadata state is only for an unreadable tag.
 function stateOf(
   body: string | undefined,
   metadata: Fields | undefined,
 ): ReportState | undefined {
-  const declared = text(metadata, "state");
+  const declared = ownString(metadata, "state");
   return reportState(body ?? "") ?? STATES.find((state) => state === declared);
 }
 
 function normalizeReport(data: Fields | undefined): Observed | undefined {
   const payload = fields(fields(data?.["item"])?.["payload"]);
   const metadata = fields(payload?.["metadata"]);
-  const parentID = text(data, "sessionID");
-  const childID = text(metadata, "childID");
-  const state = stateOf(text(payload, "text"), metadata);
+  const parentID = ownString(data, "sessionID");
+  const childID = ownString(metadata, "childID");
+  const state = stateOf(ownString(payload, "text"), metadata);
   if (
-    text(metadata, "source") !== "subagent" ||
+    ownString(metadata, "source") !== "subagent" ||
     parentID === undefined ||
     childID === undefined ||
     state === undefined
@@ -66,7 +62,7 @@ function normalizeReport(data: Fields | undefined): Observed | undefined {
     parentID,
     childID,
     state,
-    description: text(payload, "description") ?? "",
+    description: ownString(payload, "description") ?? "",
   };
 }
 
@@ -77,12 +73,12 @@ function isSessionEvent(type: string): type is keyof typeof SESSION_EVENTS {
 /** Maps one raw 2.3.2 event to what the record observes, or `undefined`. */
 export function normalize(event: unknown): Observed | undefined {
   const root = fields(event);
-  const type = text(root, "type") ?? "";
+  const type = ownString(root, "type") ?? "";
   const data = fields(root?.["data"]);
   if (type === INBOX_EVENT) {
     return normalizeReport(data);
   }
-  const sessionID = text(data, "sessionID");
+  const sessionID = ownString(data, "sessionID");
   if (!isSessionEvent(type) || sessionID === undefined) {
     return undefined;
   }

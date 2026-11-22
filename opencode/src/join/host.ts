@@ -1,4 +1,5 @@
 import type { ContextMessage, PluginContext } from "./context.ts";
+import { ownString } from "./fields.ts";
 import type { HistoryItem, Host } from "./wait-types.ts";
 
 const MAX_CAUSE_DEPTH = 3;
@@ -30,14 +31,6 @@ function isNotFound(error: unknown, depth = 0): boolean {
     name === "Session.NotFoundError" ||
     isNotFound(cause, depth + 1)
   );
-}
-
-function ownString(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 function toHistoryItem(message: ContextMessage): HistoryItem | undefined {
