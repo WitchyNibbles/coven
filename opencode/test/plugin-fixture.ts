@@ -1,9 +1,10 @@
 import { setImmediate as tick } from "node:timers/promises";
 
+import { covenSetup } from "../src/coven.ts";
+import type { CovenContext } from "../src/context.ts";
 import type {
   ContextHookEvent,
   ContextMessage,
-  PluginContext,
   SessionInfo,
   ToolCallContext,
   ToolDefinition,
@@ -80,7 +81,23 @@ export function report(
   };
 }
 
-export async function boot(clock = { now: 1_000_000 }) {
+export interface Registered {
+  name: string;
+  options: unknown;
+}
+
+interface Setup {
+  clock?: { now: number };
+  options?: Readonly<Record<string, unknown>>;
+  /** Tool names the fake `tool.list` leaves out, as if they never registered. */
+  unlisted?: readonly string[];
+}
+
+function makeWorld({
+  clock = { now: 1_000_000 },
+  options,
+  unlisted = [],
+}: Setup) {
   const streams: Stream[] = [];
   const subscriptions: { types: readonly string[]; signal: AbortSignal }[] = [];
   const sessions = new Map<string, SessionInfo | Error>([
@@ -90,13 +107,15 @@ export async function boot(clock = { now: 1_000_000 }) {
   const lookups: string[] = [];
   const hooks: ((event: ContextHookEvent) => void)[] = [];
   const tools: ToolDefinition[] = [];
-  const ctx: PluginContext = {
+  const registered: Registered[] = [];
+  const ctx: CovenContext = {
+    ...(options === undefined ? {} : { options }),
     event: {
-      subscribe: (options) => {
-        subscriptions.push(options);
+      subscribe: (subscription) => {
+        subscriptions.push(subscription);
         const stream = new Stream();
         streams.push(stream);
-        return stream.iterate(options.signal);
+        return stream.iterate(subscription.signal);
       },
     },
     session: {
@@ -112,19 +131,47 @@ export async function boot(clock = { now: 1_000_000 }) {
       wait: () => new Promise<void>(() => undefined),
       context: ({ sessionID }) =>
         Promise.resolve(messages.get(sessionID) ?? []),
-      hook: (_name, callback) => {
-        hooks.push(callback);
+      hook: ((
+        name: string,
+        callback: (event: ContextHookEvent) => void,
+        hookOptions?: unknown,
+      ) => {
+        registered.push({ name, options: hookOptions });
+        if (name === "context") {
+          hooks.push(callback);
+        }
         return Promise.resolve({});
-      },
+      }) as CovenContext["session"]["hook"],
     },
     tool: {
       transform: (callback) => {
         callback({ add: (tool) => tools.push(tool) });
         return Promise.resolve({});
       },
+      list: () =>
+        Promise.resolve(
+          tools
+            .filter((tool) => !unlisted.includes(tool.name))
+            .map((tool) => ({ id: tool.name })),
+        ),
     },
   };
-  const cleanup = await joinSetup(ctx, { now: () => clock.now });
+  return {
+    ctx,
+    clock,
+    streams,
+    subscriptions,
+    sessions,
+    messages,
+    lookups,
+    hooks,
+    tools,
+    registered,
+  };
+}
+
+function drive(world: ReturnType<typeof makeWorld>, cleanup: () => void) {
+  const { clock, streams, tools, hooks } = world;
   const reminder = (sessionID: string): string[] => {
     const event: ContextHookEvent = { sessionID, system: [] };
     hooks.forEach((hook) => hook(event));
@@ -151,15 +198,7 @@ export async function boot(clock = { now: 1_000_000 }) {
     return { progress, result: tool.execute(input, context) };
   };
   return {
-    ctx,
-    clock,
-    streams,
-    subscriptions,
-    sessions,
-    messages,
-    lookups,
-    hooks,
-    tools,
+    ...world,
     cleanup,
     reminder,
     call,
@@ -169,4 +208,23 @@ export async function boot(clock = { now: 1_000_000 }) {
       await tick();
     },
   };
+}
+
+export async function boot(clock = { now: 1_000_000 }) {
+  const world = makeWorld({ clock });
+  const cleanup = await joinSetup(world.ctx, { now: () => clock.now });
+  return drive(world, cleanup);
+}
+
+/** The whole coven plugin; setup may reject, so the world is returned beside the outcome. */
+export function bootCoven(setup: Setup = {}) {
+  const world = makeWorld(setup);
+  const logs: string[] = [];
+  const clock = world.clock;
+  const outcome = covenSetup(
+    world.ctx,
+    { now: () => clock.now, log: (line) => logs.push(line) },
+    world.ctx.options,
+  );
+  return { ...world, logs, outcome };
 }

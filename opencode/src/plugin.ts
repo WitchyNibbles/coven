@@ -117,9 +117,3 @@ export async function joinSetup(
     clearInterval(forgetter);
   };
 }
-
-export default {
-  id: "coven.join",
-  setup: (ctx: PluginContext): Promise<() => void> =>
-    joinSetup(ctx, { now: () => Date.now() }),
-};
