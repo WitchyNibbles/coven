@@ -287,8 +287,9 @@ dogfood pattern).
 - SDD override: dispatch with `subagent`, keep the returned child ids in the ledger, and call
   `await_agents({ids: <pending only>, mode: "all"})` before reading a report. A
   `running`/progress report is not a result.
-- superpowers skills (brainstorming, writing-plans, TDD, debugging, verification): coven does not
-  vendor them in M1.
+- superpowers skills (brainstorming, writing-plans, TDD, debugging, verification, and, by ruling 14,
+  using-git-worktrees, finishing-a-development-branch, executing-plans): coven does not vendor them
+  in M1.
   - `setup` copies them into `P/config/opencode/skills/` at setup time. The source is the
     `superpowers@*` entry in Claude Code's installed-plugins list (`paths.installed_plugins_file()`,
     read with the same parser `coven doctor` uses), taking its `installPath`'s `skills/`.
@@ -445,6 +446,10 @@ the text above, they win.
 13. `.gitattributes` marks `opencode/content/**` as `linguist-generated` and `opencode/overrides/**`
     as `linguist-vendored`. The generated output stays byte-equal to the generator. Overrides are
     hand-kept copies of text from `skills/`, which is outside the Prettier scope too.
+14. Setup copies eight superpowers skills, not five: the three the SDD skill names
+    (`using-git-worktrees`, `finishing-a-development-branch`, `executing-plans`) are added, because
+    the rendered content points at them. A test checks that every `superpowers-<x>` id in
+    `opencode/content/` is one of the copied skills. Doctor check 9 reads the same list.
 
 Known gap: a plugin loaded after coven can rewrite a tool call in its own `execute.before` hook
 after coven has checked it. The guard sees the call as it stands when coven's hook runs.

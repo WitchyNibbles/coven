@@ -59,7 +59,8 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   What setup puts in `P/config/opencode/`:
   - `skills/coven-*`, `agents/` and `commands/`, copied from `opencode/content/`;
   - `skills/superpowers-<x>` for brainstorming, writing-plans, test-driven-development,
-    systematic-debugging and verification-before-completion, copied from your Claude Code
+    systematic-debugging, verification-before-completion, using-git-worktrees,
+    finishing-a-development-branch and executing-plans, copied from your Claude Code
     superpowers plugin (found through its installed-plugins file). Only the skill names in the
     text are renamed, so wording that is Claude Code's (its tool names) stays; that is a known gap.
     When the plugin is not installed, setup prints one warning, appends a note to `AGENTS.md` and
@@ -183,8 +184,10 @@ change to a skill, to `opencode/overrides/` or to `src/coven/opencode/rewrite.py
 
 Do not edit the output by hand. The rewrite table in `rewrite.py` maps the Claude Code names in a
 skill (skill and agent ids, tool names, the `Subagent (...)` lines of the prompt templates) to their
-OpenCode 2.3.2 names, line by line. A name with no equivalent (a Claude-only tool, a skill that
-is not shipped, `${CLAUDE_SKILL_DIR}`) stops the generator with the file and line.
+OpenCode 2.3.2 names, line by line. A name with no equivalent (a Claude-only tool, a coven skill
+that is not shipped, `${CLAUDE_SKILL_DIR}`) stops the generator with the file and line. A
+`superpowers:<x>` name is renamed to `superpowers-<x>` whether or not setup copies it, so a test
+checks that every `superpowers-<x>` the content names is one of the skills setup copies.
 
 For such a file, write an override: `opencode/overrides/skills/<name>/<file>` replaces the source
 file of the same path. Its first line is `<!-- opencode override of skills/<name>/<file> sha256:HEX -->`,

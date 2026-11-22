@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, Literal
 
+from coven.opencode import superpowers
+
 Serve = Literal["ok", "ignore-term", "silent"]
 # The non-secret variables the fake npm reports the value of.
 NPM_PATH_VARS: Final = (
@@ -176,17 +178,10 @@ def fake_npm(dir: Path) -> Path:
 
 
 SUPERPOWERS_KEY: Final = "superpowers@claude-plugins-official"
-SUPERPOWERS_NAMES: Final = (
-    "brainstorming",
-    "writing-plans",
-    "test-driven-development",
-    "systematic-debugging",
-    "verification-before-completion",
-)
 
 
 def install_superpowers(
-    plugins: Path, names: tuple[str, ...] = SUPERPOWERS_NAMES, *, as_list: bool = True
+    plugins: Path, names: tuple[str, ...] = superpowers.SKILLS, *, as_list: bool = True
 ) -> Path:
     """A fake Claude Code plugins folder with superpowers installed; returns its `skills/`."""
     install = plugins / "cache" / "superpowers" / "5.0.0"

@@ -207,7 +207,7 @@ def test_a_missing_superpowers_folder_warns_with_the_fix_and_exits_zero(good: Go
 
 def test_every_superpowers_folder_present_passes(good: Good):
     found = results_by_name(good)["superpowers"]
-    assert found == Outcome("ok", "5 superpowers skills copied")
+    assert found == Outcome("ok", "8 superpowers skills copied")
 
 
 def test_the_superpowers_check_needs_no_profile(good: Good):

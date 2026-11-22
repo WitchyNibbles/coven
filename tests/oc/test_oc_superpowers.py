@@ -2,13 +2,22 @@ import json
 from pathlib import Path
 
 import pytest
-from fakes import SUPERPOWERS_KEY, SUPERPOWERS_NAMES, install_superpowers
+from fakes import SUPERPOWERS_KEY, install_superpowers
 
 from coven.opencode import superpowers
 
 
-def test_the_skills_are_the_five_the_routing_names():
-    assert superpowers.SKILLS == SUPERPOWERS_NAMES
+def test_the_skills_are_the_eight_the_routing_and_the_sdd_skill_name():
+    assert superpowers.SKILLS == (
+        "brainstorming",
+        "writing-plans",
+        "test-driven-development",
+        "systematic-debugging",
+        "verification-before-completion",
+        "using-git-worktrees",
+        "finishing-a-development-branch",
+        "executing-plans",
+    )
 
 
 @pytest.mark.parametrize("as_list", [True, False])
@@ -85,6 +94,9 @@ def test_copy_returns_the_names_it_could_not_find(claude_plugins: Path, tmp_path
         "test-driven-development",
         "systematic-debugging",
         "verification-before-completion",
+        "using-git-worktrees",
+        "finishing-a-development-branch",
+        "executing-plans",
     ]
     assert sorted(path.name for path in target.iterdir()) == [
         "superpowers-brainstorming",

@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import pytest
-from fakes import SUPERPOWERS_NAMES, install_superpowers
+from fakes import install_superpowers
 from support import REPO
 
 from coven import cli, paths
-from coven.opencode import generate
+from coven.opencode import generate, superpowers
 
 LITELLM_FLAGS = [
     "--preset",
@@ -70,12 +70,13 @@ def test_setup_writes_config_profile_and_plugin(
 def test_setup_names_the_missing_superpowers_on_one_warning_line(
     home: Path, capsys: pytest.CaptureFixture[str], claude_plugins: Path
 ):
-    install_superpowers(claude_plugins, SUPERPOWERS_NAMES[:2])
+    install_superpowers(claude_plugins, superpowers.SKILLS[:2])
     assert setup(*LITELLM_FLAGS) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[-2:] == [
         "warning: superpowers skills not found: test-driven-development, systematic-debugging, "
-        "verification-before-completion (install the superpowers plugin in Claude Code, "
+        "verification-before-completion, using-git-worktrees, finishing-a-development-branch, "
+        "executing-plans (install the superpowers plugin in Claude Code, "
         "then re-run coven opencode setup)",
         "next: coven opencode doctor",
     ]

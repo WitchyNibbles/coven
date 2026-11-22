@@ -15,6 +15,9 @@ SKILLS: Final = (
     "test-driven-development",
     "systematic-debugging",
     "verification-before-completion",
+    "using-git-worktrees",
+    "finishing-a-development-branch",
+    "executing-plans",
 )
 PLUGIN_PREFIX: Final = "superpowers@"
 FOLDER_PREFIX: Final = "superpowers-"

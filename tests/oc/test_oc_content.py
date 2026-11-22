@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from support import REPO
 
-from coven.opencode import content
+from coven.opencode import content, superpowers
 from coven.opencode.rewrite import rewrite_text
 
 SKILL_NAMES = (
@@ -139,6 +139,16 @@ def test_no_machine_paths() -> None:
         if any(path in (RENDERED / rel).read_text() for path in machine)
     ]
     assert not hits
+
+
+def test_every_superpowers_skill_the_content_names_is_copied_at_setup() -> None:
+    named = {
+        match
+        for rel in files_under(RENDERED)
+        for match in re.findall(r"superpowers-([a-z][a-z-]*[a-z])", (RENDERED / rel).read_text())
+    }
+    assert named
+    assert named <= set(superpowers.SKILLS)
 
 
 SDD = RENDERED / "skills" / "coven-subagent-driven-development"
