@@ -15,8 +15,8 @@ PR 3 adds the skills, the agents, the routing and deny-secrets.
 
 ## The profile
 
-The profile folder `P` is `$XDG_DATA_HOME/coven/opencode` (the coven data folder when
-`XDG_DATA_HOME` is unset), or the folder in `COVEN_OPENCODE_HOME`.
+The profile folder `P` is `$XDG_DATA_HOME/coven/opencode`, which is `~/.local/share/coven/opencode`
+when `XDG_DATA_HOME` is unset, or the folder in `COVEN_OPENCODE_HOME`.
 
     P/runtime/<version>/   npm prefix holding the pinned OpenCode
     P/config/opencode/     OPENCODE_CONFIG_DIR: the generated opencode.jsonc
@@ -27,11 +27,13 @@ The profile folder `P` is `$XDG_DATA_HOME/coven/opencode` (the coven data folder
     P/profile.json         what setup chose: preset, base URL, key env name, models (no key)
 
 `run` and `doctor` give OpenCode an environment built from the profile: the folders above, the
-switches that turn off auto-update, Claude Code skills and the free models, and
-`OPENCODE_DISABLE_PROJECT_CONFIG=1`. Project config is off in the coven profile, so a
-`.opencode/` folder or `opencode.json` in a repo is ignored (doctor warns when it finds one). No
-other `OPENCODE_` variable of the caller reaches OpenCode, except the server password and user
-name, and the one holding the key.
+switches that turn off auto-update and Claude Code skills, and `OPENCODE_DISABLE_PROJECT_CONFIG=1`.
+Project config is off in the coven profile, so a `.opencode/` folder or `opencode.json` in a repo is
+ignored (doctor warns when it finds one). The free models are off only for the litellm preset
+(`OPENCODE_DISABLE_FREE_MODELS=1`). Under the opencode preset with no key, OpenCode's free public
+key can still be used. No other `OPENCODE_` variable of the caller reaches OpenCode, except the
+server password and user name (`OPENCODE_SERVER_PASSWORD`, `OPENCODE_SERVER_USERNAME`), the models
+fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
 
 ## Commands
 
@@ -54,7 +56,10 @@ name, and the one holding the key.
 - `run` checks that the runtime reports the pinned version, warns by name when the key variable is
   unset, and replaces itself with OpenCode in the profile's environment. Arguments for OpenCode
   follow `--`.
-- `doctor` makes no request outside the machine and prints one line per check: `ok`, `warn` or
+- `doctor` starts its server with the models fetch off and makes no request of its own outside the
+  machine. One case can: with the opencode preset and a stored Console login in the profile, the
+  server's Console provider fetches its remote config. With the litellm preset, or no login, it
+  does not. `doctor` prints one line per check: `ok`, `warn` or
   `fail`, with the fix after a failure. It exits 1 when a check failed. The checks are:
   `runtime` (the binary reports the pinned version), `paths` (`opencode debug paths` stays under
   `P`), `config` (the config matches `profile.json`), `key` (the variable is set), `plugin`
