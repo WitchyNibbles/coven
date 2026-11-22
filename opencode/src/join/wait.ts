@@ -26,8 +26,8 @@ const PROGRESS_EVERY_MS = 30_000;
 const NO_REPORT_GRACE_MS = 10_000;
 const NOTE = "Reports are in the conversation as <subagent> messages.";
 
-const TIMED_OUT = Symbol("timed out");
-type TimedOut = typeof TIMED_OUT;
+/** Thrown by `guarded` when the timeout runs out first; `run` turns it into the result. */
+class DeadlineReached extends Error {}
 
 class Wait {
   private changed = false;
@@ -75,6 +75,11 @@ class Wait {
     });
     try {
       return await this.execute();
+    } catch (error) {
+      if (error instanceof DeadlineReached) {
+        return this.timedOutResult();
+      }
+      throw error;
     } finally {
       off();
       this.idleWatch.abort();
@@ -83,26 +88,16 @@ class Wait {
   }
 
   private async execute(): Promise<AwaitResult> {
-    if (await this.checkChildren()) {
-      return this.timedOutResult();
-    }
+    await this.checkChildren();
     this.watchPending();
-    if (await this.readHistory(false)) {
-      return this.timedOutResult();
-    }
+    await this.readHistory(false);
     for (;;) {
       this.call.signal.throwIfAborted();
-      if (
-        this.host.now() >= this.nextHistory &&
-        (await this.readHistory(true))
-      ) {
-        return this.timedOutResult();
+      if (this.host.now() >= this.nextHistory) {
+        await this.readHistory(true);
       }
       this.changed = false;
       const view = await this.evaluate(this.host.now());
-      if (view === TIMED_OUT) {
-        return this.timedOutResult();
-      }
       const now = this.host.now();
       if (this.isDone(view)) {
         return this.result(view, false);
@@ -115,22 +110,18 @@ class Wait {
     }
   }
 
-  /** Looks every id up before any waiting; true when the timeout came first. */
-  private async checkChildren(): Promise<boolean> {
+  /** Looks every id up before any waiting. */
+  private async checkChildren(): Promise<void> {
     const { callerID } = this.call;
     for (const id of this.input.ids) {
       const lookup = this.host.getSession(id).catch(lookupFailed(id));
       const session = await this.guarded(lookup);
-      if (session === TIMED_OUT) {
-        return true;
-      }
       checkChild(id, callerID, session);
     }
     for (const id of this.input.ids) {
       const { description } = this.record.status(callerID, id);
       this.record.linkChild(callerID, id, description);
     }
-    return false;
   }
 
   /** One idle watch per child still pending at the start, all stopped when the call ends. */
@@ -148,9 +139,9 @@ class Wait {
 
   /**
    * Waits for a host call, but gives up when the call aborts (rethrowing its reason) or the
-   * timeout runs out.
+   * timeout runs out (throwing `DeadlineReached`).
    */
-  private async guarded<T>(op: Promise<T>): Promise<T | TimedOut> {
+  private async guarded<T>(op: Promise<T>): Promise<T> {
     op.catch(noop);
     const sleeper = new AbortController();
     try {
@@ -160,7 +151,10 @@ class Wait {
         this.deadlineHit(sleeper.signal),
       ]);
       this.call.signal.throwIfAborted();
-      return outcome === undefined ? TIMED_OUT : outcome.value;
+      if (outcome === undefined) {
+        throw new DeadlineReached();
+      }
+      return outcome.value;
     } finally {
       sleeper.abort();
     }
@@ -204,30 +198,23 @@ class Wait {
   /**
    * Feeds a report only while the record has seen fewer of them than the history holds. The
    * first read is strict, so a history that cannot be read at all fails the call; later reads
-   * keep going on an empty history. True when the timeout came first.
+   * keep going on an empty history.
    */
-  private async readHistory(tolerant: boolean): Promise<boolean> {
+  private async readHistory(tolerant: boolean): Promise<void> {
     const { callerID } = this.call;
     const read = this.host.history(callerID);
     const fetched = await this.guarded(
       tolerant ? read.catch((): HistoryItem[] => []) : read,
     );
-    if (fetched === TIMED_OUT) {
-      return true;
-    }
     this.nextHistory = this.host.now() + HISTORY_EVERY_MS;
     feedReports(this.record, callerID, this.input.ids, fetched);
-    return false;
   }
 
-  private async evaluate(now: number): Promise<View | TimedOut> {
+  private async evaluate(now: number): Promise<View> {
     const view: View = { done: [], pending: [] };
     for (const id of this.input.ids) {
       const status = this.record.status(this.call.callerID, id);
       const done = await this.settle(status, now);
-      if (done === TIMED_OUT) {
-        return TIMED_OUT;
-      }
       if (done === undefined) {
         view.pending.push(status);
       } else {
@@ -240,7 +227,7 @@ class Wait {
   private async settle(
     status: ChildStatus,
     now: number,
-  ): Promise<DoneChild | TimedOut | undefined> {
+  ): Promise<DoneChild | undefined> {
     const { sessionID, description, end, endedAt } = status;
     if (end !== undefined) {
       return { sessionID, state: end, description };
@@ -249,23 +236,16 @@ class Wait {
       return undefined;
     }
     const report = await this.textAfter(sessionID, endedAt);
-    return report === TIMED_OUT
-      ? TIMED_OUT
-      : { sessionID, state: "ended-without-report", description, report };
+    return { sessionID, state: "ended-without-report", description, report };
   }
 
-  private async textAfter(
-    sessionID: string,
-    endedAt: number,
-  ): Promise<string | TimedOut> {
+  private async textAfter(sessionID: string, endedAt: number): Promise<string> {
     const known = this.lastText.get(sessionID);
     if (known?.endedAt === endedAt) {
       return known.text;
     }
     const text = await this.guarded(this.host.lastAssistantText(sessionID));
-    if (text !== TIMED_OUT) {
-      this.lastText.set(sessionID, { endedAt, text });
-    }
+    this.lastText.set(sessionID, { endedAt, text });
     return text;
   }
 
