@@ -1,7 +1,7 @@
 import { setImmediate as tick } from "node:timers/promises";
 
 import { covenSetup } from "../src/coven.ts";
-import type { CovenContext } from "../src/context.ts";
+import type { CovenContext, ExecuteBeforeEvent } from "../src/context.ts";
 import type {
   ContextHookEvent,
   ContextMessage,
@@ -10,9 +10,12 @@ import type {
   ToolDefinition,
 } from "../src/join/context.ts";
 import { joinSetup } from "../src/plugin.ts";
+import { exits, fakeSpawn } from "./guard-fake.ts";
+import type { Behaviour } from "./guard-fake.ts";
 
 export const LEAD = "ses_lead";
 export const KID = "ses_kid";
+export const DIRECTORY = "/work/session";
 
 class Stream {
   private readonly queue: unknown[] = [];
@@ -86,17 +89,26 @@ export interface Registered {
   options: unknown;
 }
 
+export interface ToolHook {
+  name: string;
+  callback: (event: ExecuteBeforeEvent) => Promise<void> | void;
+  disposed: number;
+}
+
 interface Setup {
   clock?: { now: number };
   options?: Readonly<Record<string, unknown>>;
   /** Tool names the fake `tool.list` leaves out, as if they never registered. */
   unlisted?: readonly string[];
+  /** What each guard child the fake spawn starts does; it allows the call by default. */
+  guard?: Behaviour;
 }
 
 function makeWorld({
   clock = { now: 1_000_000 },
   options,
   unlisted = [],
+  guard = exits(0),
 }: Setup) {
   const streams: Stream[] = [];
   const subscriptions: { types: readonly string[]; signal: AbortSignal }[] = [];
@@ -108,8 +120,11 @@ function makeWorld({
   const hooks: ((event: ContextHookEvent) => void)[] = [];
   const tools: ToolDefinition[] = [];
   const registered: Registered[] = [];
+  const toolHooks: ToolHook[] = [];
+  const fake = fakeSpawn(guard);
   const ctx: CovenContext = {
     ...(options === undefined ? {} : { options }),
+    location: { directory: DIRECTORY },
     event: {
       subscribe: (subscription) => {
         subscriptions.push(subscription);
@@ -148,6 +163,15 @@ function makeWorld({
         callback({ add: (tool) => tools.push(tool) });
         return Promise.resolve({});
       },
+      hook: (name, callback) => {
+        const entry: ToolHook = { name, callback, disposed: 0 };
+        toolHooks.push(entry);
+        return Promise.resolve({
+          dispose: () => {
+            entry.disposed += 1;
+          },
+        });
+      },
       list: () =>
         Promise.resolve(
           tools
@@ -167,6 +191,9 @@ function makeWorld({
     hooks,
     tools,
     registered,
+    toolHooks,
+    spawn: fake.spawn,
+    spawned: fake.calls,
   };
 }
 
@@ -222,7 +249,11 @@ export function bootCoven(setup: Setup = {}) {
   const logs: string[] = [];
   const outcome = covenSetup(
     world.ctx,
-    { now: () => world.clock.now, log: (line) => logs.push(line) },
+    {
+      now: () => world.clock.now,
+      log: (line) => logs.push(line),
+      spawn: world.spawn,
+    },
     world.ctx.options,
   );
   return { ...world, logs, outcome };

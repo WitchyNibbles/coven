@@ -13,9 +13,30 @@ export interface HttpRequestEvent {
   request: Request;
 }
 
-/** The join's context plus what the coven plugin adds: its options, `http.request` and `tool.list`. */
+/** 2.3.2 `promise/tool.ts` `execute.before`; a throw from the callback fails that tool call. */
+export interface ExecuteBeforeEvent {
+  readonly tool: string;
+  readonly sessionID: string;
+  readonly agent: string;
+  readonly messageID: string;
+  /** The call id. */
+  readonly id: string;
+  readonly input: unknown;
+}
+
+/** What `tool.hook` hands back: `dispose` removes the hook. */
+export interface Registration {
+  dispose(): void;
+}
+
+/**
+ * The join's context plus what the coven plugin adds: its options, the session directory,
+ * `http.request`, `execute.before` and `tool.list`.
+ */
 export interface CovenContext extends PluginContext {
   readonly options?: Readonly<Record<string, unknown>>;
+  /** `Location.Info` of 2.3.2: the directory the session works in. */
+  readonly location: { readonly directory: string };
   session: PluginContext["session"] & {
     hook(
       name: "http.request",
@@ -24,6 +45,10 @@ export interface CovenContext extends PluginContext {
     ): Promise<unknown>;
   };
   tool: PluginContext["tool"] & {
+    hook(
+      name: "execute.before",
+      callback: (event: ExecuteBeforeEvent) => Promise<void> | void,
+    ): Promise<Registration>;
     /** Currently registered tools, after every transform, keyed by effective name. */
     list(): Promise<readonly { id: string }[]>;
   };
