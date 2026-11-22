@@ -36,7 +36,8 @@ Sources:
   (subagents only run in the background there); a process env per session on 2.x.
 - **Biggest blockers:** (1) model access: 1.x cannot use a Claude subscription, so coven there
   runs on an API key or another provider; (2) 2.x subagents never block and there is no join
-  (#64073, #65316 open), which breaks the subagent-driven-development loop; (3) on 1.x no hook can
+  (#64073, #65316 open), which breaks the subagent-driven-development loop (a plugin join fixes
+  this, see the follow-up section near the end); (3) on 1.x no hook can
   answer a permission prompt, so a PM must never meet an `ask`, and a plugin that fails to load
   fails open; (4) aquelarre is a full rewrite on an undocumented 1.x TUI API.
 - **Size:** about 185-300 hours for everything on 1.x, 150-240 without aquelarre. A spike of
@@ -326,6 +327,46 @@ API that is undocumented on 1.x. This is the part most likely to change under a 
 A 2.x adapter later: about 40-60 hours if the Python core stays behind the adapter (new plugin
 shape, permission array, one server per role, `subagent` without join handled in the SDD text,
 TUI plugin port), plus whatever #64073 and #65316 look like by then.
+
+## Follow-up: a join for 2.x subagents (spike)
+
+A throwaway TypeScript plugin on 2.3.2 (and 1.19.6), run fully offline: a scripted fake
+OpenAI-compatible model on 127.0.0.1, everything inside `unshare -rn` (only `lo`), and a policy
+that denies `provider.use` for every provider but the fake one. Nothing left the machine.
+
+The plugin adds two tools:
+
+- `await_agents({ids, mode: "all" | "any"})`: for each id, `ctx.session.wait({sessionID})`, then
+  the last assistant text from `ctx.session.context({sessionID})`. `all` is `Promise.all`, `any`
+  is `Promise.any`. A 30 s heartbeat calls `context.progress`.
+- `watch_agents({ids})`: returns at once. An `ctx.event.subscribe` loop waits for
+  `session.execution.succeeded` on a watched child and sends the report to the parent with
+  `ctx.session.prompt({sessionID: parent, text, delivery: "queue"})`.
+
+What it showed:
+
+| Question | Answer | Receipt |
+|---|---|---|
+| Can a tool block for minutes? | yes | `await_agents` held 351.9 s (3 children, 6 x 55 s each) and returned; no timeout hit |
+| Reports for 3 in parallel? | yes, both modes | `all`: one result with 3 reports. `any`: 3 calls, each returned the next child to finish (10.2, 12.2, 10.0 s) |
+| Wake a parent whose turn ended? | yes, two ways | 2.x already does it: every child sends a `<subagent>` report to the parent's inbox and wakes it. The plugin's `ctx.session.prompt` push woke it too |
+| A hook that stops the turn ending? | no | 2.x session hooks have no turn-end hook. Closest: the `context` hook adds a system reminder before each model request, plus the native wake above. The reminder was written but not run |
+| Which events see another session? | one server sees all | `ctx.event.subscribe` in a plugin and `GET /api/event` both carried events for sessions in two directories. A child created with `parentID` lands in the parent's directory |
+| Works on 1.x? | yes, and less needed | 1.19.6 `task` blocks: 3 parallel calls returned all 3 reports. The same tools load as a 1.x plugin, and its `event` hook sees each child's `session.idle` |
+
+Gotchas for a real version:
+
+- The native `<subagent>` reports still arrive after `await_agents` returns, so the parent sees
+  each report twice. Drop the ones already returned (a `context` hook can filter them) or skip
+  `await_agents` and lean on the native wake.
+- 2.x never sent `session.idle` here; `session.execution.succeeded` is the signal.
+- 1.x backgrounds a `task` only with `background: true` and
+  `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`; push through `prompt_async` was not run.
+
+Size: about 12-20 hours to make it real (both tools, dedupe, reminder, abort through
+`context.signal`, an optional timeout, report truncation, fake-model tests). It removes the 2.x
+blocker above: the SDD loop can dispatch and then block on `await_agents` as it does on 1.x. It
+fits inside the 40-60 hour 2.x adapter estimate.
 
 ## Decisions for the user
 
