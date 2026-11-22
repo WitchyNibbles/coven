@@ -178,10 +178,8 @@ def test_allows_a_name_that_is_only_data(bash: Run, command: str) -> None:
         'echo "task: spawned[0].env was refused"',
         'python3 -c "print(rows[0].env)"',
         'node -e "console.log(load().env)"',
-        "node -e \"console.log(require('x')().env.PATH)\"",
         "python3 -c \"import os; print(os.environ['HOME'])\"",
         "python3 -c \"import os; print(os.environ.get('HOME'))\"",
-        'echo cfg["k"].env',
         "echo a[0][1].env",
         "echo f()[0].env",
         "python3 - <<'EOF'\nassert spawned[0].env == {}\nEOF",
@@ -206,6 +204,29 @@ def test_allows_a_name_that_is_an_attribute_of_a_call_or_an_index(bash: Run, com
         "cat ).env",
         "cat $((0)).env",
         "ls $(true).ssh",
+        # a quoted bracket inside `$(...)` is not the opener of the call
+        "cat $(true 'a(').env",
+        "cat $(true 'a(' ).env",
+        'cat $(true "a(").env',
+        "cat <(true 'a(').env",
+        "cat app/$(true 'a(').env",
+        "ls $(true 'a(').ssh",
+        "ls -d ~/$(true 'a(').ssh",
+        "cat $(true 'a(')[0].env",
+        "cat $(echo 'x[' ].env",
+        "cat a$(true 'b(' ).env",
+        "cat '$(' 'a(' ).env",
+        # a heredoc inside the substitution holds the opener
+        "cat $(cat <<E\na(\nE\n).env",
+        # zsh glob qualifiers
+        "cat x(#c0).env",
+        "cat x(#a0).env",
+        "cat x(|).env",
+        # kept refused on purpose: a group with a quote, a blank or a bracket in it
+        'echo cfg["k"].env',
+        "node -e \"console.log(require('x')().env.PATH)\"",
+        "echo f(a, b).env",
+        "echo f(g(x)).env",
     ],
 )
 def test_still_blocks_a_name_after_a_bracket_that_is_not_a_call_or_an_index(
