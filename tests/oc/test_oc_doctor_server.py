@@ -70,7 +70,7 @@ def test_a_server_that_does_not_start_fails_plugin_and_skills_alone(good: Good):
         assert found[name].status == "fail"
         assert "did not start" in found[name].detail
     assert len(reader.calls) == 1
-    assert [found[name].status for name in NAMES if name not in ("plugin", "skills")] == ["ok"] * 6
+    assert [found[name].status for name in NAMES if name not in ("plugin", "skills")] == ["ok"] * 7
 
 
 def test_a_reader_that_crashes_fails_both_server_checks_with_one_line(good: Good):
@@ -107,7 +107,7 @@ def test_a_broken_profile_is_a_config_failure_and_the_others_still_print(good: G
 def test_no_output_line_holds_the_key_value_or_the_server_password(good: Good):
     reader = Reader(error=OpencodeError("the server did not start within 30 s"))
     lines = render(run_doctor(good.layout, good.cwd, read=reader))
-    assert len(lines) == 8
+    assert len(lines) == 9
     assert KEY_VALUE not in "\n".join(lines)
     assert "OPENCODE_SERVER_PASSWORD" not in "\n".join(lines)
 

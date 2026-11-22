@@ -2,15 +2,25 @@ from pathlib import Path
 
 import pytest
 from doctor_kit import KEY_NAME, KEY_VALUE, LITELLM_FLAGS, Good
-from fakes import fake_opencode
+from fakes import fake_opencode, install_superpowers
 
 from coven import cli
 from coven.opencode.profile import layout
 
 
+@pytest.fixture(autouse=True)
+def claude_plugins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty Claude Code plugins folder: no test reads the real installed-plugins file."""
+    folder = tmp_path / "claude-plugins"
+    folder.mkdir()
+    monkeypatch.setenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", str(folder))
+    return folder
+
+
 @pytest.fixture
-def good(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Good:
+def good(claude_plugins: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Good:
     """A profile set up with the litellm preset, a fake 2.3.2 binary and the key set."""
+    install_superpowers(claude_plugins)
     monkeypatch.setenv("COVEN_OPENCODE_HOME", str(tmp_path / "profile"))
     assert cli.main(["opencode", "setup", *LITELLM_FLAGS]) == 0
     bin_dir = tmp_path / "bin"

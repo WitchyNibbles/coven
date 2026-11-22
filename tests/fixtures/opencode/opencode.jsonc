@@ -27,5 +27,45 @@
         "guardTimeoutMs": 5000
       }
     }
+  ],
+  "experimental": {
+    "todo": true
+  },
+  "permissions": [
+    {
+      "action": "read",
+      "resource": "*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "read",
+      "resource": "*.env.example",
+      "effect": "allow"
+    },
+    {
+      "action": "edit",
+      "resource": "*.env",
+      "effect": "deny"
+    },
+    {
+      "action": "edit",
+      "resource": "*.env.*",
+      "effect": "deny"
+    },
+    {
+      "action": "external_directory",
+      "resource": "<P>/config/opencode/skills/*",
+      "effect": "allow"
+    },
+    {
+      "action": "edit",
+      "resource": "<P>/config/opencode/skills/*",
+      "effect": "deny"
+    }
   ]
 }

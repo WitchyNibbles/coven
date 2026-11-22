@@ -11,7 +11,9 @@ OpenCode, its config and coven's plugin, apart from any OpenCode you already use
   and the end-to-end run use it to prove the plugin loaded;
 - a `tool_choice` hook for gateways (see below).
 
-PR 3 adds the skills, the agents, the routing and deny-secrets.
+Setup also copies coven's skills, role agents, commands and routing (`opencode/content/`, generated
+from the Claude Code content by `python -m coven.opencode.content`) and the deny-secrets guard,
+described below.
 
 ## The profile
 
@@ -19,7 +21,7 @@ The profile folder `P` is `$XDG_DATA_HOME/coven/opencode`, which is `~/.local/sh
 when `XDG_DATA_HOME` is unset, or the folder in `COVEN_OPENCODE_HOME`.
 
     P/runtime/<version>/   npm prefix holding the pinned OpenCode
-    P/config/opencode/     OPENCODE_CONFIG_DIR: the generated opencode.jsonc
+    P/config/opencode/     OPENCODE_CONFIG_DIR: opencode.jsonc, AGENTS.md, skills/, agents/, commands/
     P/plugin/coven/        a copy of src/, loaded only through the config's `plugins` entry
     P/config, data, cache, state   the four XDG folders OpenCode sees
     P/home/                OPENCODE_TEST_HOME: an empty home, so no .agents or .claude is read
@@ -48,11 +50,40 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm cache
   still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2
   binary instead.
-- `setup` writes the config, the plugin copy and `profile.json`, all or none. The preset
+- `setup` writes the config (with the content below), the plugin copy and `profile.json`, all or
+  none. The preset
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
   value) and `--model lead=ID`; the preset `opencode` takes only models and reads
   `OPENCODE_API_KEY`. Roles are lead, implementer, reviewer, explorer, final-reviewer and title,
   and a role with no model uses the lead's. With no flags it regenerates from `profile.json`.
+  What setup puts in `P/config/opencode/`:
+  - `skills/coven-*`, `agents/` and `commands/`, copied from `opencode/content/`;
+  - `skills/superpowers-<x>` for brainstorming, writing-plans, test-driven-development,
+    systematic-debugging, verification-before-completion, using-git-worktrees,
+    finishing-a-development-branch and executing-plans, copied from your Claude Code
+    superpowers plugin (found through its installed-plugins file). Only the skill names in the
+    text are renamed, so wording that is Claude Code's (its tool names) stays; that is a known gap.
+    When the plugin is not installed, setup prints one warning, appends a note to `AGENTS.md` and
+    leaves the copies out. A re-run after installing it adds them; a re-run after removing it
+    drops them;
+  - `AGENTS.md`: the routing, then a pointer to your memory store (the folder of `memory_path` in
+    the coven config; with no folder, one line says so). A coven config that cannot be read makes
+    setup fail;
+  - in `opencode.jsonc`: `experimental.todo` (turns on the task-list tool) and `permissions`: deny
+    read and edit of `.env` files (an example file stays readable), then allow file access outside
+    the session's folder for the profile's skills and the memory store, which OpenCode would
+    otherwise ask about and a headless run cannot answer. Edits to the profile's installed
+    skills are denied.
+
+  The `.env` rules are the second layer. The first is the plugin's guard, which runs coven's
+  `deny_secrets.py` before each `read`, `grep`, `glob`, `shell`, `write`, `edit` and `patch`.
+  Config rules cannot read a shell line, so `shell` is covered by the plugin layer only. So are
+  `grep` and `glob`: in 2.3.2 they check `external_directory` and then their own permission with
+  the search pattern as the resource, never `read` on the files they search, so the `read` rules
+  above do not apply to them (`grep` returns line previews; `glob` returns paths only). The guard
+  fails closed: an error or a timeout (`guardTimeoutMs`, 5 s) refuses the call. Other tools (MCP,
+  `webfetch`, `subagent`, `skill`) pass, as on Claude Code.
+
 - `run` checks that the runtime reports the pinned version, warns by name when the key variable is
   unset, and replaces itself with OpenCode in the profile's environment. Arguments for OpenCode
   follow `--`.
@@ -66,7 +97,8 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   (a server started for the check lists `coven` as active; it polls up to 10 s, because 2.3.2 lists
   no plugin until they have loaded), `skills` (the same server lists only built-in skills and the
   profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and
-  `project config` (a warning for a repo config that is ignored here).
+  `project config` (a warning for a repo config that is ignored here) and `superpowers` (check 9, a
+  warning when a `superpowers-<x>` skill is missing from the profile).
 
 ## The tool_choice hook
 
@@ -145,3 +177,24 @@ shared harness (fake model, loopback guards, snapshots, the `withServer` helper)
 Unit tests run without OpenCode:
 
     npm test
+
+## Content
+
+`opencode/content/` holds the skills and commands the profile ships, rendered from the repo's
+`skills/` folder by a generator. It is committed, and a test renders it again and compares. After a
+change to a skill, to `opencode/overrides/` or to `src/coven/opencode/rewrite.py`, regenerate it:
+
+    uv run python -m coven.opencode.content
+
+Do not edit the output by hand. The rewrite table in `rewrite.py` maps the Claude Code names in a
+skill (skill and agent ids, tool names, the `Subagent (...)` lines of the prompt templates) to their
+OpenCode 2.3.2 names, line by line. A name with no equivalent (a Claude-only tool, a coven skill
+that is not shipped, `${CLAUDE_SKILL_DIR}`) stops the generator with the file and line. A
+`superpowers:<x>` name is renamed to `superpowers-<x>` whether or not setup copies it, so a test
+checks that every `superpowers-<x>` the content names is one of the skills setup copies.
+
+For such a file, write an override: `opencode/overrides/skills/<name>/<file>` replaces the source
+file of the same path. Its first line is `<!-- opencode override of skills/<name>/<file> sha256:HEX -->`,
+with the sha256 of that source file; the generator strips it. When the source changes, a test fails
+until the override is updated and its hash with it. Overrides exist for `subagent-driven-development`,
+`shared-memory`, `handoff` and the routing (`AGENTS.md`).

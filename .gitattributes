@@ -2,3 +2,5 @@
 uv.lock linguist-generated
 standard/typescript/eslint.config.mjs linguist-vendored
 examples/ linguist-documentation
+opencode/content/** linguist-generated
+opencode/overrides/** linguist-vendored

@@ -18,3 +18,8 @@ export function isPlainObject(
 export function show(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
+
+/** The message of an `Error`; `String(error)` for anything else that was thrown. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

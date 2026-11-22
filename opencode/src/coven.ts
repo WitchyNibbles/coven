@@ -1,4 +1,6 @@
-import type { CovenContext } from "./context.ts";
+import type { CovenContext, Registration } from "./context.ts";
+import { denySecretsHook } from "./guard.ts";
+import type { SpawnFn } from "./guard.ts";
 import { joinSetup } from "./plugin.ts";
 import { parseOptions } from "./options.ts";
 import { pingTool } from "./ping.ts";
@@ -7,6 +9,8 @@ import { toolChoiceHook } from "./tool-choice.ts";
 export interface CovenDeps {
   now: () => number;
   log: (line: string) => void;
+  /** Starts the guard child; the real `spawn` unless a test stands in. */
+  spawn?: SpawnFn;
 }
 
 const REQUIRED_TOOLS = ["coven_ping", "await_agents"] as const;
@@ -27,11 +31,26 @@ export async function covenSetup(
   rawOptions: unknown,
 ): Promise<() => void> {
   const options = parseOptions(rawOptions);
-  const cleanup = await joinSetup(ctx, { now: deps.now });
+  const stopJoin = await joinSetup(ctx, { now: deps.now });
+  let guard: Registration | undefined;
+  const cleanup = (): void => {
+    try {
+      guard?.dispose();
+    } finally {
+      stopJoin();
+    }
+  };
   try {
     await ctx.tool.transform((editor) => {
       editor.add(pingTool(options.covenRoot));
     });
+    guard = await ctx.tool.hook(
+      "execute.before",
+      denySecretsHook(options, {
+        directory: ctx.location.directory,
+        ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
+      }),
+    );
     const warned = new Set<string>();
     for (const providerID of options.toolChoiceAuto) {
       await ctx.session.hook("http.request", toolChoiceHook(deps.log, warned), {

@@ -19,6 +19,7 @@ from coven.opencode.checks_runtime import (
     paths_check,
     project_config_check,
     runtime_check,
+    superpowers_check,
 )
 from coven.opencode.checks_server import plugin_check, skills_check
 from coven.opencode.profile import Layout, OpencodeError, Profile, load_profile
@@ -37,6 +38,7 @@ CHECKS: Final[tuple[tuple[str, Check], ...]] = (
     ("skills", skills_check),
     ("coven root", coven_root_check),
     ("project config", project_config_check),
+    ("superpowers", superpowers_check),
 )
 
 

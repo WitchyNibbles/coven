@@ -8,7 +8,17 @@ from coven.opencode.canary import ServerOptions, ServerView
 from coven.opencode.checks import Outcome, run_doctor
 from coven.opencode.profile import Layout
 
-NAMES = ["runtime", "paths", "config", "key", "plugin", "skills", "coven root", "project config"]
+NAMES = [
+    "runtime",
+    "paths",
+    "config",
+    "key",
+    "plugin",
+    "skills",
+    "coven root",
+    "project config",
+    "superpowers",
+]
 KEY_NAME = "GATEWAY_KEY"
 KEY_VALUE = "sk-live-value-1234567890"
 LITELLM_FLAGS = [

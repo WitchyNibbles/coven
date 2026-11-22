@@ -1,10 +1,11 @@
 from pathlib import Path
 
 import pytest
+from fakes import install_superpowers
 from support import REPO
 
 from coven import cli, paths
-from coven.opencode import generate
+from coven.opencode import generate, superpowers
 
 LITELLM_FLAGS = [
     "--preset",
@@ -39,7 +40,10 @@ def snapshot(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_setup_writes_config_profile_and_plugin(home: Path, capsys: pytest.CaptureFixture[str]):
+def test_setup_writes_config_profile_and_plugin(
+    home: Path, capsys: pytest.CaptureFixture[str], claude_plugins: Path
+):
+    install_superpowers(claude_plugins)
     assert setup(*LITELLM_FLAGS) == 0
     config = home / "config" / "opencode" / "opencode.jsonc"
     assert '"model": "litellm/big"' in config.read_text()
@@ -61,6 +65,32 @@ def test_setup_writes_config_profile_and_plugin(home: Path, capsys: pytest.Captu
         "title: small",
         "next: coven opencode doctor",
     ]
+
+
+def test_setup_names_the_missing_superpowers_on_one_warning_line(
+    home: Path, capsys: pytest.CaptureFixture[str], claude_plugins: Path
+):
+    install_superpowers(claude_plugins, superpowers.SKILLS[:2])
+    assert setup(*LITELLM_FLAGS) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2:] == [
+        "warning: superpowers skills not found: test-driven-development, systematic-debugging, "
+        "verification-before-completion, using-git-worktrees, finishing-a-development-branch, "
+        "executing-plans (install the superpowers plugin in Claude Code, "
+        "then re-run coven opencode setup)",
+        "next: coven opencode doctor",
+    ]
+    assert sum("superpowers" in line for line in lines) == 1
+
+
+def test_setup_with_no_superpowers_install_warns_and_still_succeeds(
+    home: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert setup(*LITELLM_FLAGS) == 0
+    assert "warning: superpowers skills not found: brainstorming, writing-plans" in (
+        capsys.readouterr().out
+    )
+    assert (home / "config" / "opencode" / "AGENTS.md").is_file()
 
 
 def test_opencode_preset_output(home: Path, capsys: pytest.CaptureFixture[str]):

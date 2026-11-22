@@ -10,6 +10,8 @@ const SESSION_TIMEOUT_MS = 2 * 60 * 1000;
 /** What a session left: the lead's history and the requests the fake saw meanwhile. */
 export interface Session {
   history: LeadHistory;
+  /** The session as `opencode session export` printed it. */
+  exported: string;
   requests: readonly RecordedRequest[];
 }
 
@@ -28,24 +30,36 @@ async function opencode(world: RuntimeWorld, args: string[]): Promise<string> {
   return done.out;
 }
 
-/** Runs the PING prompt, exports the session and reads the requests it caused. */
-export async function runSession(world: RuntimeWorld): Promise<Session> {
+/** `opencode session export` of `sessionID`: the JSON text. */
+export function exportSession(
+  world: RuntimeWorld,
+  sessionID: string,
+): Promise<string> {
+  return opencode(world, ["session", "export", "--standalone", sessionID]);
+}
+
+/** Runs `prompt`, exports the session and reads the requests it caused. */
+export async function runPrompt(
+  world: RuntimeWorld,
+  prompt: string,
+): Promise<Session> {
   const before = world.model.requests().length;
   const out = await opencode(world, [
     "run",
     "--standalone",
     "--format",
     "json",
-    "PING",
+    prompt,
   ]);
-  const exported = await opencode(world, [
-    "session",
-    "export",
-    "--standalone",
-    sessionOf(out),
-  ]);
+  const exported = await exportSession(world, sessionOf(out));
   return {
     history: readHistory(exported),
+    exported,
     requests: world.model.requests().slice(before),
   };
+}
+
+/** Runs the PING prompt. */
+export function runSession(world: RuntimeWorld): Promise<Session> {
+  return runPrompt(world, "PING");
 }

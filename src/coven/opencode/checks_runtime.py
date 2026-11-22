@@ -13,9 +13,13 @@ from coven.opencode.check_types import RESET, SETUP, Context, Outcome
 from coven.opencode.generate import CONFIG_FILE, config_data
 from coven.opencode.profile import AGENT_ROLES, PINNED_VERSION, Layout, OpencodeError, Profile
 from coven.opencode.runtime import BINARY_OVERRIDE, binary_version, probe
+from coven.opencode.superpowers import SKILLS, folder_id
 
 PROJECT_CONFIG: Final = (".opencode", "opencode.json", "opencode.jsonc")
 GUARD_HOOK: Final = "hooks/deny_secrets.py"
+SUPERPOWERS_FIX: Final = (
+    "install the superpowers plugin in Claude Code, then re-run `coven opencode setup`"
+)
 
 type Fields = list[tuple[str, tuple[str, ...]]]
 
@@ -151,3 +155,11 @@ def project_config_check(ctx: Context) -> Outcome:
     return Outcome(
         "warn", f"{', '.join(found)}: ignored in the coven profile (project config is off)"
     )
+
+
+def superpowers_check(ctx: Context) -> Outcome:
+    skills = ctx.layout.config_dir / "skills"
+    missing = [folder_id(name) for name in SKILLS if not (skills / folder_id(name)).is_dir()]
+    if missing:
+        return Outcome("warn", f"missing {', '.join(missing)}", SUPERPOWERS_FIX)
+    return Outcome("ok", f"{len(SKILLS)} superpowers skills copied")
