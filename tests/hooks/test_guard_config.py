@@ -2,7 +2,6 @@
 only os, sys and json. The guard's own wrappers (GuardConfig, read_config) live in prod_guard and
 are tested with it."""
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -11,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from support import load_module
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 # What a thin off path must not pull in: each one is milliseconds on every tool call.
@@ -18,13 +18,7 @@ HEAVY = ("pathlib", "typing", "logging", "subprocess", "ipaddress", "dataclasses
 
 
 def load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(f"coven_test_{name}", HOOKS / f"{name}.py")
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_module(HOOKS / f"{name}.py", f"coven_test_{name}", register=True)
 
 
 @pytest.fixture(scope="module")

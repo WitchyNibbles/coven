@@ -3,7 +3,6 @@ the user approved the exact command. Every system, host and command here is inve
 runs a remote CLI: a command is only a string the guard reads."""
 
 import argparse
-import importlib.util
 import io
 import json
 import os
@@ -18,6 +17,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from support import load_module
 
 from coven import cli, paths
 
@@ -64,16 +64,7 @@ type Payload = dict[str, object]
 
 def load() -> ModuleType:
     """Import the hook by path, as the hooks load each other (they are not a package)."""
-    spec = importlib.util.spec_from_file_location("coven_prod_guard", SCRIPT)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
+    return load_module(SCRIPT, "coven_prod_guard")
 
 
 pg = load()
@@ -307,7 +298,7 @@ def test_the_latch_with_a_committed_guard_enforces_it(run: Run, tmp_path: Path) 
 
 
 def test_the_config_and_memory_context_name_the_same_store(tmp_path: Path) -> None:
-    sibling = load_module("memory_context")
+    sibling = load_hook("memory_context")
     assert pg.read_config() == pg.GuardConfig(sibling.store_path(), latch=False)  # no file
     for text in ("{}", json.dumps({"memory_path": str(tmp_path / "elsewhere")})):
         write_config(text)
@@ -318,17 +309,8 @@ def test_the_config_file_is_the_one_coven_reads() -> None:
     assert pg.config_file() == paths.config_dir() / "config.json"
 
 
-def load_module(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(f"coven_{name}_under_test", HOOKS / f"{name}.py")
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
+def load_hook(name: str) -> ModuleType:
+    return load_module(HOOKS / f"{name}.py", f"coven_{name}_under_test")
 
 
 # --- a config that cannot be read ---

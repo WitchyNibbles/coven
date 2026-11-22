@@ -1,9 +1,10 @@
 """Helpers shared by the memory tests (imported by name: `tests/` has no packages)."""
 
-import importlib.util
 import subprocess
 from pathlib import Path
 from types import ModuleType
+
+from support import load_module
 
 from coven.memory import store
 
@@ -13,12 +14,7 @@ PROC_LINE = 'PROC_ROOT = Path("/proc")'
 
 def load_hook(name: str) -> ModuleType:
     """A script of the repo's hooks folder, loaded by path (hooks are not a package)."""
-    spec = importlib.util.spec_from_file_location(f"coven_test_{name}", HOOKS / f"{name}.py")
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module(HOOKS / f"{name}.py", f"coven_test_{name}")
 
 
 def neutral_hook(store_path: Path) -> None:

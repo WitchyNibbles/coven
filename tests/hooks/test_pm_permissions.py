@@ -1,5 +1,4 @@
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -11,6 +10,7 @@ import time
 from pathlib import Path
 
 import pytest
+from support import load_module
 
 SCRIPT = Path(__file__).resolve().parents[2] / "hooks" / "pm_permissions.py"
 ROLE = "COVEN_SESSION_ROLE"
@@ -24,16 +24,7 @@ PATIENT_SECONDS = 30.0
 
 def load():
     """Import the script by path, as the hooks load each other (they are not a package)."""
-    spec = importlib.util.spec_from_file_location("coven_pm_permissions", SCRIPT)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = old
-    return module
+    return load_module(SCRIPT, "coven_pm_permissions")
 
 
 pm = load()

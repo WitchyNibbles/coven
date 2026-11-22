@@ -2,7 +2,6 @@
 exits 0 without reading stdin and without importing prod_guard; in every other case it hands over
 to prod_guard, which decides exactly as it does when run directly."""
 
-import importlib.util
 import json
 import os
 import signal
@@ -15,6 +14,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from support import load_module
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 GATE = HOOKS / "prod_guard_gate.py"
@@ -167,12 +167,7 @@ def test_the_guard_is_still_runnable_directly(run_hook: Run) -> None:
 
 
 def load_gate() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("coven_test_gate", GATE)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module(GATE, "coven_test_gate")
 
 
 class FakeGuard:

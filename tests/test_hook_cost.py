@@ -1,17 +1,15 @@
 """bench/hook_cost.py: the hook start-up benchmark. Its statistics, its argument handling, the
 environment it gives each call and one real run over the shipped hooks, all under temporary homes."""
 
-import importlib.util
 import json
 import os
 import re
-import sys
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import ModuleType
 
 import pytest
-from support import REPO
+from support import REPO, load_module
 
 LABELS = "abcdef"
 # What a shell adds to the environment it starts with: nothing else may be there.
@@ -19,13 +17,7 @@ SHELL_VARIABLES = {"PATH", "HOME", "PWD", "OLDPWD", "SHLVL", "_"}
 
 
 def load(path: Path, name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return load_module(path, name, register=True)
 
 
 @pytest.fixture(scope="module")

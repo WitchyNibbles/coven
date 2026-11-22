@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import os
 import stat
@@ -6,6 +5,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from support import load_module
 
 from coven import paths
 
@@ -14,12 +14,7 @@ HOOKLOG = Path(__file__).resolve().parents[2] / "hooks" / "hooklog.py"
 
 @pytest.fixture
 def hooklog() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("coven_test_hooklog", HOOKLOG)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module(HOOKLOG, "coven_test_hooklog")
 
 
 def lines(path: Path) -> list[dict[str, object]]:
