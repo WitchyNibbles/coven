@@ -157,7 +157,9 @@ def make_profile(
         if base_url is not None:
             raise OpencodeError("--preset opencode takes no --base-url")
         if key_env is not None:
-            raise OpencodeError(f"--preset opencode takes no --key-env: it reads {OPENCODE_KEY_ENV}")
+            raise OpencodeError(
+                f"--preset opencode takes no --key-env: it reads {OPENCODE_KEY_ENV}"
+            )
         return Profile("opencode", None, OPENCODE_KEY_ENV, _parse_models(model_pairs))
     if preset != "litellm":
         raise OpencodeError(f"unknown preset {preset!r}: use one of {', '.join(PRESETS)}")

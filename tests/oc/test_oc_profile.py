@@ -35,7 +35,14 @@ def test_layout_function_reads_the_opencode_home(monkeypatch: pytest.MonkeyPatch
 
 def test_constants():
     assert profile.PINNED_VERSION == "2.3.2"
-    assert profile.ROLES == ("lead", "implementer", "reviewer", "explorer", "final-reviewer", "title")
+    assert profile.ROLES == (
+        "lead",
+        "implementer",
+        "reviewer",
+        "explorer",
+        "final-reviewer",
+        "title",
+    )
     assert profile.AGENT_ROLES == ("explorer", "implementer", "reviewer", "final-reviewer")
     assert profile.OPENCODE_KEY_ENV == "OPENCODE_API_KEY"
     assert issubclass(OpencodeError, CovenError)
