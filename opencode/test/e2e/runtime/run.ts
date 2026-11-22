@@ -1,6 +1,6 @@
 /** One OpenCode session through `coven opencode run`. */
 import { coven } from "../../harness/coven.ts";
-import { readHistory } from "../../harness/history.ts";
+import { readHistory, sessionOf } from "../../harness/history.ts";
 import type { LeadHistory } from "../../harness/history.ts";
 import type { RecordedRequest } from "../../harness/fake-model.ts";
 import type { RuntimeWorld } from "./profile.ts";
@@ -11,15 +11,6 @@ const SESSION_TIMEOUT_MS = 2 * 60 * 1000;
 export interface Session {
   history: LeadHistory;
   requests: readonly RecordedRequest[];
-}
-
-function sessionOf(out: string): string {
-  const first = out.split("\n").find((line) => line.startsWith("{")) ?? "{}";
-  const id = (JSON.parse(first) as { sessionID?: string }).sessionID;
-  if (id === undefined) {
-    throw new Error(`the run printed no session id: ${out.slice(0, 300)}`);
-  }
-  return id;
 }
 
 /** `coven opencode run -- <args>` in the work folder, to its end; throws on a non-zero exit. */

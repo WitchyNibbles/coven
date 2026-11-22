@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
+
+const GRACE_MS = 5000;
 
 export interface Finished {
   code: number | null;
@@ -47,5 +50,21 @@ export function exec(
       clearTimeout(timer);
       resolve({ code, out, err });
     });
+  });
+}
+
+/** SIGTERM, then SIGKILL after the grace period; resolves once the child is gone. */
+export function stop(child: ChildProcess): Promise<void> {
+  const gone = child.exitCode !== null || child.signalCode !== null;
+  if (gone || child.pid === undefined) {
+    return Promise.resolve();
+  }
+  return new Promise((done) => {
+    const killer = setTimeout(() => child.kill("SIGKILL"), GRACE_MS);
+    child.once("close", () => {
+      clearTimeout(killer);
+      done();
+    });
+    child.kill("SIGTERM");
   });
 }

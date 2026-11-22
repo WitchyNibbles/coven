@@ -22,6 +22,7 @@ import type { Runs } from "./checks.ts";
 import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
 import { runtimeSuite } from "./runtime/checks.ts";
+import type { Outcome } from "./runtime/checks.ts";
 import { decide } from "./script.ts";
 
 const PROJECT = fileURLToPath(new URL("./project", import.meta.url));
@@ -35,12 +36,6 @@ const PROMPTS: Record<keyof Runs, string> = {
 };
 
 const EMPTY: LeadHistory = { reports: [], tools: [], finalText: "" };
-
-/** One numbered line of output: a check that passed, or the reason it failed. */
-interface Outcome {
-  title: string;
-  problem: string | undefined;
-}
 
 type Suite = (harness: Harness) => Promise<Outcome[]>;
 
@@ -75,8 +70,7 @@ const joinSuite: Suite = async (harness) => {
   }));
 };
 
-/** The suites in the order they run when none is named: the runtime suite comes first. */
-const SUITE_ORDER = ["runtime", "join"];
+/** The suites, in the order they run when none is named: the runtime suite comes first. */
 const SUITES: Record<string, Suite> = {
   runtime: runtimeSuite,
   join: joinSuite,
@@ -84,10 +78,7 @@ const SUITES: Record<string, Suite> = {
 
 /** The suites to run, or the refusal when one is not known. */
 function chosenSuites(argv: readonly string[]): readonly string[] | string {
-  const names =
-    argv.length > 0
-      ? argv
-      : SUITE_ORDER.filter((name) => Object.hasOwn(SUITES, name));
+  const names = argv.length > 0 ? argv : Object.keys(SUITES);
   const unknown = names.find((name) => !Object.hasOwn(SUITES, name));
   return unknown === undefined
     ? names

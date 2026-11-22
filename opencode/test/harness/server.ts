@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { covenCommand } from "./coven.ts";
+import { stop } from "./process.ts";
 
 export interface Api {
   get(path: string): Promise<unknown>;
@@ -15,7 +16,6 @@ interface ServerOptions {
 }
 
 const START_TIMEOUT_MS = 30_000;
-const GRACE_MS = 5000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const USERNAME = "opencode";
 const LISTENING = /^server listening on (http:\/\/127\.0\.0\.1:\d+)$/;
@@ -46,22 +46,6 @@ function listeningURL(child: ChildProcess): Promise<string> {
       clearTimeout(timer);
       reject(new Error("the server exited before it listened"));
     });
-  });
-}
-
-/** SIGTERM, then SIGKILL after the grace period; resolves once the child is gone. */
-function stop(child: ChildProcess): Promise<void> {
-  const gone = child.exitCode !== null || child.signalCode !== null;
-  if (gone || child.pid === undefined) {
-    return Promise.resolve();
-  }
-  return new Promise((done) => {
-    const killer = setTimeout(() => child.kill("SIGKILL"), GRACE_MS);
-    child.once("close", () => {
-      clearTimeout(killer);
-      done();
-    });
-    child.kill("SIGTERM");
   });
 }
 

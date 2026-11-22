@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { readHistory } from "../harness/history.ts";
+import { readHistory, sessionOf } from "../harness/history.ts";
 import type { LeadHistory } from "../harness/history.ts";
 import { cleanEnv, exec } from "../harness/process.ts";
 
@@ -12,15 +12,6 @@ export interface Harness {
 }
 
 const KILL_AFTER_MS = 5 * 60 * 1000;
-
-function sessionOf(out: string): string {
-  const first = out.split("\n").find((line) => line.startsWith("{")) ?? "{}";
-  const id = (JSON.parse(first) as { sessionID?: string }).sessionID;
-  if (id === undefined) {
-    throw new Error(`the run printed no session id: ${out.slice(0, 300)}`);
-  }
-  return id;
-}
 
 /** Runs the lead on `prompt` and returns its history as OpenCode exports it. */
 export async function runScenario(

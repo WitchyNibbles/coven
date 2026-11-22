@@ -14,7 +14,8 @@ import type { RuntimeWorld } from "./profile.ts";
 import { runSession } from "./run.ts";
 import type { Session } from "./run.ts";
 
-interface Outcome {
+/** One numbered line of output: a check that passed, or the reason it failed. */
+export interface Outcome {
   title: string;
   problem: string | undefined;
 }
