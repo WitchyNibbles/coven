@@ -33,8 +33,13 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(home / ".cache"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local" / "state"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.delenv("COVEN_SESSION_ROLE", raising=False)
+    for name in ("COVEN_OPENCODE_HOME", "COVEN_OPENCODE_BIN", *os.environ):
+        if name.startswith("OPENCODE_") or name.startswith("COVEN_OPENCODE_"):
+            monkeypatch.delenv(name, raising=False)
 
 
 # What git exports to a hook it runs (a pre-commit run starts pytest with some of these set): each

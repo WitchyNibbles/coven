@@ -48,3 +48,22 @@ def test_installed_plugins_file_moves_with_the_plugin_cache_dir(
 
 def test_standard_dir_is_the_repos_standard_folder():
     assert (paths.standard_dir() / "check.py").is_file()
+
+
+def test_opencode_home_prefers_the_coven_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("COVEN_OPENCODE_HOME", str(tmp_path / "oc"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert paths.opencode_home() == tmp_path / "oc"
+
+
+def test_opencode_home_follows_xdg_data_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert paths.opencode_home() == tmp_path / "data" / "coven" / "opencode"
+
+
+def test_opencode_home_defaults_to_local_share_in_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    expected = tmp_path / "home" / ".local" / "share" / "coven" / "opencode"
+    assert paths.opencode_home() == expected

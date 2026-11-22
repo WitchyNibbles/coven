@@ -1,0 +1,31 @@
+{
+  "update": "disable",
+  "model": "opencode/big",
+  "agents": {
+    "explorer": {
+      "model": "opencode/big"
+    },
+    "implementer": {
+      "model": "opencode/big"
+    },
+    "reviewer": {
+      "model": "opencode/big"
+    },
+    "final-reviewer": {
+      "model": "opencode/big"
+    },
+    "title": {
+      "model": "opencode/big"
+    }
+  },
+  "plugins": [
+    {
+      "package": "<P>/plugin/coven",
+      "options": {
+        "covenRoot": "<COVEN_ROOT>",
+        "toolChoiceAuto": [],
+        "guardTimeoutMs": 5000
+      }
+    }
+  ]
+}

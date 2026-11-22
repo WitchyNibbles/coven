@@ -84,6 +84,16 @@ function textOfAssistant(message: ExportedMessage): string {
     .join("\n");
 }
 
+/** The session id in the first JSON line of a `run --format json` output. */
+export function sessionOf(out: string): string {
+  const first = out.split("\n").find((line) => line.startsWith("{")) ?? "{}";
+  const id = (JSON.parse(first) as { sessionID?: string }).sessionID;
+  if (id === undefined) {
+    throw new Error(`the run printed no session id: ${out.slice(0, 300)}`);
+  }
+  return id;
+}
+
 /** `exported` is the JSON of `opencode session export` for the lead's session. */
 export function readHistory(exported: string): LeadHistory {
   const messages =

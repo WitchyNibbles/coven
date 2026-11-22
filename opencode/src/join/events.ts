@@ -1,4 +1,4 @@
-import { ownString } from "./fields.ts";
+import { isPlainObject, ownString } from "./fields.ts";
 import type { Observed } from "./record.ts";
 import { isReportState, reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
@@ -22,9 +22,7 @@ export const EVENT_TYPES: readonly string[] = [
 type Fields = Record<string, unknown>;
 
 function fields(value: unknown): Fields | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Fields)
-    : undefined;
+  return isPlainObject(value) ? value : undefined;
 }
 
 // The tag in the report text wins; the metadata state is only for an unreadable tag.

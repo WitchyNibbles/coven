@@ -1,3 +1,5 @@
+import { isPlainObject, show } from "./fields.ts";
+
 export type Mode = "all" | "any";
 
 export interface AwaitInput {
@@ -34,10 +36,6 @@ export const inputSchema = {
   required: ["ids"],
   additionalProperties: false,
 } as const;
-
-function show(value: unknown): string {
-  return JSON.stringify(value) ?? String(value);
-}
 
 function parseIds(raw: unknown, callerID: string): string[] {
   if (!Array.isArray(raw)) {
@@ -91,10 +89,10 @@ function parseTimeout(raw: unknown): number {
 }
 
 export function parseInput(raw: unknown, callerID: string): AwaitInput {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+  if (!isPlainObject(raw)) {
     throw new InputError(`input must be an object, got ${show(raw)}`);
   }
-  const fields = raw as Record<string, unknown>;
+  const fields = raw;
   for (const name of Object.keys(fields)) {
     if (!KNOWN.has(name)) {
       throw new InputError(`unknown property ${name}`);

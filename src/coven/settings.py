@@ -175,7 +175,7 @@ def _utf8(file: Path, text: str) -> bytes:
         ) from error
 
 
-def _write_atomic(file: Path, payload: bytes, *, mode: int, backup: bool) -> None:
+def write_atomic(file: Path, payload: bytes, *, mode: int, backup: bool) -> None:
     """Temp file in the same folder, synced, then a rename; follows a symlinked `file`."""
     target = file.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -414,7 +414,7 @@ def _save_owned(record: _Record) -> None:
     ]
     body = {"version": 1, "changes": entries, "created": record.created}
     text = json.dumps(body, indent=2, ensure_ascii=False) + "\n"
-    _write_atomic(file, _utf8(file, text), mode=0o600, backup=False)
+    write_atomic(file, _utf8(file, text), mode=0o600, backup=False)
 
 
 def _merged(earlier: Change, later: Change) -> Change:
@@ -471,14 +471,14 @@ def _apply_json(record: _Record, file: Path, group: list[Change]) -> None:
         _set(data, change.key, change.after, file)
     payload = _utf8(file, _render(data))
     _record_intent(record, group, creates=not existed)
-    _write_atomic(file, payload, mode=_json_mode(file), backup=True)
+    write_atomic(file, payload, mode=_json_mode(file), backup=True)
 
 
 def _apply_text(record: _Record, change: Change) -> None:
     if not _same(_read_text(change.file), change.before):
         raise _changed_since_planning(change)
     _record_intent(record, [change], creates=False)
-    _write_atomic(change.file, str(change.after).encode("utf-8"), mode=0o755, backup=False)
+    write_atomic(change.file, str(change.after).encode("utf-8"), mode=0o755, backup=False)
 
 
 def apply(changes: list[Change]) -> None:
@@ -564,7 +564,7 @@ def _undo_json(
             file.unlink()
     elif data != original and not dry_run:
         payload = _utf8(file, _render(data))
-        _write_atomic(file, payload, mode=_json_mode(file), backup=True)
+        write_atomic(file, payload, mode=_json_mode(file), backup=True)
     return restores, skipped
 
 

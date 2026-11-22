@@ -4374,6 +4374,10 @@ NON_WRITERS = frozenset(
         "pm resume",  # writes a prompt file under the cache folder, never the store or config
         "pm health",  # reads state records
         "project",  # writes the standard into the repo it is pointed at; see the next test
+        "opencode doctor",  # reads the profile folder and runs a loopback canary server
+        "opencode install",  # npm into the profile folder
+        "opencode run",  # starts the pinned OpenCode with the profile env
+        "opencode setup",  # writes the profile folder only, never the store or the config
     }
 )
 
@@ -4411,6 +4415,12 @@ def test_a_pm_cannot_point_the_project_command_at_the_store(store: Path, command
     meets the store rule, so it is not a writer of the hook's list."""
     named = command.replace("~", str(home()))
     assert decide(bash(named, cwd=str(store)), store, "pm") is not None
+
+
+def test_a_pm_running_opencode_setup_is_not_read_as_the_coven_setup_command(store: Path) -> None:
+    """`coven opencode setup` writes only the profile folder, so the store rule does not apply
+    when the working directory is outside the store."""
+    assert decide(bash("coven opencode setup", cwd="/tmp"), store, "pm") is None
 
 
 # --- explain gives the verdict the hook gives, in every state of the store ---

@@ -5,14 +5,86 @@ import { setImmediate as tick } from "node:timers/promises";
 import { EVENT_TYPES } from "../src/join/events.ts";
 import { inputSchema, InputError } from "../src/join/input.ts";
 import { NotAChildError, UnknownSessionError } from "../src/join/wait.ts";
-import plugin from "../src/plugin.ts";
-import { KID, LEAD, boot, ended, report, started } from "./plugin-fixture.ts";
+import plugin from "../src/index.ts";
+import {
+  KID,
+  LEAD,
+  boot,
+  bootCoven,
+  ended,
+  report,
+  started,
+} from "./plugin-fixture.ts";
 
 const HOUR = 3_600_000;
 
-await test("the plugin has the id coven.join and a setup", () => {
-  assert.equal(plugin.id, "coven.join");
+await test("the plugin has the id coven and a setup", () => {
+  assert.equal(plugin.id, "coven");
   assert.equal(typeof plugin.setup, "function");
+});
+
+const COVEN = { covenRoot: "/c", toolChoiceAuto: ["litellm"] };
+
+await test("coven setup registers both tools and one scoped http.request hook", async () => {
+  const p = bootCoven({ options: COVEN });
+  const cleanup = await p.outcome;
+  assert.deepEqual(p.tools.map((tool) => tool.name).sort(), [
+    "await_agents",
+    "coven_ping",
+  ]);
+  assert.deepEqual(
+    p.registered.filter((hook) => hook.name === "http.request"),
+    [{ name: "http.request", options: { providerID: "litellm" } }],
+  );
+  cleanup();
+});
+
+await test("coven setup registers one http.request hook per provider", async () => {
+  const p = bootCoven({
+    options: { covenRoot: "/c", toolChoiceAuto: ["a", "b"] },
+  });
+  const cleanup = await p.outcome;
+  assert.deepEqual(
+    p.registered
+      .filter((hook) => hook.name === "http.request")
+      .map((hook) => hook.options),
+    [{ providerID: "a" }, { providerID: "b" }],
+  );
+  cleanup();
+});
+
+await test("an empty toolChoiceAuto registers no http.request hook", async () => {
+  const p = bootCoven({ options: { covenRoot: "/c", toolChoiceAuto: [] } });
+  const cleanup = await p.outcome;
+  assert.deepEqual(
+    p.registered.filter((hook) => hook.name === "http.request"),
+    [],
+  );
+  cleanup();
+});
+
+await test("coven setup without options rejects and registers no tool", async () => {
+  const p = bootCoven();
+  await assert.rejects(p.outcome, /covenRoot is missing/);
+  assert.deepEqual(p.tools, []);
+  assert.deepEqual(p.subscriptions, []);
+});
+
+await test("a tool that is not listed fails setup and stops the join", async () => {
+  const p = bootCoven({ options: COVEN, unlisted: ["coven_ping"] });
+  await assert.rejects(p.outcome, /tools not registered: coven_ping/);
+  assert.equal(p.subscriptions[0]?.signal.aborted, true);
+});
+
+await test("the self-check names every missing tool", async () => {
+  const p = bootCoven({
+    options: COVEN,
+    unlisted: ["coven_ping", "await_agents"],
+  });
+  await assert.rejects(
+    p.outcome,
+    /^Error: coven: tools not registered: coven_ping, await_agents$/,
+  );
 });
 
 await test("setup registers await_agents with the input schema and no codemode", async () => {
