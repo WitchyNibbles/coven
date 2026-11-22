@@ -170,6 +170,44 @@ def test_a_failed_fetch_still_stops_the_server_and_hides_the_password(
     assert spawned[0].process.poll() is not None
 
 
+def test_a_watcher_that_cannot_start_never_orphans_the_server(
+    tmp_path: Path, spawned: list[Spawn], monkeypatch: pytest.MonkeyPatch
+):
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(canary.threading, "Thread", refuse)
+    with pytest.raises(RuntimeError, match="new thread"):
+        start(tmp_path, "ignore-term", Fetches(), start_timeout=10.0, grace=0.2)
+    assert len(spawned) == 1
+    assert spawned[0].process.poll() is not None
+
+
+class Interrupted:
+    """A process whose first wait is cut short by a second Ctrl-C."""
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def terminate(self) -> None:
+        pass
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self.killed:
+            raise KeyboardInterrupt
+        return -9
+
+
+def test_a_second_interrupt_while_stopping_still_kills_the_server():
+    process = Interrupted()
+    with pytest.raises(KeyboardInterrupt):
+        canary.stop_server(process, 1.0)
+    assert process.killed
+
+
 def test_an_unrunnable_binary_is_an_opencode_error(tmp_path: Path):
     with pytest.raises(OpencodeError, match="cannot start"):
         read_server(tmp_path / "missing", {}, tmp_path, ServerOptions(fetch=Fetches()))

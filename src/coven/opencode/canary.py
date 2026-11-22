@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
 from urllib.parse import urlsplit
 
 from coven import safe_json
@@ -77,14 +77,30 @@ class ServerOptions:
     grace: float = GRACE
 
 
-def stop_server(process: subprocess.Popen[str], grace: float) -> None:
-    """SIGTERM, wait `grace` seconds, then SIGKILL and wait."""
+class Stoppable(Protocol):
+    """What `stop_server` needs of a process; `subprocess.Popen` has it."""
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+
+def stop_server(process: Stoppable, grace: float) -> None:
+    """SIGTERM, wait `grace` seconds, then SIGKILL and wait.
+
+    A Ctrl-C during the wait (or any other interruption) still kills the process before it goes on.
+    """
     process.terminate()
     try:
         process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+    except BaseException:
+        process.kill()
+        raise
 
 
 def _watch(stream: Iterable[str], found: queue.Queue[str | None]) -> None:
@@ -99,6 +115,12 @@ def _watch(stream: Iterable[str], found: queue.Queue[str | None]) -> None:
     except (OSError, ValueError):
         pass
     found.put(None)
+
+
+def _start_watcher(process: subprocess.Popen[str], found: queue.Queue[str | None]) -> threading.Thread:
+    watcher = threading.Thread(target=_watch, args=(process.stdout or (), found), daemon=True)
+    watcher.start()
+    return watcher
 
 
 def _wait_for_url(found: queue.Queue[str | None], timeout: float) -> str:
@@ -159,13 +181,14 @@ def read_server(binary: Path, env: Mapping[str, str], cwd: Path, opts: ServerOpt
     password = secrets.token_urlsafe(24)
     server_env = {k: v for k, v in env.items() if k != USERNAME_ENV} | {AUTH_VAR: password}
     process = _start(binary, server_env, cwd)
-    found: queue.Queue[str | None] = queue.Queue()
-    watcher = threading.Thread(target=_watch, args=(process.stdout or (), found), daemon=True)
-    watcher.start()
+    watcher: threading.Thread | None = None
     try:
+        found: queue.Queue[str | None] = queue.Queue()
+        watcher = _start_watcher(process, found)
         return _read_view(_wait_for_url(found, opts.start_timeout), password, opts.fetch)
     finally:
         stop_server(process, opts.grace)
-        watcher.join(WATCHER_JOIN)
-        if process.stdout and not watcher.is_alive():
+        if watcher is not None:
+            watcher.join(WATCHER_JOIN)
+        if process.stdout and (watcher is None or not watcher.is_alive()):
             process.stdout.close()
