@@ -1,11 +1,14 @@
 """The plugin's manifest, marketplace, hook wiring and agent definitions."""
 
+import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -30,7 +33,7 @@ MARKETPLACE_KEYS = {
     "allowCrossMarketplaceDependenciesOn",
 }
 
-PRE_TOOL_USE_TOOLS = "Read|Grep|Glob|Bash|Write|Edit|NotebookEdit"
+PRE_TOOL_USE_TOOLS = "Read|Grep|Glob|Bash|Write|Edit|NotebookEdit|MultiEdit"
 SESSION_START_MATCHER = "startup|resume|clear|compact|fork"
 ROOT = "${CLAUDE_PLUGIN_ROOT}"
 
@@ -49,6 +52,23 @@ SUPPORTED_AGENT_KEYS = {"name", "description", "model", "effort", "disallowedToo
 
 def load(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_hook(name: str) -> ModuleType:
+    """Import hooks/<name>.py by path, leaving no bytecode, sys.path entry or module behind."""
+    path = REPO / "hooks" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"coven_test_{name}", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    path_before, bytecode_before = list(sys.path), sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = path_before
+        sys.dont_write_bytecode = bytecode_before
+    return module
 
 
 def split_agent(name: str) -> tuple[dict[str, str], str]:
@@ -135,6 +155,12 @@ def test_pre_tool_use_runs_deny_secrets_on_every_file_tool() -> None:
     (matcher, command), *_ = hook_commands("PreToolUse")
     assert matcher == PRE_TOOL_USE_TOOLS
     assert command.endswith('hooks/deny_secrets.py"')
+
+
+def test_deny_secrets_matcher_names_every_tool_the_hook_checks_as_a_writer() -> None:
+    (matcher, _), *_ = hook_commands("PreToolUse")
+    writers = load_hook("deny_secrets").WRITERS
+    assert set(writers) <= set(matcher.split("|"))
 
 
 def test_pre_tool_use_guards_a_pm_session_on_bash() -> None:
