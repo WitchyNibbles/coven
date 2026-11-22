@@ -25,7 +25,12 @@ from coven.errors import CovenError
 HOOK = paths.root() / "hooks" / "prod_guard.py"
 SPLIT_COMMAND_NOTE = "words the shell split are joined with single spaces"
 # The edit tools `explain --tool` can judge by a path, and the tool_input key each reads it from.
-PATH_KEYS = {"Write": "file_path", "Edit": "file_path", "NotebookEdit": "notebook_path"}
+PATH_KEYS = {
+    "Write": "file_path",
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
 TIMED_OUT = "guard check timed out"
 
 
@@ -222,7 +227,7 @@ def register(subparsers: Any) -> None:
     explain.add_argument("--tool", help="judge an MCP or other tool by name instead of a command")
     explain.add_argument(
         "--path",
-        help="the file an edit tool (--tool Write, Edit or NotebookEdit) would write; required for them",
+        help="the file an edit tool (--tool Write, Edit, MultiEdit or NotebookEdit) would write; required for them",
     )
     explain.add_argument(
         "--cwd",
