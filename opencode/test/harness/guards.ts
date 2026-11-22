@@ -1,21 +1,7 @@
 /** Refusals that keep the end-to-end run on this machine. */
 
-export const NAMESPACE_MESSAGE = "not in a network namespace: run npm run e2e";
 const FAKE = "fake";
-
-/** Interface names from the text of /proc/net/dev (it follows the reader's network namespace). */
-export function interfaceNames(procNetDev: string): string[] {
-  return procNetDev
-    .split("\n")
-    .slice(2)
-    .map((line) => line.split(":")[0]?.trim() ?? "")
-    .filter((name) => name !== "");
-}
-
-export function onlyLoopback(procNetDev: string): boolean {
-  const names = interfaceNames(procNetDev);
-  return names.length === 1 && names[0] === "lo";
-}
+const LITELLM = "litellm";
 
 interface Policy {
   action?: string;
@@ -39,6 +25,18 @@ function providerProblem(config: ProjectConfig): string | undefined {
   }
   if (!isLoopbackURL(config.providers?.[FAKE]?.settings?.baseURL)) {
     return "the fake provider must point at 127.0.0.1";
+  }
+  return undefined;
+}
+
+/** A reason to refuse a coven profile config, unless its only provider is litellm on loopback. */
+export function profileProblem(config: ProjectConfig): string | undefined {
+  const names = Object.keys(config.providers ?? {});
+  if (names.length !== 1 || names[0] !== LITELLM) {
+    return "the profile must define only the litellm provider";
+  }
+  if (!isLoopbackURL(config.providers?.[LITELLM]?.settings?.baseURL)) {
+    return "the litellm provider must point at 127.0.0.1";
   }
   return undefined;
 }

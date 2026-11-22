@@ -3,11 +3,11 @@ import { test } from "node:test";
 
 import {
   configProblem,
-  interfaceNames,
-  onlyLoopback,
   parseConfig,
-} from "./e2e/guards.ts";
-import type { ProjectConfig } from "./e2e/guards.ts";
+  profileProblem,
+} from "./harness/guards.ts";
+import type { ProjectConfig } from "./harness/guards.ts";
+import { interfaceNames, onlyLoopback } from "./harness/namespace.ts";
 
 const HEADER =
   "Inter-|   Receive                                                |  Transmit\n" +
@@ -140,4 +140,43 @@ await test("parseConfig leaves a comma-brace inside a string alone", () => {
     b: "y, ]",
     c: 'q",}',
   });
+});
+
+const LITELLM: ProjectConfig = {
+  providers: { litellm: { settings: { baseURL: "http://127.0.0.1:5/v1" } } },
+};
+
+await test("a profile with only the litellm provider on loopback passes", () => {
+  assert.equal(profileProblem(LITELLM), undefined);
+});
+
+await test("a second provider in the profile is refused", () => {
+  const config: ProjectConfig = {
+    providers: { ...LITELLM.providers, other: {} },
+  };
+  assert.match(profileProblem(config) ?? "", /only the litellm provider/);
+});
+
+await test("a profile without the litellm provider is refused", () => {
+  assert.match(profileProblem({}) ?? "", /only the litellm provider/);
+  assert.match(
+    profileProblem({ providers: { fake: {} } }) ?? "",
+    /only the litellm provider/,
+  );
+});
+
+await test("a profile whose litellm URL is off loopback is refused", () => {
+  const config: ProjectConfig = {
+    providers: { litellm: { settings: { baseURL: "https://example.com/v1" } } },
+  };
+  assert.match(profileProblem(config) ?? "", /127\.0\.0\.1/);
+});
+
+await test("a profile whose litellm URL only starts like loopback is refused", () => {
+  const config: ProjectConfig = {
+    providers: {
+      litellm: { settings: { baseURL: "http://127.0.0.1.evil.test/v1" } },
+    },
+  };
+  assert.match(profileProblem(config) ?? "", /127\.0\.0\.1/);
 });

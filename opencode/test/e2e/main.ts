@@ -1,26 +1,27 @@
 /**
- * The end-to-end run of the join on OpenCode 2.3.2 with the scripted fake model.
- * Run it with `npm run e2e`: it does nothing unless COVEN_E2E=1, and it refuses to start
- * outside a network namespace that has only the loopback interface.
+ * The end-to-end runs on OpenCode 2.3.2 with the scripted fake model.
+ * Run it with `npm run e2e [-- join]`: `npm run e2e` enters a network namespace with only the
+ * loopback interface and starts this file there. It does nothing unless COVEN_E2E=1, and it
+ * refuses to start outside that namespace.
  */
-import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CHECKS } from "./checks.ts";
-import type { Runs } from "./checks.ts";
-import { startFakeModel } from "./fake-model.ts";
+import { startFakeModel } from "../harness/fake-model.ts";
+import { configProblem, parseConfig } from "../harness/guards.ts";
+import type { LeadHistory } from "../harness/history.ts";
 import {
-  configProblem,
+  bringLoopbackUp,
   NAMESPACE_MESSAGE,
   onlyLoopback,
-  parseConfig,
-} from "./guards.ts";
-import type { LeadHistory } from "./history.ts";
-import { runScenario } from "./opencode.ts";
-import type { Harness } from "./opencode.ts";
+} from "../harness/namespace.ts";
+import { CHECKS } from "./checks.ts";
+import type { Runs } from "./checks.ts";
+import { runScenario } from "./join-run.ts";
+import type { Harness } from "./join-run.ts";
+import { decide } from "./script.ts";
 
 const PROJECT = fileURLToPath(new URL("./project", import.meta.url));
 
@@ -34,9 +35,13 @@ const PROMPTS: Record<keyof Runs, string> = {
 
 const EMPTY: LeadHistory = { reports: [], tools: [], finalText: "" };
 
-function bringLoopbackUp(): boolean {
-  return spawnSync("ip", ["link", "set", "lo", "up"]).status === 0;
+/** One numbered line of output: a check that passed, or the reason it failed. */
+interface Outcome {
+  title: string;
+  problem: string | undefined;
 }
+
+type Suite = (harness: Harness) => Promise<Outcome[]>;
 
 async function runAll(harness: Harness): Promise<Runs> {
   const names = Object.keys(PROMPTS) as (keyof Runs)[];
@@ -61,20 +66,55 @@ async function runAll(harness: Harness): Promise<Runs> {
   return runs;
 }
 
-function report(runs: Runs): number {
+const joinSuite: Suite = async (harness) => {
+  const runs = await runAll(harness);
+  return CHECKS.map((check) => ({
+    title: check.title,
+    problem: check.run(runs),
+  }));
+};
+
+/** The suites in the order they run when none is named: the runtime suite comes first. */
+const SUITE_ORDER = ["runtime", "join"];
+const SUITES: Record<string, Suite> = { join: joinSuite };
+
+/** The suites to run, or the refusal when one is not known. */
+function chosenSuites(argv: readonly string[]): readonly string[] | string {
+  const names =
+    argv.length > 0
+      ? argv
+      : SUITE_ORDER.filter((name) => Object.hasOwn(SUITES, name));
+  const unknown = names.find((name) => !Object.hasOwn(SUITES, name));
+  return unknown === undefined
+    ? names
+    : `unknown suite ${unknown}; available: ${Object.keys(SUITES).join(", ")}`;
+}
+
+/** Prints the outcomes, numbered from `first`, and returns how many failed. */
+function report(outcomes: readonly Outcome[], first: number): number {
   let failures = 0;
-  CHECKS.forEach((check, index) => {
-    const problem = check.run(runs);
-    failures += problem === undefined ? 0 : 1;
-    const head = problem === undefined ? "ok" : "not ok";
-    console.log(
-      `${head} ${index + 1} - ${check.title}${problem === undefined ? "" : `: ${problem}`}`,
-    );
+  outcomes.forEach((outcome, index) => {
+    const failed = outcome.problem !== undefined;
+    failures += failed ? 1 : 0;
+    const detail = failed ? `: ${outcome.problem}` : "";
+    const head = failed ? "not ok" : "ok";
+    console.log(`${head} ${first + index} - ${outcome.title}${detail}`);
   });
   return failures;
 }
 
-async function main(): Promise<number> {
+async function runSuites(names: readonly string[], harness: Harness) {
+  let failures = 0;
+  let printed = 0;
+  for (const name of names) {
+    const outcomes = await (SUITES[name] as Suite)(harness);
+    failures += report(outcomes, printed + 1);
+    printed += outcomes.length;
+  }
+  return failures;
+}
+
+async function main(argv: readonly string[]): Promise<number> {
   if (!onlyLoopback(await readFile("/proc/net/dev", "utf8"))) {
     console.error(NAMESPACE_MESSAGE);
     return 1;
@@ -84,6 +124,11 @@ async function main(): Promise<number> {
     console.log("skipped: set COVEN_OPENCODE_BIN");
     return 0;
   }
+  const names = chosenSuites(argv);
+  if (typeof names === "string") {
+    console.error(names);
+    return 1;
+  }
   const text = await readFile(join(PROJECT, "opencode.jsonc"), "utf8");
   const problem = configProblem(parseConfig(text));
   if (problem !== undefined || !bringLoopbackUp()) {
@@ -91,9 +136,9 @@ async function main(): Promise<number> {
     return 1;
   }
   const root = await mkdtemp(join(tmpdir(), "coven-e2e-"));
-  const model = await startFakeModel();
+  const model = await startFakeModel({ decide });
   try {
-    return report(await runAll({ binary, project: PROJECT, root })) === 0
+    return (await runSuites(names, { binary, project: PROJECT, root })) === 0
       ? 0
       : 1;
   } finally {
@@ -103,5 +148,5 @@ async function main(): Promise<number> {
 }
 
 if (process.env["COVEN_E2E"] === "1") {
-  process.exitCode = await main();
+  process.exitCode = await main(process.argv.slice(2));
 }

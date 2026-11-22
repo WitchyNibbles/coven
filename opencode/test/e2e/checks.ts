@@ -1,5 +1,9 @@
-import { awaitResults, childIDs } from "./history.ts";
-import type { AwaitResult, LeadHistory, SubagentReport } from "./history.ts";
+import { awaitResults, childIDs } from "../harness/history.ts";
+import type {
+  AwaitResult,
+  LeadHistory,
+  SubagentReport,
+} from "../harness/history.ts";
 
 /** What each scenario left in the lead's history. */
 export interface Runs {

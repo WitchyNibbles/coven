@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "e2e": "COVEN_E2E=1 unshare -rn node test/e2e/main.ts"
+    "e2e": "COVEN_E2E_ENTER=1 node test/harness/enter.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

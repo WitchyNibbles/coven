@@ -5,21 +5,8 @@
  *   NEST name=<n> sleep=<s>    starts its own CHILD, reports "waiting", then reports "final"
  *   PARENT mode=<all|any|unknown> sleeps=<s,s,..> child=<CHILD|NEST>
  */
-
-export interface ChatMessage {
-  role: string;
-  content?: unknown;
-  tool_calls?: readonly { id: string; function?: { name?: string } }[];
-  tool_call_id?: string;
-}
-
-export interface ToolCall {
-  name: string;
-  args: Record<string, unknown>;
-}
-
-export type Reply =
-  { kind: "text"; text: string } | { kind: "calls"; calls: ToolCall[] };
+import { textOf } from "../harness/chat.ts";
+import type { ChatMessage, Reply } from "../harness/chat.ts";
 
 interface ToolResult {
   name: string;
@@ -37,24 +24,6 @@ const ROLE = /\b(CHILD|NEST|PARENT)\b/;
 const SESSION_ID = /ses_[A-Za-z0-9_]+/g;
 const MAX_POLLS = 30;
 const MAX_AWAITS = 6;
-
-export function textOf(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((part: unknown) => {
-      if (typeof part === "string") {
-        return part;
-      }
-      const text = (part as { text?: unknown } | null)?.text;
-      return typeof text === "string" ? text : "";
-    })
-    .join("\n");
-}
 
 function parseParams(text: string): Record<string, string> {
   const entries = [...text.matchAll(/(\w+)=([\w,.-]+)/g)].map(
