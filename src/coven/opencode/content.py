@@ -152,12 +152,44 @@ def _command(repo: Path, name: str, out: Path) -> None:
     target.write_text(f"---\n{description}\n---\n{body.rstrip(chr(10))}\n\n$ARGUMENTS\n")
 
 
+def _deny(action: str) -> str:
+    return f'permissions:\n  - action: {action}\n    resource: "*"\n    effect: deny'
+
+
+# What each role may not do: the explorer and the reviewers never edit, the implementer never
+# starts a subagent.
+DENIED: Final = {
+    "explorer": "edit",
+    "implementer": "subagent",
+    "reviewer": "edit",
+    "final-reviewer": "edit",
+}
+
+
+def _agent(repo: Path, name: str, out: Path) -> None:
+    """One role as an OpenCode agent file: only the keys OpenCode reads, the model left to config."""
+    source = f"agents/{name}.md"
+    front, body = _split_frontmatter(rewrite_text((repo / source).read_text(), source))
+    try:
+        description = next(line for line in front if line.startswith("description:"))
+    except StopIteration:
+        raise ContentError(f"{source}: the frontmatter has no `description:` line") from None
+    head = f"---\n{_yaml_safe(description)}\nmode: subagent\n{_deny(DENIED[name])}\n---\n"
+    target = out / "agents" / f"{name}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(head + body)
+
+
 def _agents(repo: Path, out: Path) -> None:
-    """Task 3 renders the agent files here."""
+    for name in AGENTS:
+        _agent(repo, name, out)
 
 
 def _routing(repo: Path, out: Path) -> None:
-    """Task 3 renders the routing instructions (`AGENTS.md`) here."""
+    path = repo / OVERRIDES_REL / "routing" / "AGENTS.md"
+    out.joinpath("AGENTS.md").write_text(
+        _strip_header(rewrite_text(path.read_text(), path.relative_to(repo).as_posix()))
+    )
 
 
 def render_content(repo: Path, out: Path) -> None:

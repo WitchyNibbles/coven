@@ -8,6 +8,7 @@ import pytest
 from support import REPO
 
 from coven.opencode import content
+from coven.opencode.rewrite import rewrite_text
 
 SKILL_NAMES = (
     "ceo-review",
@@ -20,6 +21,7 @@ SKILL_NAMES = (
 )
 COMMAND_NAMES = ("grill-me", "handoff")
 RENDERED = content.CONTENT
+SOURCE_OF_ROUTING = "instructions/routing.md"
 
 
 def files_under(root: Path) -> set[Path]:
@@ -123,6 +125,8 @@ def test_overrides_mirror_a_source_path() -> None:
         header = content.parse_header(override.read_text())
         assert header is not None
         expected = override.relative_to(content.OVERRIDES).as_posix()
+        # The routing override is `routing/AGENTS.md` in the profile; its source is not a skill.
+        expected = SOURCE_OF_ROUTING if expected == "routing/AGENTS.md" else expected
         assert header[0] == expected, f"{override} names {header[0]}, expected {expected}"
 
 
@@ -185,6 +189,7 @@ def test_every_rendered_description_is_valid_yaml_plain_or_quoted() -> None:
 
 def copy_of_skills(tmp_path: Path) -> Path:
     shutil.copytree(REPO / "skills", tmp_path / "skills")
+    shutil.copytree(REPO / "agents", tmp_path / "agents")
     shutil.copytree(content.OVERRIDES, tmp_path / "opencode" / "overrides")
     return tmp_path
 
@@ -207,3 +212,64 @@ def test_a_skill_without_a_name_line_is_an_error(tmp_path: Path) -> None:
     source.write_text(source.read_text().replace("name: clean-code\n", "", 1))
     with pytest.raises(content.ContentError, match=r"skills/clean-code/SKILL\.md: .*name"):
         content.render_content(repo, tmp_path / "out")
+
+
+AGENT_NAMES = ("explorer", "implementer", "reviewer", "final-reviewer")
+DENY_EDIT = ["  - action: edit", '    resource: "*"', "    effect: deny"]
+DENY_SUBAGENT = ["  - action: subagent", '    resource: "*"', "    effect: deny"]
+DENIED = {
+    "explorer": DENY_EDIT,
+    "reviewer": DENY_EDIT,
+    "final-reviewer": DENY_EDIT,
+    "implementer": DENY_SUBAGENT,
+}
+
+
+def source_agent(name: str) -> tuple[str, str]:
+    """The source's description value and its body, each through the rewrite."""
+    text = (REPO / "agents" / f"{name}.md").read_text()
+    front, body = content._split_frontmatter(rewrite_text(text, f"agents/{name}.md"))
+    description = next(line for line in front if line.startswith("description:"))
+    return description.removeprefix("description:").strip(), body
+
+
+def test_agents() -> None:
+    assert sorted(path.name for path in (RENDERED / "agents").iterdir()) == sorted(
+        f"{name}.md" for name in AGENT_NAMES
+    )
+    for name in AGENT_NAMES:
+        description, body = source_agent(name)
+        path = RENDERED / "agents" / f"{name}.md"
+        front = frontmatter(path)
+        assert front[1] == "mode: subagent", name
+        assert front[2:] == ["permissions:", *DENIED[name]], name
+        assert front[0].removeprefix("description:").strip().strip('"') == description, name
+        assert path.read_text().split("\n---\n", 1)[1] == body, name
+
+
+ROUTING_OVERRIDE = content.OVERRIDES / "routing" / "AGENTS.md"
+
+
+def test_routing() -> None:
+    override = ROUTING_OVERRIDE.read_text()
+    rendered = (RENDERED / "AGENTS.md").read_text()
+    assert rendered == override.split("\n", 1)[1]
+    assert "python3 .coven/check.py" in rendered
+    assert "`AGENTS.md`" in rendered
+    assert "`CLAUDE.md`" in rendered
+    for skill in SKILL_NAMES:
+        assert f"coven-{skill}" in rendered, skill
+    for command in COMMAND_NAMES:
+        assert f"/coven-{command}" in rendered, command
+    assert not re.search(r"\b(coven|superpowers):", rendered)
+    header = content.parse_header(override)
+    assert header == (
+        "instructions/routing.md",
+        hashlib.sha256((REPO / "instructions" / "routing.md").read_bytes()).hexdigest(),
+    )
+
+
+def test_routing_leaves_out_the_m2_items() -> None:
+    rendered = (RENDERED / "AGENTS.md").read_text().lower()
+    for left_out in ("manager", "setup", "systems-map", "claude --bg", "general manager"):
+        assert left_out not in rendered, left_out
