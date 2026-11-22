@@ -3,7 +3,11 @@ import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { startFakeModel } from "../../harness/fake-model.ts";
-import { awaitResults } from "../../harness/history.ts";
+import {
+  awaitResults,
+  exportedMessages,
+  SESSION_ID,
+} from "../../harness/history.ts";
 import type { ToolRun } from "../../harness/history.ts";
 import { configPath, pointProviderAt } from "./profile.ts";
 import type { RuntimeWorld } from "./profile.ts";
@@ -98,8 +102,7 @@ function count(text: string, needle: string): number {
 
 /** The exported messages as raw JSON strings, in the order the lead's history holds them. */
 function messageTexts(exported: string): string[] {
-  const { messages = [] } = JSON.parse(exported) as { messages?: unknown[] };
-  return messages.map((message) => JSON.stringify(message));
+  return exportedMessages(exported).map((message) => JSON.stringify(message));
 }
 
 /** What is wrong with where the `role` report sits in the history, or undefined. */
@@ -120,18 +123,19 @@ function reportProblem(
 
 /** The agent ids the assistant messages of an exported session ran as. */
 function agentsOf(exported: string): string[] {
-  const { messages = [] } = JSON.parse(exported) as {
-    messages?: { type?: string; agent?: string }[];
-  };
-  return messages
+  return exportedMessages(exported)
     .filter((message) => message.type === "assistant")
     .map((message) => message.agent ?? "(none)");
 }
 
+/** The agent a `subagent` call named, if any. */
+function agentOf(call: ToolRun | undefined): string | undefined {
+  return (call?.input as { agent?: string } | undefined)?.agent;
+}
+
 /** What the `subagent` call was, for a message: its status and the agent it named. */
 function describeCall(call: ToolRun | undefined): string {
-  const input = call?.input as { agent?: string } | undefined;
-  return `${call?.status ?? "missing"} for agent ${input?.agent}`;
+  return `${call?.status ?? "missing"} for agent ${agentOf(call)}`;
 }
 
 /** The session id of a completed `subagent` call for `role`, or the reason it is not one. */
@@ -139,11 +143,10 @@ function startedChild(
   call: ToolRun | undefined,
   role: string,
 ): { id: string } | { problem: string } {
-  const input = call?.input as { agent?: string } | undefined;
-  if (call?.status !== "completed" || input?.agent !== role) {
+  if (call?.status !== "completed" || agentOf(call) !== role) {
     return { problem: `the ${role} subagent call was ${describeCall(call)}` };
   }
-  const id = /ses_[A-Za-z0-9_]+/.exec(call.output)?.[0];
+  const id = SESSION_ID.exec(call.output)?.[0];
   return id === undefined
     ? { problem: `the ${role} subagent call returned no session id` }
     : { id };

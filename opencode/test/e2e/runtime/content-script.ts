@@ -10,6 +10,7 @@
 import { textOf } from "../../harness/chat.ts";
 import type { ChatMessage, Reply } from "../../harness/chat.ts";
 import type { Decide } from "../../harness/fake-model.ts";
+import { sessionIDsIn } from "../../harness/history.ts";
 import { decidePing, resultsOf } from "./ping-script.ts";
 
 /** The secrets file in the project, and the value the checks must never see leave it. */
@@ -22,7 +23,6 @@ export function reportOf(role: string): string {
   return `REPORT-${role.toUpperCase()}-7c2e`;
 }
 
-const SESSION_ID = /ses_[A-Za-z0-9_]+/g;
 const SECRETS = /\bSECRETS\b/;
 const SECRETS_READ = /\bSECRETS_READ\b/;
 const SDD_LEAD = /\bSDD_LEAD\b/;
@@ -67,7 +67,7 @@ function decideLead(messages: readonly ChatMessage[]): Reply {
     return { kind: "calls", calls };
   }
   if (resultsOf(messages, "await_agents").length === 0) {
-    const ids = [...new Set(started.flatMap((t) => t.match(SESSION_ID) ?? []))];
+    const ids = [...new Set(started.flatMap(sessionIDsIn))];
     const args = { ids, mode: "all" };
     return { kind: "calls", calls: [{ name: "await_agents", args }] };
   }

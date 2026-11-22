@@ -198,6 +198,16 @@ async function settle(
   }
 }
 
+/** Runs `work` once the profile is restored; otherwise says why it cannot run. */
+function afterRestore(
+  restored: string | undefined,
+  work: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  return restored === undefined
+    ? work()
+    : Promise.resolve(`no restored profile: ${restored}`);
+}
+
 /** Runs the five checks in order in `world`; `binary` is the 2.3.2 runtime they all use. */
 export async function runtimeChecks(
   world: RuntimeWorld,
@@ -219,14 +229,10 @@ export async function runtimeChecks(
   const doctored = await settle(() => doctorProblem(used));
   const restored = await settle(() => restoreProfile(used));
   const secrets = await settle(() =>
-    restored === undefined
-      ? secretsProblem(used)
-      : Promise.resolve(`no restored profile: ${restored}`),
+    afterRestore(restored, () => secretsProblem(used)),
   );
   const sdd = await settle(() =>
-    restored === undefined
-      ? sddProblem(used)
-      : Promise.resolve(`no restored profile: ${restored}`),
+    afterRestore(restored, () => sddProblem(used)),
   );
   return [
     {

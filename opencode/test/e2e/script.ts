@@ -7,6 +7,7 @@
  */
 import { textOf } from "../harness/chat.ts";
 import type { ChatMessage, Reply } from "../harness/chat.ts";
+import { SESSION_ID, sessionIDsIn } from "../harness/history.ts";
 
 interface ToolResult {
   name: string;
@@ -21,7 +22,8 @@ interface Conversation {
 }
 
 const ROLE = /\b(CHILD|NEST|PARENT)\b/;
-const SESSION_ID = /ses_[A-Za-z0-9_]+/g;
+/** The `sessionID` of one `done` entry of an `await_agents` result. */
+const FINISHED_ID = new RegExp(`"sessionID":"(${SESSION_ID.source})"`, "g");
 const MAX_POLLS = 30;
 const MAX_AWAITS = 6;
 
@@ -118,14 +120,14 @@ function spawnedIDs(talk: Conversation): string[] {
   const texts = talk.results
     .filter((r) => r.name === "subagent")
     .map((r) => r.text);
-  return [...new Set(texts.flatMap((text) => text.match(SESSION_ID) ?? []))];
+  return [...new Set(texts.flatMap(sessionIDsIn))];
 }
 
 /** The ids the lead's `await_agents` results listed under `done`. */
 function finishedIDs(talk: Conversation): Set<string> {
   const ids = talk.results
     .filter((r) => r.name === "await_agents")
-    .flatMap((r) => [...r.text.matchAll(/"sessionID":"(ses_[A-Za-z0-9_]+)"/g)])
+    .flatMap((r) => [...r.text.matchAll(FINISHED_ID)])
     .map((match) => match[1] ?? "");
   return new Set(ids);
 }
@@ -138,7 +140,7 @@ function finalNeedle(talk: Conversation): string {
 function reportsComplete(talk: Conversation, count: number): boolean {
   const needle = finalNeedle(talk);
   const texts = reportsSeen(talk.messages).filter((t) => t.includes(needle));
-  const ids = new Set(texts.flatMap((text) => text.match(SESSION_ID) ?? []));
+  const ids = new Set(texts.flatMap(sessionIDsIn));
   return ids.size >= count;
 }
 

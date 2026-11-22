@@ -46,19 +46,30 @@ export function configPath(profile: string): string {
   return join(profile, "config", "opencode", "opencode.jsonc");
 }
 
+/** Reads the generated config as `T`, lets `mutate` change it and writes it back. */
+async function editConfig<T>(
+  profile: string,
+  mutate: (config: T) => void,
+): Promise<void> {
+  const path = configPath(profile);
+  const config = JSON.parse(await readFile(path, "utf8")) as T;
+  mutate(config);
+  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+
 /** Sets the providers the plugin's `tool_choice` hook answers for, in the generated config. */
 export async function setToolChoiceAuto(
   profile: string,
   providers: string[],
 ): Promise<void> {
-  const path = configPath(profile);
-  const config = JSON.parse(await readFile(path, "utf8")) as {
-    plugins: { options: { toolChoiceAuto: string[] } }[];
-  };
-  for (const plugin of config.plugins) {
-    plugin.options.toolChoiceAuto = providers;
-  }
-  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+  await editConfig<{ plugins: { options: { toolChoiceAuto: string[] } }[] }>(
+    profile,
+    (config) => {
+      for (const plugin of config.plugins) {
+        plugin.options.toolChoiceAuto = providers;
+      }
+    },
+  );
 }
 
 /** Points the generated config's provider at a fake model on loopback port `port`. */
@@ -66,12 +77,11 @@ export async function pointProviderAt(
   profile: string,
   port: number,
 ): Promise<void> {
-  const path = configPath(profile);
-  const config = JSON.parse(await readFile(path, "utf8")) as {
+  await editConfig<{
     providers: { litellm: { settings: { baseURL: string } } };
-  };
-  config.providers.litellm.settings.baseURL = `http://127.0.0.1:${port}/v1`;
-  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`);
+  }>(profile, (config) => {
+    config.providers.litellm.settings.baseURL = `http://127.0.0.1:${port}/v1`;
+  });
 }
 
 /** Builds the world under `root`, runs `coven opencode setup` in it and refuses an unsafe config. */

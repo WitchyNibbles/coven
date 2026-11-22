@@ -39,8 +39,9 @@ interface ExportedPart {
   };
 }
 
-interface ExportedMessage {
+export interface ExportedMessage {
   type?: string;
+  agent?: string;
   text?: string;
   metadata?: { childID?: string; state?: string };
   content?: ExportedPart[];
@@ -94,10 +95,16 @@ export function sessionOf(out: string): string {
   return id;
 }
 
+/** The messages of `exported`, the JSON of `opencode session export`. */
+export function exportedMessages(exported: string): ExportedMessage[] {
+  return (
+    (JSON.parse(exported) as { messages?: ExportedMessage[] }).messages ?? []
+  );
+}
+
 /** `exported` is the JSON of `opencode session export` for the lead's session. */
 export function readHistory(exported: string): LeadHistory {
-  const messages =
-    (JSON.parse(exported) as { messages?: ExportedMessage[] }).messages ?? [];
+  const messages = exportedMessages(exported);
   const assistants = messages.filter((m) => m.type === "assistant");
   return {
     reports: messages.flatMap(reportOf),
@@ -119,12 +126,18 @@ export function awaitResults(history: LeadHistory): AwaitResult[] {
     .map((tool) => JSON.parse(tool.output) as AwaitResult);
 }
 
-const SESSION_ID = /ses_[A-Za-z0-9_]+/g;
+/** One session id. */
+export const SESSION_ID = /ses_[A-Za-z0-9_]+/;
+
+/** Every session id in `text`, in order, repeats kept. */
+export function sessionIDsIn(text: string): string[] {
+  return text.match(new RegExp(SESSION_ID, "g")) ?? [];
+}
 
 /** The session ids the lead's `subagent` calls started, in call order. */
 export function childIDs(history: LeadHistory): string[] {
   const ids = history.tools
     .filter((tool) => tool.name === "subagent")
-    .flatMap((tool) => tool.output.match(SESSION_ID) ?? []);
+    .flatMap((tool) => sessionIDsIn(tool.output));
   return [...new Set(ids)];
 }
