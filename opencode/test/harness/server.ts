@@ -16,6 +16,7 @@ interface ServerOptions {
 
 const START_TIMEOUT_MS = 30_000;
 const GRACE_MS = 5000;
+const REQUEST_TIMEOUT_MS = 10_000;
 const USERNAME = "opencode";
 const LISTENING = /^server listening on (http:\/\/127\.0\.0\.1:\d+)$/;
 
@@ -73,6 +74,7 @@ async function request(
   const response = await fetch(url, {
     method,
     headers: { authorization: `Basic ${token}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const body = await response.text();
   if (!response.ok) {

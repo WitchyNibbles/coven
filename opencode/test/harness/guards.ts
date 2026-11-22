@@ -14,8 +14,22 @@ export interface ProjectConfig {
   policies?: Policy[];
 }
 
+/** True for a plain http URL whose host is 127.0.0.1 and that carries no user or password. */
 function isLoopbackURL(url: string | undefined): boolean {
-  return url !== undefined && /^http:\/\/127\.0\.0\.1[:/]/.test(url);
+  if (url === undefined) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "http:" &&
+      parsed.hostname === "127.0.0.1" &&
+      parsed.username === "" &&
+      parsed.password === ""
+    );
+  } catch {
+    return false;
+  }
 }
 
 function providerProblem(config: ProjectConfig): string | undefined {

@@ -12,7 +12,8 @@ const FAILED = 1;
 function enter(argv: readonly string[]): number {
   const probe = spawnSync("unshare", ["-rn", "true"], { encoding: "utf8" });
   if (probe.status !== 0) {
-    const first = (probe.stderr ?? "").split("\n")[0] ?? "";
+    const first =
+      (probe.stderr ?? "").split("\n")[0] || (probe.error?.message ?? "");
     console.error(`unshare -rn is not available: ${first}`);
     return NOT_AVAILABLE;
   }

@@ -43,17 +43,23 @@ await test("every entry under the root is recorded", () =>
     assert.ok(seen.has(join(root, "sub", "b.txt")));
   }));
 
-await test("changed bytes of the same size name the file", () =>
+await test("changed bytes of the same size and mtime name the file by hash", () =>
   withTree(async (root) => {
+    const file = join(root, "a.txt");
     const before = await snapshot([root]);
-    const then = new Date(
-      Number((before.get(join(root, "a.txt")) ?? "").split(" ")[1]),
-    );
-    await writeFile(join(root, "a.txt"), "omega");
-    await utimes(join(root, "a.txt"), then, then);
-    const diff = snapshotDiff(before, await snapshot([root]));
+    const [size, mtime, hash] = (before.get(file) ?? "").split(" ");
+    const seconds = Number(mtime) / 1000;
+    await writeFile(file, "omega");
+    await utimes(file, seconds, seconds);
+    const after = await snapshot([root]);
+    const [sizeNow, mtimeNow, hashNow] = (after.get(file) ?? "").split(" ");
+    // The restore must be exact, or the diff below could fire on the mtime alone.
+    assert.deepEqual([sizeNow, mtimeNow], [size, mtime]);
+    assert.notEqual(hashNow, hash);
+    const diff = snapshotDiff(before, after);
     assert.equal(diff.length, 1);
     assert.match(diff[0] ?? "", /a\.txt/);
+    assert.ok((diff[0] ?? "").includes(hashNow ?? "?"));
   }));
 
 await test("a changed mtime names the file", () =>

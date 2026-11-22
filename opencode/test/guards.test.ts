@@ -180,3 +180,36 @@ await test("a profile whose litellm URL only starts like loopback is refused", (
   };
   assert.match(profileProblem(config) ?? "", /127\.0\.0\.1/);
 });
+
+const SNEAKY_URLS: [string, string][] = [
+  ["a userinfo form", "http://127.0.0.1:5@evil.example/v1"],
+  ["a user and password form", "http://user:pw@127.0.0.1:5/v1"],
+  ["a password-only form", "http://:pw@127.0.0.1:5/v1"],
+  ["an https URL", "https://127.0.0.1:5/v1"],
+  ["garbage", "not a url"],
+  ["an empty string", ""],
+];
+
+for (const [name, baseURL] of SNEAKY_URLS) {
+  await test(`profileProblem refuses ${name}`, () => {
+    const config: ProjectConfig = {
+      providers: { litellm: { settings: { baseURL } } },
+    };
+    assert.match(profileProblem(config) ?? "", /127\.0\.0\.1/);
+  });
+
+  await test(`configProblem refuses ${name} for the fake provider`, () => {
+    const config: ProjectConfig = {
+      ...GOOD,
+      providers: { fake: { settings: { baseURL } } },
+    };
+    assert.match(configProblem(config) ?? "", /127\.0\.0\.1/);
+  });
+}
+
+await test("a loopback URL with no port or path is accepted", () => {
+  const config: ProjectConfig = {
+    providers: { litellm: { settings: { baseURL: "http://127.0.0.1" } } },
+  };
+  assert.equal(profileProblem(config), undefined);
+});
