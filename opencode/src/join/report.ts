@@ -15,7 +15,7 @@ const REPORT_STATES: readonly string[] = [
 // (quotes, `>`) is ignored.
 const LEADING_ATTRIBUTES = /<subagent\s+sessionID="[^"]*"\s+state="([^"]*)"/;
 
-function isReportState(value: string): value is ReportState {
+export function isReportState(value: string): value is ReportState {
   return REPORT_STATES.includes(value);
 }
 

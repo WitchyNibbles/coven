@@ -1,6 +1,6 @@
 import { ownString } from "./fields.ts";
 import type { Observed } from "./record.ts";
-import { reportState } from "./report.ts";
+import { isReportState, reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
 
 const SESSION_EVENTS = {
@@ -19,13 +19,6 @@ export const EVENT_TYPES: readonly string[] = [
   INBOX_EVENT,
 ];
 
-const STATES: readonly ReportState[] = [
-  "running",
-  "completed",
-  "error",
-  "cancelled",
-];
-
 type Fields = Record<string, unknown>;
 
 function fields(value: unknown): Fields | undefined {
@@ -40,7 +33,9 @@ function stateOf(
   metadata: Fields | undefined,
 ): ReportState | undefined {
   const declared = ownString(metadata, "state");
-  return reportState(body ?? "") ?? STATES.find((state) => state === declared);
+  const fallback =
+    declared !== undefined && isReportState(declared) ? declared : undefined;
+  return reportState(body ?? "") ?? fallback;
 }
 
 function normalizeReport(data: Fields | undefined): Observed | undefined {
