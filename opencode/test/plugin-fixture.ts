@@ -55,6 +55,10 @@ export function started(sessionID: string): unknown {
   return { type: "session.execution.started", data: { sessionID } };
 }
 
+export function ended(sessionID: string): unknown {
+  return { type: "session.execution.succeeded", data: { sessionID } };
+}
+
 export function report(
   parentID: string,
   childID: string,

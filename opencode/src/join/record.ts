@@ -113,12 +113,13 @@ export class JoinRecord {
       : 0;
   }
 
+  /** Linked children still at work: no end, and not ended without a report. */
   running(parentID: string): ChildStatus[] {
     const open: ChildStatus[] = [];
     for (const [childID, child] of this.children) {
       if (child.parentID === parentID) {
         const status = describe(child, childID);
-        if (status.end === undefined) {
+        if (status.end === undefined && status.endedAt === undefined) {
           open.push(status);
         }
       }

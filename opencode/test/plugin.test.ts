@@ -6,7 +6,14 @@ import { EVENT_TYPES } from "../src/join/events.ts";
 import { inputSchema, InputError } from "../src/join/input.ts";
 import { NotAChildError, UnknownSessionError } from "../src/join/wait.ts";
 import plugin from "../src/plugin.ts";
-import { KID, LEAD, boot, report, started } from "./plugin-fixture.ts";
+import {
+  KID,
+  LEAD,
+  boot,
+  ended,
+  report,
+  started,
+} from "./plugin-fixture.ts";
 
 await test("the plugin has the id coven.join and a setup", () => {
   assert.equal(plugin.id, "coven.join");
@@ -63,6 +70,14 @@ await test("the reminder stops once the child has sent its final report", async 
   const p = await boot();
   await p.emit(started(KID));
   await p.emit(report(LEAD, KID, "completed"));
+  assert.deepEqual(p.reminder(LEAD), []);
+  p.cleanup();
+});
+
+await test("the reminder stops once the child has ended without a report", async () => {
+  const p = await boot();
+  await p.emit(started(KID));
+  await p.emit(ended(KID));
   assert.deepEqual(p.reminder(LEAD), []);
   p.cleanup();
 });

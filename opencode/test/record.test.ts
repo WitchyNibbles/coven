@@ -142,6 +142,14 @@ await test("running lists linked children with no end", () => {
   ]);
 });
 
+await test("running leaves out a child that ended without a report", () => {
+  const { record } = setup();
+  record.linkChild("ses_p", "ses_c", "child A");
+  record.observe(started);
+  record.observe(ended);
+  assert.deepEqual(record.running("ses_p"), []);
+});
+
 await test("a report for an unlinked child links it to that parent", () => {
   const { record } = setup();
   record.observe(report("running", "from the report"));
