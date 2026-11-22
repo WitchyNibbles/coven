@@ -26,12 +26,25 @@ await test("an unknown state value gives undefined", () => {
   assert.equal(reportState(tag("paused")), undefined);
 });
 
-await test("a description holding a greater-than sign or state text does not confuse it", () => {
+await test("a description with a quote or a quote and bracket keeps the state", () => {
+  for (const state of ["running", "completed"] as const) {
+    for (const description of [
+      'say "hi" now',
+      'ends here"> and more',
+      "a > b",
+    ]) {
+      const text = `<subagent sessionID="ses_c" state="${state}" description="${description}">\nbody\n</subagent>`;
+      assert.equal(reportState(text), state, description);
+    }
+  }
+});
+
+await test("a state that does not directly follow sessionID is not read", () => {
   assert.equal(
     reportState(
-      '<subagent description="a > b state=" state="error" sessionID="ses_c">x</subagent>',
+      '<subagent sessionID="ses_c" description="x" state="error">hi</subagent>',
     ),
-    "error",
+    undefined,
   );
 });
 

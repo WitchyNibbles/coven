@@ -10,8 +10,10 @@ const REPORT_STATES: readonly string[] = [
   "cancelled",
 ];
 
-const SUBAGENT_TAG = /<subagent((?:\s+[\w:-]+="[^"]*")*)\s*>/;
-const ATTRIBUTE = /\s([\w:-]+)="([^"]*)"/g;
+// OpenCode writes `<subagent sessionID="..." state="..." description="...">` with the
+// description unescaped, so only the leading two attributes are read; whatever follows
+// (quotes, `>`) is ignored.
+const LEADING_ATTRIBUTES = /<subagent\s+sessionID="[^"]*"\s+state="([^"]*)"/;
 
 function isReportState(value: string): value is ReportState {
   return REPORT_STATES.includes(value);
@@ -19,15 +21,6 @@ function isReportState(value: string): value is ReportState {
 
 /** Reads `state="..."` from the first `<subagent ...>` tag in a report. */
 export function reportState(text: string): ReportState | undefined {
-  const attributes = SUBAGENT_TAG.exec(text)?.[1];
-  if (attributes === undefined) {
-    return undefined;
-  }
-  for (const match of attributes.matchAll(ATTRIBUTE)) {
-    const [, name, value] = match;
-    if (name === "state" && value !== undefined && isReportState(value)) {
-      return value;
-    }
-  }
-  return undefined;
+  const state = LEADING_ATTRIBUTES.exec(text)?.[1];
+  return state !== undefined && isReportState(state) ? state : undefined;
 }
