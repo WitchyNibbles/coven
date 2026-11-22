@@ -5,7 +5,7 @@ Use this template when dispatching an implementer subagent.
 ```
 subagent (agent: implementer):
   description: "Implement Task N: [task name]"
-  model: [MODEL — leave out for the role's default (Sonnet); name one per
+  model: [MODEL — leave out for the agent's configured model; name one per
          SKILL.md Model Selection to go up (fix rounds 4-5, design work) or down]
   prompt: |
     You are implementing Task N: [task name]

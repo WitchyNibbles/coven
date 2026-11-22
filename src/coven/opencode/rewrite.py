@@ -78,6 +78,9 @@ TABLE: Final = [
     _entry(r"\bRead, Grep and `rg`", "`read`, `grep` and `rg`"),
     *(_entry(rf"\b([Tt]he) {name} tool\b", rf"\1 `{tool}` tool") for name, tool in TOOLS.items()),
     _entry(r"\bTask(?:Create|Update)\b", "todowrite"),
+    # The model comes from the profile config, not from a role's default.
+    _entry(r"\bthe role's default \(Sonnet\)", "the agent's configured model"),
+    _entry(r"\brole's default\b", "agent's configured model"),
 ]
 
 # Names no table entry maps. Whatever of these is left in a line after the table ran is an error.

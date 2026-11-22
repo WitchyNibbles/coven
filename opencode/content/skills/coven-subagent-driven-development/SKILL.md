@@ -258,7 +258,8 @@ A `running` or progress report is not a result. The child still has background
 work, and the wait goes on. A child that ended with `ended-without-report`
 gave no status — its last text is in the result's `report`; resume it with its
 `sessionID` and ask for the report. A child that came back as `removed` is
-gone: dispatch it again.
+gone: dispatch a fresh child carrying the brief path, the report-file path and the
+current HEAD.
 
 **Waiting on dispatched subagents:** never poll `await_agents` with
 short timeouts, and never sit in one silent, open-ended wait either.

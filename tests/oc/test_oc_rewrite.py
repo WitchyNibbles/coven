@@ -104,3 +104,24 @@ def test_rename_skills_touches_skill_names_only() -> None:
     assert rewrite.rename_skills(text) == (
         "coven-clean-code, superpowers-writing-plans, coven:reviewer, the Read tool"
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "model: [MODEL — leave out for the role's default (Sonnet); name one per",
+            "model: [MODEL — leave out for the agent's configured model; name one per",
+        ),
+        (
+            "routine task review (the reviewer role's default",
+            "routine task review (the reviewer agent's configured model",
+        ),
+        (
+            "  reviewer role's default applies); name one",
+            "  reviewer agent's configured model applies); name one",
+        ),
+    ],
+)
+def test_the_model_comes_from_the_profile_config(source: str, expected: str) -> None:
+    assert rewrite_text(source, "x.md") == expected

@@ -205,7 +205,7 @@ subagent (agent: reviewer):
 ```
 
 **Placeholders:**
-- `[MODEL]` — leave out for a routine task review (the reviewer role's default
+- `[MODEL]` — leave out for a routine task review (the reviewer agent's configured model
   applies); name one per SKILL.md Model Selection for a risky diff. A final
   whole-branch review is not dispatched from this template: it uses the
   `final-reviewer` role and names no model

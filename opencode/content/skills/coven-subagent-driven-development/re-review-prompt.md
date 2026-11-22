@@ -117,7 +117,7 @@ subagent (agent: reviewer):
 
 **Placeholders:**
 - `[MODEL]` — leave out for a scoped re-review of a small fix diff (the
-  reviewer role's default applies); name one per SKILL.md Model Selection if the fix is risky
+  reviewer agent's configured model applies); name one per SKILL.md Model Selection if the fix is risky
 - `[BRIEF_FILE]` — the task brief file (same file the implementer worked from)
 - `[FINDINGS]` — the Critical/Important findings and spec gaps from the
   previous review, copied verbatim, one per bullet
