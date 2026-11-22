@@ -155,7 +155,10 @@ async function doctorProblem(world: RuntimeWorld): Promise<string | undefined> {
   if (gone.code !== 1 || !plugin.startsWith("fail")) {
     return `doctor without the plugin: exit ${gone.code}, ${plugin}`;
   }
-  await setup(world);
+  const again = await setup(world);
+  if (again.code !== 0) {
+    return `setup exited ${again.code}: ${again.err.slice(-200)}`;
+  }
   const skills = join(world.profile, "home", ".agents", "skills", "foreign");
   await mkdir(skills, { recursive: true });
   await writeFile(join(skills, "SKILL.md"), FOREIGN_SKILL);
