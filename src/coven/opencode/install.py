@@ -44,7 +44,9 @@ def _run_npm(npm: str, prefix: Path, version: str, env: dict[str, str], timeout:
 
 
 def _npm_env(layout: Layout) -> dict[str, str]:
-    """This process's env without the key: npm runs package scripts and must not see it."""
+    """The profile env for npm: package scripts run the new OpenCode, which must not touch the
+    user's own OpenCode folders, and must not see the key. `HOME`, `PATH` and the proxy variables
+    stay, so npm's own config and cache keep working."""
     secret_names = {OPENCODE_KEY_ENV}
     try:
         profile = load_profile(layout)
@@ -52,7 +54,21 @@ def _npm_env(layout: Layout) -> dict[str, str]:
         profile = None  # a broken profile must not block the install
     if profile is not None:
         secret_names.add(profile.key_env)
-    return {k: v for k, v in os.environ.items() if k not in secret_names}
+    base = {k: v for k, v in os.environ.items() if k not in secret_names}
+    return isolated_env(layout, base)
+
+
+def _make_folders(layout: Layout) -> None:
+    """The folders `isolated_env` points at: the postinstall step makes a temp folder in `tmp`."""
+    for folder in (
+        layout.config_dir,
+        layout.data,
+        layout.cache,
+        layout.state,
+        layout.home,
+        layout.tmp,
+    ):
+        folder.mkdir(parents=True, exist_ok=True)
 
 
 def install(layout: Layout, version: str, *, timeout: float = 900.0) -> Path:
@@ -62,6 +78,7 @@ def install(layout: Layout, version: str, *, timeout: float = 900.0) -> Path:
     if version != PINNED_VERSION:
         warn(f"run and doctor use {PINNED_VERSION} only")
     binary = layout.runtime_binary(version)
+    _make_folders(layout)
     env = isolated_env(layout, os.environ)
     if binary_version(binary, env) == version:
         print(f"opencode {version} is already installed: {binary}")

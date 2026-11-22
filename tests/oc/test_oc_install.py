@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
-from fakes import fake_npm, fake_opencode, npm_env_log, npm_log
+from fakes import NPM_PATH_VARS, fake_npm, fake_opencode, npm_env_log, npm_log, npm_paths_log
 
 from coven import cli
 from coven.opencode import install as installer
@@ -142,3 +144,36 @@ def test_install_does_not_need_a_valid_profile(home: Layout, npm_dir: Path):
     home.root.mkdir(parents=True)
     home.profile_file.write_text("not json")
     assert installer.install(home, "2.3.2") == home.runtime_binary("2.3.2")
+
+
+def npm_saw(folder: Path) -> dict[str, Any]:
+    seen: dict[str, Any] = json.loads(npm_paths_log(folder).read_text())
+    return seen
+
+
+def test_npm_runs_with_the_profile_env_and_a_tmp_folder(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in NPM_PATH_VARS:
+        monkeypatch.setenv(name, "/not/the/profile")
+    monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", "{}")
+    installer.install(home, "2.3.2")
+    seen = npm_saw(npm_dir)
+    assert seen["values"] == {
+        "XDG_DATA_HOME": str(home.data),
+        "XDG_CONFIG_HOME": str(home.config_home),
+        "XDG_STATE_HOME": str(home.state),
+        "XDG_CACHE_HOME": str(home.cache),
+        "TMPDIR": str(home.tmp),
+        "OPENCODE_CONFIG_DIR": str(home.config_dir),
+    }
+    assert seen["tmp_exists"] is True
+    assert "OPENCODE_CONFIG_CONTENT" not in seen["opencode_names"]
+
+
+def test_npm_env_keeps_home_and_path_for_the_npm_config_and_cache(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("FAKE_NPM_WATCH", "HOME,PATH")
+    installer.install(home, "2.3.2")
+    assert npm_env_log(npm_dir).read_text().splitlines() == ["HOME set", "PATH set"]

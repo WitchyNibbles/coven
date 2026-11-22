@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Final, Literal
 
 Serve = Literal["ok", "ignore-term", "silent"]
+# The non-secret variables the fake npm reports the value of.
+NPM_PATH_VARS: Final = (
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "TMPDIR",
+    "OPENCODE_CONFIG_DIR",
+)
 
 _OPENCODE_BODY: Final = """
 import json
@@ -64,6 +73,7 @@ sys.exit(main(sys.argv[1:]))
 """
 
 _NPM_BODY: Final = """
+import json
 import os
 import stat
 import sys
@@ -71,6 +81,9 @@ from pathlib import Path
 
 LOG = Path({log!r})
 ENV_LOG = Path({env_log!r})
+PATHS_LOG = Path({paths_log!r})
+# Path variables only: they hold no secret, so the test may read their values.
+PATH_VARS = {path_vars!r}
 OPENCODE = {opencode!r}
 
 with LOG.open("a") as stream:
@@ -78,6 +91,12 @@ with LOG.open("a") as stream:
 with ENV_LOG.open("a") as stream:
     for name in filter(None, os.environ.get("FAKE_NPM_WATCH", "").split(",")):
         stream.write(name + (" set" if name in os.environ else " unset") + "\\n")
+with PATHS_LOG.open("w") as stream:
+    stream.write(json.dumps({{
+        "values": {{n: os.environ.get(n) for n in PATH_VARS}},
+        "opencode_names": sorted(n for n in os.environ if n.startswith("OPENCODE_")),
+        "tmp_exists": Path(os.environ.get("TMPDIR", "/nonexistent")).is_dir(),
+    }}))
 exit_code = os.environ.get("FAKE_NPM_EXIT")
 if exit_code:
     for number in (1, 2, 3):
@@ -131,6 +150,11 @@ def npm_env_log(dir: Path) -> Path:
     return dir / "npm.env"
 
 
+def npm_paths_log(dir: Path) -> Path:
+    """JSON the fake npm writes: the values of PATH_VARS, the OPENCODE_ names it saw, TMPDIR's state."""
+    return dir / "npm.paths.json"
+
+
 def fake_npm(dir: Path) -> Path:
     """An `npm` that logs its argv and installs a fake opencode into `--prefix`.
 
@@ -140,5 +164,11 @@ def fake_npm(dir: Path) -> Path:
     lines and exit with that code.
     """
     opencode = _opencode_source("__VERSION__", None, "ok")
-    body = _NPM_BODY.format(log=str(npm_log(dir)), env_log=str(npm_env_log(dir)), opencode=opencode)
+    body = _NPM_BODY.format(
+        log=str(npm_log(dir)),
+        env_log=str(npm_env_log(dir)),
+        paths_log=str(npm_paths_log(dir)),
+        path_vars=NPM_PATH_VARS,
+        opencode=opencode,
+    )
     return _make_executable(dir / "npm", f"#!{sys.executable}\n{body}")

@@ -41,7 +41,10 @@ name, and the one holding the key.
     coven opencode doctor
 
 - `install` runs npm to put the pinned OpenCode into `P/runtime`. It is the only step that uses the
-  network, and it runs without the key env. `COVEN_OPENCODE_BIN` points at an existing 2.3.2
+  network. npm runs with the profile env: the profile's XDG, temp and config folders, no key env and no
+  inherited `OPENCODE_` setting, so the package's postinstall check never writes into your own
+  OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm cache
+  still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2
   binary instead.
 - `setup` writes the config, the plugin copy and `profile.json`, all or none. The preset
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
