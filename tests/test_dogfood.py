@@ -15,7 +15,9 @@ INSTALLED = {
     "check_repo.py": "",
     "check_stages.py": "",
     "check_ts.py": "",
+    "eslint.config.mjs": "typescript",
     "ruff.toml": "python",
+    "tsconfig.base.json": "typescript",
 }
 
 
