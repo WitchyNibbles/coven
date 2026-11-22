@@ -1,4 +1,4 @@
-/** The runtime suite's checks: isolation, the `tool_choice` hook and `coven opencode doctor`. */
+/** The runtime suite's checks: isolation, the `tool_choice` hook, doctor, deny-secrets and the SDD smoke. */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import { withServer } from "../../harness/server.ts";
 import { snapshot, snapshotDiff } from "../../harness/snapshot.ts";
 import { makeWorld, setToolChoiceAuto } from "./profile.ts";
 import type { RuntimeWorld } from "./profile.ts";
+import { sddProblem, secretsProblem } from "./content.ts";
 import { runSession } from "./run.ts";
 import type { Session } from "./run.ts";
 
@@ -137,6 +138,21 @@ function lineOf(lines: readonly string[], name: string): string {
   );
 }
 
+function foreignSkill(world: RuntimeWorld): string {
+  return join(world.profile, "home", ".agents", "skills", "foreign");
+}
+
+/** Back to the profile `setup` writes: the planted skill gone, the hook on again. */
+async function restoreProfile(
+  world: RuntimeWorld,
+): Promise<string | undefined> {
+  await rm(foreignSkill(world), { recursive: true, force: true });
+  const done = await setup(world);
+  return done.code === 0
+    ? undefined
+    : `setup exited ${done.code}: ${done.err.slice(-200)}`;
+}
+
 async function doctorProblem(world: RuntimeWorld): Promise<string | undefined> {
   const restored = await setup(world);
   if (restored.code !== 0) {
@@ -160,7 +176,7 @@ async function doctorProblem(world: RuntimeWorld): Promise<string | undefined> {
   if (again.code !== 0) {
     return `setup exited ${again.code}: ${again.err.slice(-200)}`;
   }
-  const skills = join(world.profile, "home", ".agents", "skills", "foreign");
+  const skills = foreignSkill(world);
   await mkdir(skills, { recursive: true });
   await writeFile(join(skills, "SKILL.md"), FOREIGN_SKILL);
   const foreign = await doctor(world);
@@ -182,7 +198,7 @@ async function settle(
   }
 }
 
-/** Runs the three checks in order in `world`; `binary` is the 2.3.2 runtime they all use. */
+/** Runs the five checks in order in `world`; `binary` is the 2.3.2 runtime they all use. */
 export async function runtimeChecks(
   world: RuntimeWorld,
   binary: string,
@@ -201,6 +217,17 @@ export async function runtimeChecks(
       : toolChoiceProblem(used, green),
   );
   const doctored = await settle(() => doctorProblem(used));
+  const restored = await settle(() => restoreProfile(used));
+  const secrets = await settle(() =>
+    restored === undefined
+      ? secretsProblem(used)
+      : Promise.resolve(`no restored profile: ${restored}`),
+  );
+  const sdd = await settle(() =>
+    restored === undefined
+      ? sddProblem(used)
+      : Promise.resolve(`no restored profile: ${restored}`),
+  );
   return [
     {
       title: "isolation: the 1.x install stays out and unchanged",
@@ -210,6 +237,14 @@ export async function runtimeChecks(
     {
       title: "doctor: passes, then names a missing plugin and a foreign skill",
       problem: doctored,
+    },
+    {
+      title: "deny-secrets: read and cat of .env are refused",
+      problem: secrets,
+    },
+    {
+      title: "sdd: two role subagents are awaited and each report arrives once",
+      problem: sdd,
     },
   ];
 }

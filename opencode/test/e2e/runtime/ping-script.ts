@@ -9,7 +9,10 @@ import type { Decide } from "../../harness/fake-model.ts";
 const PING = "coven_ping";
 
 /** The text of the tool results that answer a call to `name`. */
-function resultsOf(messages: readonly ChatMessage[], name: string): string[] {
+export function resultsOf(
+  messages: readonly ChatMessage[],
+  name: string,
+): string[] {
   const ids = new Set(
     messages
       .flatMap((message) => message.tool_calls ?? [])
