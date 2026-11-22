@@ -128,6 +128,12 @@ function agentsOf(exported: string): string[] {
     .map((message) => message.agent ?? "(none)");
 }
 
+/** What the `subagent` call was, for a message: its status and the agent it named. */
+function describeCall(call: ToolRun | undefined): string {
+  const input = call?.input as { agent?: string } | undefined;
+  return `${call?.status ?? "missing"} for agent ${input?.agent}`;
+}
+
 /** The session id of a completed `subagent` call for `role`, or the reason it is not one. */
 function startedChild(
   call: ToolRun | undefined,
@@ -135,8 +141,7 @@ function startedChild(
 ): { id: string } | { problem: string } {
   const input = call?.input as { agent?: string } | undefined;
   if (call?.status !== "completed" || input?.agent !== role) {
-    const seen = `${call?.status ?? "missing"} for agent ${input?.agent}`;
-    return { problem: `the ${role} subagent call was ${seen}` };
+    return { problem: `the ${role} subagent call was ${describeCall(call)}` };
   }
   const id = /ses_[A-Za-z0-9_]+/.exec(call.output)?.[0];
   return id === undefined
