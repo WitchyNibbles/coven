@@ -99,7 +99,8 @@ the child's most recent start. Sources, in order:
    `session.inbox.enqueued` with that metadata, keyed by parent and child, with the item's
    `state`);
 2. on each call, the caller's history (`ctx.session.context`): a message with that metadata
-   counts, so a report that arrived before the plugin started (server restart) is not missed.
+   counts, so a report delivered before the call (for example before a plugin restart) is not
+   missed. It cannot see a report that arrives during the call; see below.
 
 A child whose newest start comes after its newest report is running again and is waited for anew.
 
@@ -113,7 +114,8 @@ Only a **final** report ends a child's wait. 2.x sends a report with `state="run
 A child can also end a round with no report at all (no text and no background job, or a server
 interrupt). So a child also counts as ended when its terminal execution event
 (`session.execution.succeeded` or the failure and interrupt events, names read from the 2.3.2
-schema) has come and no final report followed within 10 seconds. It is returned with state
+schema) has come, or `ctx.session.wait` has said it is idle, and no final report followed within
+10 seconds. It is returned with state
 `ended-without-report` and the text of its last assistant message, since no native report will
 carry it.
 
@@ -137,9 +139,18 @@ duplicate; an id equal to the caller; `mode` not `all` or `any`; `timeoutSeconds
 from 1 to 86400. A server error from `ctx.session.get` is a tool error naming the id. A child
 removed during the wait (`session.deleted`, name read from the schema) ends with state `removed`.
 
-The record is a safety net, not the only path: while a call waits, it re-reads the caller's
-history every 15 seconds, so a report whose event was missed (the subscription dropped, the
-plugin restarted) still ends the wait. If the event subscription ends or throws, the plugin
+The event stream is the only path that sees a report arriving during the wait. The history read
+(once at the start of a call, then every 15 seconds) only finds reports delivered before the call:
+in 2.3.2 a synthetic message enters `session.context` only when the inbox delivers it
+(`session.inbox.delivered`, the `InboxDelivered` projection in `core/src/session/projector.ts`), and
+a report steered to a parent that is inside a tool call is delivered after the tool result.
+`event.subscribe` has no replay cursor either, so events missed while the subscription was down
+are gone. So the wait does not lean on the stream alone: for each child still pending when the call
+starts, it calls `ctx.session.wait`, which resolves once the child's agent loop is idle, and records
+the child as ended. The 10-second grace then applies: a final report that follows ends the child
+normally, and otherwise it returns as `ended-without-report` with its last text. A failed
+`session.wait` only means no such reconcile for that child, and every pending `session.wait` is
+aborted when the call ends. If the event subscription ends or throws, the plugin
 subscribes again with a backoff from 1 to 30 seconds. The subscription asks only for the event
 types it reads (`ctx.event.subscribe({types})`), not every token delta. The record forgets a
 parent's entries 24 hours after their last event, so it does not grow without bound. The plugin
@@ -209,7 +220,8 @@ Code shape, so the logic is testable without OpenCode:
   locally with its receipt in the PR, because CI runners may refuse unprivileged user namespaces.
 - Cases for the end: a child with its own running subagent (a `running` report, then the final
   one); a child that ends with no report; a child removed mid-wait; a dropped subscription (the
-  history re-read ends the wait); the record's 24-hour forgetting (fake clock); every input error.
+  `session.wait` reconcile ends the wait); the record's 24-hour forgetting (fake clock); every input
+  error.
 
 ## Left to the builder
 
@@ -232,8 +244,10 @@ findings are folded into the design above.
 
 - Architecture: one event loop per plugin instance (2.x starts one per directory; each sees the
   whole server, so the caller's instance has what it needs). Added: resubscribe with backoff, a
-  15 s history re-read while waiting, subscribing only to the needed event types, and a 24-hour
-  limit on the record.
+  history read on each call and every 15 s while waiting (it finds reports delivered before the
+  call, not ones that arrive during it), a `session.wait` reconcile per pending child for events
+  the stream missed, subscribing only to the needed event types, and a 24-hour limit on the
+  record.
 - Errors: every failure has a name and a message: input errors, unknown id, not a child, server
   error on lookup, abort, timeout (a result, not an error), `ended-without-report`, `removed`.
 - Security: the tool only reads children of the caller, so a model cannot read other sessions
@@ -249,7 +263,8 @@ findings are folded into the design above.
   description.
 - API: one tool, `await_agents`, with a fixed input and result shape.
 - Performance: the filtered subscription avoids reading every token delta; waits are event-driven
-  plus one history read per 15 s per waiting call.
+  plus one history read per 15 s per waiting call and one `session.wait` per pending child per
+  call.
 - UI: none beyond the tool's progress text.
 
 Deferred, not in this PR: the launcher and installer, the plugin-loaded check, coven's SDD text

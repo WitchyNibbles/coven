@@ -46,8 +46,10 @@ plugin API (no `@opencode/*` dependency: a local structural type of the parts we
 - An abort while several children are pending: the call ends with the abort, timers are cleared
   and no progress fires after. Test in Task 3.
 - A second `any` over ids already done returns at once with them listed in `done`. Test in Task 3.
-- The event stream ending mid-wait: the 15 s history re-read still ends the wait, and the plugin
-  resubscribes. Tests in Tasks 3 and 4.
+- The event stream ending mid-wait: the history re-read cannot see a report that arrives during
+  the wait (2.3.2 delivers it to the lead's context only after the tool result), so the
+  `session.wait` reconcile ends the wait through the no-report grace, and the plugin resubscribes.
+  Tests in Tasks 3 and 4 and the final fix wave.
 
 ---
 

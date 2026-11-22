@@ -29,6 +29,7 @@ await test("setup registers await_agents with the input schema and no codemode",
   assert.match(description, /only the ids still pending/);
   assert.match(description, /server restart/);
   assert.match(description, /best effort/);
+  assert.match(description, /ended-without-report/);
   p.cleanup();
 });
 

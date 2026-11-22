@@ -14,14 +14,18 @@ const FORGET_EVERY_MS = 60 * 60 * 1000;
 const DESCRIPTION =
   "Waits until the given subagents send their final report, then returns. " +
   "It returns states only; the reports themselves are in the conversation as <subagent> messages. " +
+  "A subagent that goes idle with no report comes back as ended-without-report with its last text. " +
   "On a repeat call pass only the ids still pending. " +
-  "After a server restart the wait is best effort.";
+  "After a server restart the wait is best effort: a report already in the conversation counts.";
 
 export interface Deps {
   now: () => number;
 }
 
-/** Looks each session up once while the record holds it, failures included, to learn which ones are children. */
+/**
+ * Looks each session up once while the record holds it, failures included, to learn which ones
+ * are children.
+ */
 class Children {
   private readonly seen = new Set<string>();
   private readonly ctx: PluginContext;
