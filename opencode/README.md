@@ -145,3 +145,22 @@ shared harness (fake model, loopback guards, snapshots, the `withServer` helper)
 Unit tests run without OpenCode:
 
     npm test
+
+## Content
+
+`opencode/content/` holds the skills and commands the profile ships, rendered from the repo's
+`skills/` folder by a generator. It is committed, and a test renders it again and compares. After a
+change to a skill, to `opencode/overrides/` or to `src/coven/opencode/rewrite.py`, regenerate it:
+
+    uv run python -m coven.opencode.content
+
+Do not edit the output by hand. The rewrite table in `rewrite.py` maps the Claude Code names in a
+skill (skill and agent ids, tool names, the `Subagent (...)` lines of the prompt templates) to their
+OpenCode 2.3.2 names, line by line. A name with no equivalent (a Claude-only tool, a skill that
+is not shipped, `${CLAUDE_SKILL_DIR}`) stops the generator with the file and line.
+
+For such a file, write an override: `opencode/overrides/skills/<name>/<file>` replaces the source
+file of the same path. Its first line is `<!-- opencode override of skills/<name>/<file> sha256:HEX -->`,
+with the sha256 of that source file; the generator strips it. When the source changes, a test fails
+until the override is updated and its hash with it. `subagent-driven-development` has no override
+yet and is rendered from its source untouched (`PENDING_OVERRIDE` in `content.py`).
