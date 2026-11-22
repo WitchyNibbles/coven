@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Any
 
 from coven import paths
-from coven.opencode import generate
-from coven.opencode.profile import ROLES, OpencodeError, Profile, layout, load_profile, make_profile
+from coven.opencode import generate, install, runtime
+from coven.opencode.profile import (
+    PINNED_VERSION,
+    ROLES,
+    OpencodeError,
+    Profile,
+    layout,
+    load_profile,
+    make_profile,
+)
 
 NO_PROFILE = "no profile yet; run coven opencode setup --preset ..."
 FLAGS_NEED_PRESET = "pass --preset with the other flags, or no flags to regenerate"
@@ -43,6 +52,17 @@ def run_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_run(args: argparse.Namespace) -> int:
+    passed = args.opencode_args
+    return runtime.run(passed[1:] if passed[:1] == ["--"] else passed, exec_fn=os.execve)
+
+
+def run_install(args: argparse.Namespace) -> int:
+    binary = install.install(layout(), args.version)
+    print(f"runtime: {binary}")
+    return 0
+
+
 def register(subparsers: Any) -> None:
     parser = subparsers.add_parser(
         "opencode", help="set up, check and run coven's own OpenCode profile"
@@ -63,3 +83,15 @@ def register(subparsers: Any) -> None:
         help="a model per role; lead is required",
     )
     setup.set_defaults(handler=run_setup)
+    run = commands.add_parser(
+        "run", help="start the pinned OpenCode in coven's profile (arguments follow --)"
+    )
+    run.add_argument("opencode_args", nargs=argparse.REMAINDER, metavar="-- ARGS")
+    run.set_defaults(handler=run_run)
+    install_parser = commands.add_parser(
+        "install", help="install the pinned OpenCode runtime into the profile with npm"
+    )
+    install_parser.add_argument(
+        "--version", default=PINNED_VERSION, metavar="X.Y.Z", help=f"default {PINNED_VERSION}"
+    )
+    install_parser.set_defaults(handler=run_install)
