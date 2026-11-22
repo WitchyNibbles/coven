@@ -1,0 +1,85 @@
+import type { HttpRequestEvent } from "./context.ts";
+
+/**
+ * Compatibility shim for OpenCode issue #60202: 2.x sends no `tool_choice` to openai-compatible
+ * providers on ordinary turns, so a vLLM or LiteLLM gateway can leave the tool call in `content`
+ * and the turn ends silently. For the providers the user lists, this adds `tool_choice: "auto"`.
+ *
+ * The hook fails open. It is not a guard: a body it cannot read or does not understand is sent
+ * exactly as OpenCode built it.
+ */
+
+export type ToolChoiceResult =
+  | { kind: "changed"; body: string }
+  | { kind: "unchanged" }
+  | { kind: "unparsable" };
+
+const UNCHANGED: ToolChoiceResult = { kind: "unchanged" };
+
+function parseJson(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function wantsAuto(payload: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(payload.tools) &&
+    payload.tools.length > 0 &&
+    !Object.hasOwn(payload, "tool_choice")
+  );
+}
+
+/** The body with `tool_choice: "auto"` added, only when it has tools and no `tool_choice` key. */
+export function addToolChoice(body: string): ToolChoiceResult {
+  const payload = parseJson(body);
+  if (payload === undefined) {
+    return { kind: "unparsable" };
+  }
+  if (!isPlainObject(payload) || !wantsAuto(payload)) {
+    return UNCHANGED;
+  }
+  return {
+    kind: "changed",
+    body: JSON.stringify({ ...payload, tool_choice: "auto" }),
+  };
+}
+
+function withBody(request: Request, body: string): Request {
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    signal: request.signal,
+    body,
+  });
+}
+
+/** The `http.request` hook for one provider; `log` hears each session's first unreadable body. */
+export function toolChoiceHook(
+  log: (line: string) => void,
+): (event: HttpRequestEvent) => Promise<void> {
+  const warned = new Set<string>();
+  return async (event) => {
+    const text = await event.request.clone().text();
+    if (text === "") {
+      return;
+    }
+    const result = addToolChoice(text);
+    if (result.kind === "changed") {
+      event.request = withBody(event.request, result.body);
+    } else if (result.kind === "unparsable" && !warned.has(event.sessionID)) {
+      warned.add(event.sessionID);
+      log(
+        `coven: tool_choice: request body is not JSON; sent unchanged (session ${event.sessionID})`,
+      );
+    }
+  };
+}

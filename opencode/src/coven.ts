@@ -1,8 +1,8 @@
-import type { CovenContext, HttpRequestEvent } from "./context.ts";
-import { noop } from "./join/noop.ts";
+import type { CovenContext } from "./context.ts";
 import { joinSetup } from "./plugin.ts";
 import { parseOptions } from "./options.ts";
 import { pingTool } from "./ping.ts";
+import { toolChoiceHook } from "./tool-choice.ts";
 
 export interface CovenDeps {
   now: () => number;
@@ -10,9 +10,6 @@ export interface CovenDeps {
 }
 
 const REQUIRED_TOOLS = ["coven_ping", "await_agents"] as const;
-
-/** Stub: the tool-choice rewrite is filled in later. */
-const toolChoiceHook: (event: HttpRequestEvent) => void = noop;
 
 /** 2.3.2 has no HTTP tool list, so a plugin reported active proves both tools are there. */
 async function selfCheck(ctx: CovenContext): Promise<void> {
@@ -36,7 +33,9 @@ export async function covenSetup(
       editor.add(pingTool(options.covenRoot));
     });
     for (const providerID of options.toolChoiceAuto) {
-      await ctx.session.hook("http.request", toolChoiceHook, { providerID });
+      await ctx.session.hook("http.request", toolChoiceHook(deps.log), {
+        providerID,
+      });
     }
     await selfCheck(ctx);
   } catch (error) {
