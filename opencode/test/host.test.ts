@@ -7,6 +7,7 @@ import { createHost, sleep } from "../src/join/host.ts";
 function hostWith(
   messages: ContextMessage[],
   get: PluginContext["session"]["get"] = () => Promise.reject(new Error("no")),
+  wait: PluginContext["session"]["wait"] = () => Promise.resolve(),
 ) {
   const ctx: PluginContext = {
     event: {
@@ -18,6 +19,7 @@ function hostWith(
     },
     session: {
       get,
+      wait,
       context: () => Promise.resolve(messages),
       hook: () => Promise.resolve({}),
     },
@@ -25,6 +27,17 @@ function hostWith(
   };
   return createHost(ctx, () => 42);
 }
+
+await test("waitIdle asks session.wait for the session with the signal", async () => {
+  const calls: unknown[] = [];
+  const host = hostWith([], undefined, (input, options) => {
+    calls.push([input, options?.signal]);
+    return Promise.resolve();
+  });
+  const { signal } = new AbortController();
+  await host.waitIdle("ses_a", signal);
+  assert.deepEqual(calls, [[{ sessionID: "ses_a" }, signal]]);
+});
 
 await test("history keeps text, source and child id of each message with text", async () => {
   const host = hostWith([

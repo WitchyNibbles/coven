@@ -14,6 +14,7 @@ export interface Host {
   ): Promise<{ id: string; parentID?: string } | undefined>;
   history(sessionID: string): Promise<HistoryItem[]>;
   lastAssistantText(sessionID: string): Promise<string>;
+  waitIdle(sessionID: string, signal: AbortSignal): Promise<void>;
   now(): number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
 }

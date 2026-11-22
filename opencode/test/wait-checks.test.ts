@@ -90,6 +90,7 @@ await test("a failed lookup is an error naming the id", async () => {
     getSession: () => Promise.reject(new Error("boom")),
     history: () => Promise.resolve([]),
     lastAssistantText: () => Promise.resolve(""),
+    waitIdle: () => Promise.resolve(),
     now: () => 0,
     sleep: () => Promise.resolve(),
   };

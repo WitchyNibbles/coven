@@ -1,11 +1,12 @@
+import { watchIdle } from "./idle.ts";
 import type { AwaitInput } from "./input.ts";
 import type { ChildStatus, JoinRecord } from "./record.ts";
 import {
   abortion,
   checkChild,
+  feedReports,
   lookupFailed,
   noop,
-  reportsIn,
   snapshot,
 } from "./wait-steps.ts";
 import type {
@@ -52,6 +53,7 @@ class Wait {
   private readonly record: JoinRecord;
   private readonly host: Host;
   private readonly abortion: ReturnType<typeof abortion>;
+  private readonly idleWatch = new AbortController();
 
   constructor(
     input: AwaitInput,
@@ -82,6 +84,7 @@ class Wait {
       return await this.execute();
     } finally {
       off();
+      this.idleWatch.abort();
       this.abortion.dispose();
     }
   }
@@ -90,6 +93,7 @@ class Wait {
     if (await this.checkChildren()) {
       return this.timedOutResult();
     }
+    this.watchPending();
     for (;;) {
       this.call.signal.throwIfAborted();
       if (this.host.now() >= this.nextHistory && (await this.readHistory())) {
@@ -128,6 +132,19 @@ class Wait {
       this.record.linkChild(callerID, id, description);
     }
     return false;
+  }
+
+  /** One idle watch per child still pending at the start, all stopped when the call ends. */
+  private watchPending(): void {
+    const { callerID } = this.call;
+    const { pending } = snapshot(this.record, callerID, this.input.ids);
+    watchIdle(
+      this.host,
+      this.record,
+      callerID,
+      pending.map((child) => child.sessionID),
+      this.idleWatch.signal,
+    );
   }
 
   /**
@@ -198,26 +215,9 @@ class Wait {
     if (fetched === TIMED_OUT) {
       return true;
     }
-    const items = fetched;
     this.historyRead = true;
     this.nextHistory = this.host.now() + HISTORY_EVERY_MS;
-    const seen = new Map<string, number>();
-    for (const { childID, state } of reportsIn(
-      items,
-      new Set(this.input.ids),
-    )) {
-      const nth = (seen.get(childID) ?? 0) + 1;
-      seen.set(childID, nth);
-      if (this.record.reportCount(callerID, childID) < nth) {
-        this.record.observe({
-          kind: "report",
-          parentID: callerID,
-          childID,
-          state,
-          description: this.record.status(callerID, childID).description,
-        });
-      }
-    }
+    feedReports(this.record, callerID, this.input.ids, fetched);
     return false;
   }
 

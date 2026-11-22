@@ -48,6 +48,11 @@ export interface PluginContext {
   };
   session: {
     get(input: { sessionID: string }): Promise<SessionInfo>;
+    /** Resolves once the session's agent loop is idle; at once when it already is. */
+    wait(
+      input: { sessionID: string },
+      options?: { signal?: AbortSignal },
+    ): Promise<void>;
     context(input: { sessionID: string }): Promise<readonly ContextMessage[]>;
     hook(
       name: "context",

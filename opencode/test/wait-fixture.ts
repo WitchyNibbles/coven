@@ -19,6 +19,13 @@ interface Sleep {
   resolve: () => void;
 }
 
+interface IdleWatch {
+  id: string;
+  signal: AbortSignal;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 const forever = <T>(): Promise<T> => new Promise<T>(() => undefined);
 
 export function reportText(id: string, state: ReportState): string {
@@ -29,6 +36,7 @@ export function setup(ids: string[] = [A, B, C]) {
   const clock = { now: 1_000_000 };
   const record = new JoinRecord(() => clock.now);
   const sleeps: Sleep[] = [];
+  const idles: IdleWatch[] = [];
   const history: HistoryItem[] = [];
   const sessions = new Map<string, { id: string; parentID?: string }>(
     ids.map((id) => [id, { id, parentID: CALLER }]),
@@ -42,6 +50,10 @@ export function setup(ids: string[] = [A, B, C]) {
     history: () => (hang.history ? forever() : Promise.resolve([...history])),
     lastAssistantText: () =>
       hang.lastText ? forever() : Promise.resolve("last words"),
+    waitIdle: (id, signal) =>
+      new Promise((resolve, reject) => {
+        idles.push({ id, signal, resolve, reject });
+      }),
     now: () => clock.now,
     sleep: (ms, signal) =>
       new Promise((resolve) => {
@@ -67,7 +79,19 @@ export function setup(ids: string[] = [A, B, C]) {
     sessions,
     progress,
     sleeps,
+    idles,
     hang,
+    idle: async (id: string, error?: Error) => {
+      for (const watch of idles.filter((one) => one.id === id)) {
+        if (error === undefined) {
+          watch.resolve();
+        } else {
+          watch.reject(error);
+        }
+      }
+      await tick();
+      await tick();
+    },
     controller,
     lastSleepMs: () =>
       sleeps.filter((sleep) => !sleep.signal.aborted).at(-1)?.ms,

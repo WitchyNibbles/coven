@@ -36,7 +36,7 @@ export function checkChild(
 }
 
 /** The subagent reports in a history, in order, for the wanted children. */
-export function reportsIn(
+function reportsIn(
   items: HistoryItem[],
   wanted: ReadonlySet<string>,
 ): { childID: string; state: ReportState }[] {
@@ -48,6 +48,29 @@ export function reportsIn(
     }
   }
   return found;
+}
+
+/** Feeds each report in `items` that the record has not seen yet, counting per child in order. */
+export function feedReports(
+  record: JoinRecord,
+  callerID: string,
+  ids: readonly string[],
+  items: HistoryItem[],
+): void {
+  const seen = new Map<string, number>();
+  for (const { childID, state } of reportsIn(items, new Set(ids))) {
+    const nth = (seen.get(childID) ?? 0) + 1;
+    seen.set(childID, nth);
+    if (record.reportCount(callerID, childID) < nth) {
+      record.observe({
+        kind: "report",
+        parentID: callerID,
+        childID,
+        state,
+        description: record.status(callerID, childID).description,
+      });
+    }
+  }
 }
 
 /** Resolves when the signal aborts; the caller rethrows `signal.reason` itself. */

@@ -87,6 +87,8 @@ export function createHost(ctx: PluginContext, now: () => number): Host {
           .filter((message) => message.type === "assistant")
           .at(-1),
       ),
+    waitIdle: (sessionID, signal) =>
+      ctx.session.wait({ sessionID }, { signal }),
     now,
     sleep,
   };

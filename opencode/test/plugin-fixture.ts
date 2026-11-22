@@ -109,6 +109,7 @@ export async function boot(clock = { now: 1_000_000 }) {
             ? Promise.reject(notFound())
             : Promise.resolve(found);
       },
+      wait: () => new Promise<void>(() => undefined),
       context: ({ sessionID }) =>
         Promise.resolve(messages.get(sessionID) ?? []),
       hook: (_name, callback) => {
