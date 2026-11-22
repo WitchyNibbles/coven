@@ -1,4 +1,5 @@
 import type { Mode } from "./input.ts";
+import type { ChildStatus } from "./record.ts";
 import type { EndState } from "./report.ts";
 
 export interface HistoryItem {
@@ -41,3 +42,8 @@ export interface AwaitResult {
 
 export class UnknownSessionError extends Error {}
 export class NotAChildError extends Error {}
+
+export interface View {
+  done: DoneChild[];
+  pending: ChildStatus[];
+}

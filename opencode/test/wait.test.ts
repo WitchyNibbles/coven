@@ -63,6 +63,7 @@ await test("an end with no report becomes ended-without-report after 10 s", asyn
   await tick();
   w.end(A);
   await tick();
+  assert.equal(w.lastSleepMs(), 10_000);
   await w.advance(9_999);
   assert.equal(box.result, undefined);
   await w.advance(1);
@@ -159,4 +160,75 @@ await test("progress comes every 30 s with the pending descriptions", async () =
   assert.deepEqual(w.progress, [text, text]);
   w.controller.abort(new Error("done"));
   await assert.rejects(promise);
+});
+
+await test("a one second timeout sleeps one second and not less", async () => {
+  const w = setup([A]);
+  const { box, promise } = w.run({ timeoutSeconds: 1 });
+  await tick();
+  assert.equal(w.lastSleepMs(), 1_000);
+  await w.advance(999);
+  assert.equal(box.result, undefined);
+  await w.advance(1);
+  assert.equal((await promise).timedOut, true);
+});
+
+await test("a hanging history read does not hold off abort", async () => {
+  const w = setup([A]);
+  w.hang.history = true;
+  const { promise } = w.run();
+  await tick();
+  await w.advance(60_000);
+  const reason = new Error("stop");
+  w.controller.abort(reason);
+  await assert.rejects(promise, (error) => error === reason);
+  assert.ok(w.sleeps.every((sleep) => sleep.signal.aborted));
+});
+
+await test("a hanging history read does not hold off the timeout", async () => {
+  const w = setup([A, B]);
+  w.hang.history = true;
+  const { box, promise } = w.run({ timeoutSeconds: 1 });
+  await tick();
+  await w.advance(999);
+  assert.equal(box.result, undefined);
+  await w.advance(1);
+  const result = await promise;
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(result.pending, [A, B]);
+  assert.ok(w.sleeps.every((sleep) => sleep.signal.aborted));
+});
+
+await test("a hanging last-text read does not hold off abort or the timeout", async () => {
+  const w = setup([A]);
+  w.hang.lastText = true;
+  w.start(A);
+  w.end(A);
+  const timed = w.run({ timeoutSeconds: 15 });
+  await tick();
+  await w.advance(10_000);
+  assert.equal(timed.box.result, undefined);
+  await w.advance(5_000);
+  assert.deepEqual((await timed.promise).pending, [A]);
+  const aborted = w.run();
+  await w.advance(10_000);
+  const reason = new Error("stop");
+  w.controller.abort(reason);
+  await assert.rejects(aborted.promise, (error) => error === reason);
+});
+
+await test("a hanging session lookup does not hold off abort or the timeout", async () => {
+  const w = setup([A]);
+  w.hang.session = true;
+  const timed = w.run({ timeoutSeconds: 1 });
+  await tick();
+  await w.advance(1_000);
+  const result = await timed.promise;
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(result.pending, [A]);
+  const aborted = w.run();
+  await tick();
+  const reason = new Error("stop");
+  w.controller.abort(reason);
+  await assert.rejects(aborted.promise, (error) => error === reason);
 });

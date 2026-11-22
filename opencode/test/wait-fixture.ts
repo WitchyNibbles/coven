@@ -13,9 +13,13 @@ export const B = "ses_b";
 export const C = "ses_c";
 
 interface Sleep {
+  ms: number;
+  due: number;
   signal: AbortSignal;
   resolve: () => void;
 }
+
+const forever = <T>(): Promise<T> => new Promise<T>(() => undefined);
 
 export function reportText(id: string, state: ReportState): string {
   return `<subagent sessionID="${id}" state="${state}" description="x">\nbody\n</subagent>`;
@@ -31,14 +35,17 @@ export function setup(ids: string[] = [A, B, C]) {
   );
   const progress: string[] = [];
   const controller = new AbortController();
+  const hang = { session: false, history: false, lastText: false };
   const host: Host = {
-    getSession: (id) => Promise.resolve(sessions.get(id)),
-    history: () => Promise.resolve([...history]),
-    lastAssistantText: () => Promise.resolve("last words"),
+    getSession: (id) =>
+      hang.session ? forever() : Promise.resolve(sessions.get(id)),
+    history: () => (hang.history ? forever() : Promise.resolve([...history])),
+    lastAssistantText: () =>
+      hang.lastText ? forever() : Promise.resolve("last words"),
     now: () => clock.now,
-    sleep: (_ms, signal) =>
+    sleep: (ms, signal) =>
       new Promise((resolve) => {
-        sleeps.push({ signal, resolve });
+        sleeps.push({ ms, due: clock.now + ms, signal, resolve });
       }),
   };
   const call = {
@@ -60,14 +67,19 @@ export function setup(ids: string[] = [A, B, C]) {
     sessions,
     progress,
     sleeps,
+    hang,
     controller,
+    lastSleepMs: () =>
+      sleeps.filter((sleep) => !sleep.signal.aborted).at(-1)?.ms,
     report,
     start: (id: string) => record.observe({ kind: "started", sessionID: id }),
     end: (id: string) => record.observe({ kind: "ended", sessionID: id }),
     advance: async (ms: number) => {
       clock.now += ms;
       for (const sleep of sleeps) {
-        sleep.resolve();
+        if (sleep.due <= clock.now) {
+          sleep.resolve();
+        }
       }
       await tick();
     },

@@ -1,7 +1,8 @@
+import type { JoinRecord } from "./record.ts";
 import { reportState } from "./report.ts";
 import type { ReportState } from "./report.ts";
 import { NotAChildError, UnknownSessionError } from "./wait-types.ts";
-import type { HistoryItem, Host } from "./wait-types.ts";
+import type { HistoryItem, View } from "./wait-types.ts";
 
 export function noop(): void {
   // a sleep ended by its own abort has nothing to report
@@ -11,19 +12,19 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function checkChild(
-  id: string,
-  callerID: string,
-  host: Host,
-): Promise<void> {
-  let session: { id: string; parentID?: string } | undefined;
-  try {
-    session = await host.getSession(id);
-  } catch (error) {
+export function lookupFailed(id: string): (error: unknown) => never {
+  return (error) => {
     throw new Error(`could not look up session ${id}: ${messageOf(error)}`, {
       cause: error,
     });
-  }
+  };
+}
+
+export function checkChild(
+  id: string,
+  callerID: string,
+  session: { id: string; parentID?: string } | undefined,
+): void {
   if (session === undefined) {
     throw new UnknownSessionError(`session ${id} does not exist`);
   }
@@ -51,12 +52,14 @@ export function reportsIn(
 
 /** Resolves when the signal aborts; the caller rethrows `signal.reason` itself. */
 export function abortion(signal: AbortSignal): {
-  aborted: Promise<void>;
+  aborted: Promise<undefined>;
   dispose: () => void;
 } {
   let onAbort: () => void = noop;
-  const aborted = new Promise<void>((resolve) => {
-    onAbort = resolve;
+  const aborted = new Promise<undefined>((resolve) => {
+    onAbort = () => {
+      resolve(undefined);
+    };
   });
   signal.addEventListener("abort", onAbort, { once: true });
   return {
@@ -65,4 +68,23 @@ export function abortion(signal: AbortSignal): {
       signal.removeEventListener("abort", onAbort);
     },
   };
+}
+
+/** The record as it stands, with no host call: what a timeout reports. */
+export function snapshot(
+  record: JoinRecord,
+  callerID: string,
+  ids: readonly string[],
+): View {
+  const view: View = { done: [], pending: [] };
+  for (const id of ids) {
+    const status = record.status(callerID, id);
+    if (status.end === undefined) {
+      view.pending.push(status);
+    } else {
+      const { sessionID, description, end } = status;
+      view.done.push({ sessionID, state: end, description });
+    }
+  }
+  return view;
 }
