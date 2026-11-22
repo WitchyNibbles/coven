@@ -6,14 +6,9 @@ import { EVENT_TYPES } from "../src/join/events.ts";
 import { inputSchema, InputError } from "../src/join/input.ts";
 import { NotAChildError, UnknownSessionError } from "../src/join/wait.ts";
 import plugin from "../src/plugin.ts";
-import {
-  KID,
-  LEAD,
-  boot,
-  ended,
-  report,
-  started,
-} from "./plugin-fixture.ts";
+import { KID, LEAD, boot, ended, report, started } from "./plugin-fixture.ts";
+
+const HOUR = 3_600_000;
 
 await test("the plugin has the id coven.join and a setup", () => {
   assert.equal(plugin.id, "coven.join");
@@ -87,6 +82,21 @@ await test("a session seen in two started events is looked up once", async () =>
   await p.emit(started(KID));
   await p.emit(started(KID));
   assert.deepEqual(p.lookups, [KID]);
+  p.cleanup();
+});
+
+await test("a child started again after the 24 h forget is looked up again", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const p = await boot();
+  await p.emit(started(KID));
+  p.clock.now += 24 * HOUR + 1;
+  t.mock.timers.tick(HOUR);
+  assert.deepEqual(p.reminder(LEAD), []);
+  await p.emit(started(KID));
+  assert.deepEqual(p.lookups, [KID, KID]);
+  assert.deepEqual(p.reminder(LEAD), [
+    "1 subagent is still running: kid (ses_kid). Call await_agents with their ids before you finish or report.",
+  ]);
   p.cleanup();
 });
 

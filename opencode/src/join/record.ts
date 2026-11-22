@@ -127,8 +127,8 @@ export class JoinRecord {
     return open;
   }
 
-  /** Drops every parent whose last event is over 24 hours old. */
-  forget(): void {
+  /** Drops every parent whose last event is over 24 hours old; returns the child ids dropped. */
+  forget(): string[] {
     const cutoff = this.now() - FORGET_AFTER_MS;
     const lastByParent = new Map<string, number>();
     for (const { parentID, lastEventAt } of this.children.values()) {
@@ -154,6 +154,7 @@ export class JoinRecord {
     if (stale.length > 0) {
       this.notify();
     }
+    return stale;
   }
 
   onChange(listener: () => void): () => void {

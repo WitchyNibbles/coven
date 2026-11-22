@@ -201,6 +201,16 @@ await test("forget drops a parent 24 hours and 1 ms after its last event", () =>
   assert.equal(record.status("ses_p", "ses_c").description, "");
 });
 
+await test("forget returns the ids it dropped", () => {
+  const { record, clock } = setup();
+  record.linkChild("ses_p", "ses_c", "child A");
+  clock.now += 20 * HOUR;
+  record.linkChild("ses_q", "ses_d", "child D");
+  clock.now += 4 * HOUR + 1;
+  assert.deepEqual(record.forget(), ["ses_c"]);
+  assert.deepEqual(record.forget(), []);
+});
+
 await test("a newer event keeps the parent through forget", () => {
   const { record, clock } = setup();
   record.linkChild("ses_p", "ses_a", "child A");

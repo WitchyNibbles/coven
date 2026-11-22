@@ -21,7 +21,7 @@ export interface Deps {
   now: () => number;
 }
 
-/** Looks each session up once, failures included, to learn which ones are children. */
+/** Looks each session up once while the record holds it, failures included, to learn which ones are children. */
 class Children {
   private readonly seen = new Set<string>();
   private readonly ctx: PluginContext;
@@ -104,7 +104,9 @@ export async function joinSetup(
     }
   });
   const forgetter = setInterval(() => {
-    record.forget();
+    for (const sessionID of record.forget()) {
+      children.drop(sessionID);
+    }
   }, FORGET_EVERY_MS);
   return () => {
     stop.abort();
