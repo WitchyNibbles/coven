@@ -72,12 +72,9 @@ def _file(repo: Path, skill: str, rel: Path) -> Path:
     return override if override.is_file() else repo / "skills" / skill / rel
 
 
-def _read(repo: Path, skill: str, rel: Path, *, rewrite: bool = True) -> str:
-    path = _file(repo, skill, rel)
-    text = path.read_text()
-    if rewrite:
-        text = rewrite_text(text, path.relative_to(repo).as_posix())
-    return _strip_header(text)
+def _read(path: Path, source: str) -> str:
+    """The file's text rewritten to OpenCode names, without an override's header line."""
+    return _strip_header(rewrite_text(path.read_text(), source))
 
 
 def _skill_files(repo: Path, skill: str) -> list[Path]:
@@ -126,14 +123,14 @@ def _with_name(text: str, name: str, source: str) -> str:
 
 def _copy(repo: Path, skill: str, rel: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
+    path = _file(repo, skill, rel)
     if rel.suffix != ".md":
-        shutil.copy2(_file(repo, skill, rel), target)
+        shutil.copy2(path, target)
         return
-    text = _read(repo, skill, rel)
+    source = path.relative_to(repo).as_posix()
+    text = _read(path, source)
     if rel.name == "SKILL.md":
-        text = _with_name(
-            text, PREFIX + skill, _file(repo, skill, rel).relative_to(repo).as_posix()
-        )
+        text = _with_name(text, PREFIX + skill, source)
     target.write_text(text)
 
 
@@ -142,11 +139,20 @@ def _skill(repo: Path, skill: str, out: Path) -> None:
         _copy(repo, skill, rel, out / "skills" / (PREFIX + skill) / rel)
 
 
+def _description(front: list[str], source: str) -> str:
+    """The frontmatter's `description:` line, safe as plain YAML."""
+    for line in front:
+        if line.startswith("description:"):
+            return _yaml_safe(line)
+    raise ContentError(f"{source}: the frontmatter has no `description:` line")
+
+
 def _command(repo: Path, name: str, out: Path) -> None:
-    front, body = _split_frontmatter(_read(repo, name, Path("SKILL.md")))
-    description = _yaml_safe(next(line for line in front if line.startswith("description:")))
+    path = _file(repo, name, Path("SKILL.md"))
+    source = path.relative_to(repo).as_posix()
+    front, body = _split_frontmatter(_read(path, source))
+    description = _description(front, source)
     target = out / "commands" / f"{PREFIX}{name}.md"
-    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(f"---\n{description}\n---\n{body.rstrip(chr(10))}\n\n$ARGUMENTS\n")
 
 
@@ -163,14 +169,9 @@ def _agent(repo: Path, name: str, out: Path) -> None:
     """One role as an OpenCode agent file: only the keys OpenCode reads, the model left to config."""
     source = f"agents/{name}.md"
     front, body = _split_frontmatter(rewrite_text((repo / source).read_text(), source))
-    try:
-        description = next(line for line in front if line.startswith("description:"))
-    except StopIteration:
-        raise ContentError(f"{source}: the frontmatter has no `description:` line") from None
-    head = f"---\n{_yaml_safe(description)}\nmode: subagent\n{_deny(DENIED[name])}\n---\n"
-    target = out / "agents" / f"{name}.md"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(head + body)
+    description = _description(front, source)
+    head = f"---\n{description}\nmode: subagent\n{_deny(DENIED[name])}\n---\n"
+    (out / "agents" / f"{name}.md").write_text(head + body)
 
 
 def _agents(repo: Path, out: Path) -> None:
@@ -180,14 +181,13 @@ def _agents(repo: Path, out: Path) -> None:
 
 def _routing(repo: Path, out: Path) -> None:
     path = repo / OVERRIDES_REL / "routing" / "AGENTS.md"
-    out.joinpath("AGENTS.md").write_text(
-        _strip_header(rewrite_text(path.read_text(), path.relative_to(repo).as_posix()))
-    )
+    out.joinpath("AGENTS.md").write_text(_read(path, path.relative_to(repo).as_posix()))
 
 
 def render_content(repo: Path, out: Path) -> None:
     shutil.rmtree(out, ignore_errors=True)
-    out.mkdir(parents=True)
+    (out / "commands").mkdir(parents=True)
+    (out / "agents").mkdir()
     for skill in COVEN_SKILLS:
         _skill(repo, skill, out)
     for command in COMMANDS:
