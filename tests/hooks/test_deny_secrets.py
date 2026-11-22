@@ -170,6 +170,55 @@ def test_allows_a_name_that_is_only_data(bash: Run, command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
+        "echo x.env",
+        'python3 -c "print(os.env)"',
+        "echo process.env.HOME",
+        'node -e "console.log(process.env.PATH)"',
+        'echo "note: read cfg.env later"',
+        'echo "task: spawned[0].env was refused"',
+        'python3 -c "print(rows[0].env)"',
+        'node -e "console.log(load().env)"',
+        "node -e \"console.log(require('x')().env.PATH)\"",
+        "python3 -c \"import os; print(os.environ['HOME'])\"",
+        "python3 -c \"import os; print(os.environ.get('HOME'))\"",
+        'echo cfg["k"].env',
+        "echo a[0][1].env",
+        "echo f()[0].env",
+        "python3 - <<'EOF'\nassert spawned[0].env == {}\nEOF",
+        "echo conn[0].ssh",
+    ],
+)
+def test_allows_a_name_that_is_an_attribute_of_a_call_or_an_index(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat $(true).env",
+        "cat $a[1].env",
+        "cat <(x).env",
+        "cat @(|x).env",
+        "cat (|x).env",
+        "cat ().env",
+        "cat ].env",
+        "cat ).env",
+        "cat $((0)).env",
+        "ls $(true).ssh",
+    ],
+)
+def test_still_blocks_a_name_after_a_bracket_that_is_not_a_call_or_an_index(
+    bash: Run, command: str
+) -> None:
+    proc = bash(command)
+    assert proc.returncode == 2
+    assert "coven deny-secrets: access to" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "cat .env",
         "source .env",
         ". .env",
