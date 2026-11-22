@@ -76,6 +76,7 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   The `.env` rules are the second layer. The first is the plugin's guard, which runs coven's
   `deny_secrets.py` before each `read`, `grep`, `glob`, `shell`, `write`, `edit` and `patch`.
   Config rules cannot read a shell line, so `shell` is covered by the plugin layer only.
+
 - `run` checks that the runtime reports the pinned version, warns by name when the key variable is
   unset, and replaces itself with OpenCode in the profile's environment. Arguments for OpenCode
   follow `--`.
