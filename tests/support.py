@@ -1,12 +1,15 @@
 """Constants and helpers shared by the tests; fixtures live in the conftest files."""
 
 import fcntl
+import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -42,6 +45,32 @@ CHECK_MODULES = (
 
 # The `check_env` a module returns to run the real runner: `run_check` copies it, never edits it.
 REAL_RUNNER: dict[str, str | None] = {"COVEN_CHECK_RUNNER": None}
+
+
+def load_module(
+    path: Path, name: str, *, register: bool = False, restore_path: bool = False
+) -> ModuleType:
+    """Import the file at `path` as module `name`, writing no bytecode next to it.
+
+    `register` puts the module in `sys.modules` before it runs (what a dataclass or a sibling
+    that imports it by name needs). `restore_path` puts `sys.path` back afterwards, for a module
+    that inserts its own folder. Whatever else the file imports stays imported.
+    """
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path} as {name}")
+    module = importlib.util.module_from_spec(spec)
+    if register:
+        sys.modules[name] = module
+    path_before, bytecode_before = list(sys.path), sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = bytecode_before
+        if restore_path:
+            sys.path[:] = path_before
+    return module
 
 
 def receipt(out: subprocess.CompletedProcess[str]) -> str:
