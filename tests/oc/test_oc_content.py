@@ -157,6 +157,7 @@ def test_every_rendered_description_is_valid_yaml_plain_or_quoted() -> None:
 
 def copy_of_skills(tmp_path: Path) -> Path:
     shutil.copytree(REPO / "skills", tmp_path / "skills")
+    shutil.copytree(content.OVERRIDES, tmp_path / "opencode" / "overrides")
     return tmp_path
 
 
