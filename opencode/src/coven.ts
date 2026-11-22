@@ -32,8 +32,9 @@ export async function covenSetup(
     await ctx.tool.transform((editor) => {
       editor.add(pingTool(options.covenRoot));
     });
+    const warned = new Set<string>();
     for (const providerID of options.toolChoiceAuto) {
-      await ctx.session.hook("http.request", toolChoiceHook(deps.log), {
+      await ctx.session.hook("http.request", toolChoiceHook(deps.log, warned), {
         providerID,
       });
     }

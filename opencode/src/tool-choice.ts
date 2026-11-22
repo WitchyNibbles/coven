@@ -45,9 +45,10 @@ export function addToolChoice(body: string): ToolChoiceResult {
   if (!isPlainObject(payload) || !wantsAuto(payload)) {
     return UNCHANGED;
   }
+  // A non-empty object ending in "}": insert a member instead of re-serialising, so numbers keep their bytes.
   return {
     kind: "changed",
-    body: JSON.stringify({ ...payload, tool_choice: "auto" }),
+    body: `${body.trimEnd().slice(0, -1)},"tool_choice":"auto"}`,
   };
 }
 
@@ -62,24 +63,36 @@ function withBody(request: Request, body: string): Request {
   });
 }
 
-/** The `http.request` hook for one provider; `log` hears each session's first unreadable body. */
+/**
+ * The `http.request` hook for a provider. `log` hears each session's first body it could not use;
+ * hooks that share `warned` share that once-per-session rule.
+ */
 export function toolChoiceHook(
   log: (line: string) => void,
+  warned: Set<string> = new Set(),
 ): (event: HttpRequestEvent) => Promise<void> {
-  const warned = new Set<string>();
-  return async (event) => {
-    const text = await event.request.clone().text();
-    if (text === "") {
-      return;
-    }
-    const result = addToolChoice(text);
-    if (result.kind === "changed") {
-      event.request = withBody(event.request, result.body);
-    } else if (result.kind === "unparsable" && !warned.has(event.sessionID)) {
-      warned.add(event.sessionID);
+  const warnOnce = (sessionID: string, problem: string): void => {
+    if (!warned.has(sessionID)) {
+      warned.add(sessionID);
       log(
-        `coven: tool_choice: request body is not JSON; sent unchanged (session ${event.sessionID})`,
+        `coven: tool_choice: ${problem}; sent unchanged (session ${sessionID})`,
       );
+    }
+  };
+  return async (event) => {
+    try {
+      const text = await event.request.clone().text();
+      if (text === "") {
+        return;
+      }
+      const result = addToolChoice(text);
+      if (result.kind === "changed") {
+        event.request = withBody(event.request, result.body);
+      } else if (result.kind === "unparsable") {
+        warnOnce(event.sessionID, "request body is not JSON");
+      }
+    } catch {
+      warnOnce(event.sessionID, "request body could not be read");
     }
   };
 }

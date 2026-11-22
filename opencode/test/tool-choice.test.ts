@@ -124,3 +124,55 @@ await test("the hook keeps the same request for a GET with no body", async () =>
   await toolChoiceHook(() => assert.fail("must not log"))(event);
   assert.equal(event.request, original);
 });
+
+await test("addToolChoice keeps the original bytes of numbers it does not touch", () => {
+  const body =
+    '{"model":"m","seed":9007199254740993,"temperature":1.0,"tools":[{"a":1}]}\n';
+  const result = addToolChoice(body);
+  assert.equal(result.kind, "changed");
+  if (result.kind === "changed") {
+    assert.ok(
+      result.body.includes('"seed":9007199254740993,"temperature":1.0,'),
+    );
+    assert.equal(
+      (JSON.parse(result.body) as Record<string, unknown>).tool_choice,
+      "auto",
+    );
+  }
+});
+
+await test("the hook fails open when the body stream errors", async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error("boom"));
+    },
+  });
+  const original = new Request("http://gateway.test/v1/chat/completions", {
+    method: "POST",
+    body: stream,
+    duplex: "half",
+  } as RequestInit);
+  const lines: string[] = [];
+  const event = eventFor(original);
+  await toolChoiceHook((line) => lines.push(line))(event);
+  await toolChoiceHook((line) => lines.push(line))(event);
+  assert.equal(event.request, original);
+  assert.equal(lines.length, 2);
+  const once: string[] = [];
+  const hook = toolChoiceHook((line) => once.push(line));
+  await hook(eventFor(original, "s9"));
+  await hook(eventFor(original, "s9"));
+  assert.deepEqual(once, [
+    "coven: tool_choice: request body could not be read; sent unchanged (session s9)",
+  ]);
+});
+
+await test("the log is once per session across providers sharing a warned set", async () => {
+  const lines: string[] = [];
+  const warned = new Set<string>();
+  const litellm = toolChoiceHook((line) => lines.push(line), warned);
+  const vllm = toolChoiceHook((line) => lines.push(line), warned);
+  await litellm(eventFor(post("not json"), "s1"));
+  await vllm(eventFor(post("not json"), "s1"));
+  assert.equal(lines.length, 1);
+});
