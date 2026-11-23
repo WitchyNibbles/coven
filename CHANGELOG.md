@@ -20,7 +20,8 @@
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).
 - The guard reads a sed script command by command, so a quoted glob next to an ordinary sed
-  (`sed -E "s/[[:space:]]*.*/x/"`) stays literal; only a real `e`, `w` or `W` keeps it strict.
+  (`sed -E "s/[[:space:]]*.*/x/"`) stays literal; an `e`, `w` or `W`, a script file, an option
+  or command it does not know, or a script some sed reads apart keeps it strict.
   It also follows a program run by `~/...` or `"$HOME/..."`, a sed operand by a folder variable
   (`CM=~/x; sed -n 1p $CM/a`), a piped sed that only prints, and each pipeline on a line apart.
   A sed script in a variable (`sed "$S" '.*'`) no longer counts as data. A refusal for glob-like

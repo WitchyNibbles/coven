@@ -4097,7 +4097,7 @@ def test_a_pm_may_pipe_into_a_sed_script_in_a_project_with_a_claude_folder(
 
 @pytest.mark.parametrize(
     "python",
-    ["python3", "~/.pyenv/versions/x/bin/python", "/usr/bin/python3", '"$HOME/.venv/bin/python"'],
+    ["python3", "/usr/bin/python3", "/bin/python3"],
 )
 def test_a_pm_may_run_python_by_its_path_on_a_body_with_globs(store: Path, python: str) -> None:
     """A body python reads is a script: its regex `[a-z]*` is no glob, though read as one by a
@@ -4107,18 +4107,40 @@ def test_a_pm_may_run_python_by_its_path_on_a_body_with_globs(store: Path, pytho
     assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
 
 
-@pytest.mark.parametrize("reader", ["./python3", "/tmp/x/python3", "bin/node"])
+READER_GLOB_BODIES = {"settings": "print('.cl*')", "config": "print('.con*')"}
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        "./python3",
+        "/tmp/x/python3",
+        "bin/node",
+        "~/t/python3",
+        '"$HOME/t/python3"',
+        "/usr/local/bin/python3",
+    ],
+)
+@pytest.mark.parametrize("body", READER_GLOB_BODIES)
 def test_a_pm_cannot_run_a_body_with_a_glob_by_a_reader_anywhere_else(
-    store: Path, reader: str
+    store: Path, reader: str, body: str
 ) -> None:
-    """A program by another path may be a shell under a reader's name: its body's relative
-    words are read as the shell would expand them, here from the home folder."""
-    command = f"{reader} - <<'PY'\nprint('.cl*')\nPY"
+    """A program by a path the session may write may be a shell under a reader's name: its
+    body's relative words are read as the shell would expand them, here from the home folder."""
+    command = f"{reader} - <<'PY'\n{READER_GLOB_BODIES[body]}\nPY"
     assert decide(bash(command, cwd=str(home())), store, "pm") is not None
 
 
-def test_a_pm_may_run_a_body_with_a_glob_by_a_reader_it_knows(store: Path) -> None:
-    command = "python3 - <<'PY'\nprint('.cl*')\nPY"
+@pytest.mark.parametrize(
+    ("reader", "body"),
+    # `/usr/bin/python3` on `.cl*` stays refused: a program by its path is blanked as a plugin
+    # run, and the body is then read with no reader (docs/known-gaps.md).
+    [("python3", "settings"), ("python3", "config"), ("/usr/bin/python3", "config")],
+)
+def test_a_pm_may_run_a_body_with_a_glob_by_a_reader_it_knows(
+    store: Path, reader: str, body: str
+) -> None:
+    command = f"{reader} - <<'PY'\n{READER_GLOB_BODIES[body]}\nPY"
     assert decide(bash(command, cwd=str(home())), store, "pm") is None
 
 
@@ -4329,6 +4351,8 @@ PLUGIN_WRITES = {
     "sed-variable-mapped-into-a-built-name": (
         f'CM={SDD}; n=C; m=M; mapfile -t $n$m <<< "-i"; sed -n 1p $CM {SDD}/b'
     ),
+    # In a subshell the binding ends at `)`: `$CM` is then whatever the caller's CM holds.
+    "sed-variable-in-a-subshell-on-two-lines": f"(CM={SDD}\n); sed -n 1p $CM {SDD}/b",
     "sed-variable-set-by-getopts": f"CM={SDD}; getopts i: $n -i; sed -n 1p $CM {SDD}/b",
     # An unquoted `$HOME` program: a HOME set through a built name splits into other words.
     "program-under-a-home-read-into-a-built-name": (

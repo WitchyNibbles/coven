@@ -125,18 +125,19 @@ Its rules are public. Its boundary is the committed store and the approvals in i
     one call and run in a later one.
 - If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
   block the call.
-- False positives, which fail closed (the call is refused, and the PM asks the GM):
-  `cd ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read
-  tool), a symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command
-  outside the read list (`less`, `awk`, `xargs cat`, `jq`), inside a loop or group, or on a line
-  with a `$(...)`, a program by an unquoted `$HOME/...` path (write `"$HOME/..."` or `~/...`), a
-  sed operand by a variable that is not a plain folder assigned once at the start of the line
-  (`CM=~/x; sed -n 1p $CM/a`) or on a line with a builtin that sets a variable by name (`read`,
-  `printf`, `mapfile`...), a heredoc body read by python or node at a path outside the system bin
-  folders and `~`, a sed script that some sed may read apart (a delimiter inside `[...]`, which
-  GNU sed reads as part of the regex: `s/[/]/x/`), and a quoted glob on a line with any command other than plain data commands (`ls`,
-  `grep`, `cat`, a sed whose script runs nothing, `find` without actions...) or with an unquoted
-  `$` (`ls '.*' $d`, `ls '.*'; git status`).
+- False positives, which fail closed (the call is refused, and the PM asks the GM): `cd
+  ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read tool), a
+  symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command outside
+  the read list (`less`, `awk`, `xargs cat`, `jq`), inside a loop or group, or on a line with a
+  `$(...)`, a program by an unquoted `$HOME/...` path (write `"$HOME/..."` or `~/...`), a sed
+  operand by a variable that is not a plain folder assigned once at the start of the line (`CM=~/x;
+  sed -n 1p $CM/a`) or on a line with a builtin that sets a variable by name (`read`, `printf`,
+  `mapfile`...), a heredoc body read by python or node at a path outside `/usr/bin` and `/bin`
+  (`~/.pyenv/.../python`: a session may write a shell there under that name), a sed script that some
+  sed may read apart (a delimiter inside `[...]`, which GNU sed reads as part of the regex:
+  `s/[/]/x/`), and a quoted glob on a line with any command other than plain data commands (`ls`,
+  `grep`, `cat`, a sed whose script runs nothing, `find` without actions...) or with an unquoted `$`
+  (`ls '.*' $d`, `ls '.*'; git status`).
 - Also a false positive, kept on purpose: glob-like text in a heredoc body (markdown `**x**`, a
   regex `[a-z]+x`) on a line that also names `.claude` or `.config`, even when python or `cat`
   reads the body. Python can hand such a word to a shell (`os.system`), and a copied script can

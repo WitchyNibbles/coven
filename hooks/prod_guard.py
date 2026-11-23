@@ -31,7 +31,7 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   -E "[0-9]*"`), but only on a line of plain data commands (GLOB_LITERAL_COMMANDS, `find` without
   actions, a `sed` whose script, read command by command in each way a sed may, runs and writes
   nothing) with no unquoted `$`; a heredoc body copied by `cat` or read by python or node (by name
-  or path) with no glob call is read only for words at a fixed place. In Bash the `plugins/` folder
+  or from /usr/bin or /bin) with no glob call is read only for words at a fixed place. In Bash the `plugins/` folder
   may be read and its scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its
   operands by a folder variable bound at the start of the line, `bash` or python with a script, a
   program by its path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS
@@ -359,9 +359,9 @@ SED_COMMAND_ENDS = frozenset({"", ";", "\n", "}", "#"})
 # Calls that expand a glob in a python or node heredoc body: such a body is read strictly.
 GLOB_CALLS = ("glob", "fnmatch", "__import__", "importlib")  # an import by a built name too
 BODY_COPIERS = frozenset({"cat", "tee"})  # read a heredoc body only to copy it
-# Where a heredoc reader named by its path is the program its name says: a system bin folder or
-# the home folder (a pyenv or venv python), not a path the session may have just written.
-TRUSTED_READER_FOLDERS = ("/usr/bin/", "/bin/", "/usr/local/bin/", "~/", "$HOME/")
+# Where a heredoc reader named by its path is the program its name says: a system bin folder a
+# session cannot write (not `~/`, nor `/usr/local/bin/`, which Homebrew leaves writable).
+TRUSTED_READER_FOLDERS = ("/usr/bin/", "/bin/")
 CONDITIONAL_MARKS = frozenset("&|(")
 BINDING = re.compile(r"([A-Za-z_]\w*)(\+?)=")
 # A sed operand by a folder variable (`$CM/a.md`, `"$CM/a.md"`), and the plain path such a
@@ -2493,8 +2493,8 @@ def _text_bodies(command: str) -> _Bodies | None:
 
 def _plain_bodies(found: _Bodies) -> bool:
     """Whether no heredoc body may expand a relative glob of its own: each is copied (`cat`,
-    `tee`) or read by python or node, by name or path (`~/.pyenv/.../python`), with no glob call
-    in any body (GLOB_CALLS). A reader by its path counts only in TRUSTED_READER_FOLDERS."""
+    `tee`) or read by python or node, by name or by a path in TRUSTED_READER_FOLDERS, with no glob call
+    in any body (GLOB_CALLS)."""
     globbing = any(call in body for body in found.bodies for call in GLOB_CALLS)
     names = [
         _basename(reader)
