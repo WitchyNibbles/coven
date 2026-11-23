@@ -120,8 +120,9 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   - variables other than HOME, CLAUDE_CONFIG_DIR, CLAUDE_PLUGIN_ROOT and XDG_CONFIG_HOME;
   - what a script in `~/.claude/plugins/` does once a PM runs it: running one is allowed, like
     reading one, and only the command line is read;
-  - a list of `~/.claude/plugins/` written to a file (`find ... > /tmp/l`) and acted on later,
-    like a list the Glob tool returns.
+  - a list of `~/.claude/plugins/` written to a file (`find ... > /tmp/l`) and acted on later
+    (`xargs rm < /tmp/l`), in the same line or the next call: the same gap as a script written in
+    one call and run in a later one.
 - If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
   block the call.
 - False positives, which fail closed (the call is refused, and the PM asks the GM):

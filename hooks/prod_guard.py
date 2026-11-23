@@ -195,6 +195,8 @@ SED_PRINT_OPTIONS = frozenset("nErsuz")  # sed options that change neither files
 SED_PRINT_SCRIPT = re.compile(r"[\d,;pq=]+")  # line numbers and print or quit only: no w or e
 FIND_ACTION_PREFIXES = ("-exec", "-ok", "-delete", "-fprint", "-fls")  # find writes or runs
 BRACE_OR_GLOB = frozenset("{*?[")  # unquoted, a word may expand to other words
+# A script operand that expands, but only to one path: `~/x`, `$S/x`, `"$CLAUDE_PLUGIN_ROOT/x"`.
+SCRIPT_PATH = re.compile(r'(?P<q>"?)(?:~|\$[A-Za-z_]\w*)(?:/[\w./@+:,%=-]*)?(?P=q)')
 # Ways the shell hands a command's words to a later one: the last argument, a trap's command.
 WORDS_HANDED_ON = re.compile(
     r"\$\{?_(?!\w)|\b(?:BASH_COMMAND|BASH_ARGV|ZSH_EXECUTION_STRING|trap|fc|history)\b"
@@ -338,7 +340,7 @@ GLOB_LITERAL_COMMANDS = frozenset(
 )
 SED_RUN_LETTERS = frozenset("ewWf")  # in a sed word: may run a command, write a file or a script
 # Calls that expand a glob in a python or node heredoc body: such a body is read strictly.
-GLOB_CALLS = ("glob", "fnmatch")
+GLOB_CALLS = ("glob", "fnmatch", "__import__", "importlib")  # an import by a built name too
 BODY_COPIERS = frozenset({"cat", "tee"})  # read a heredoc body only to copy it
 CONDITIONAL_MARKS = frozenset("&|(")
 BINDING = re.compile(r"([A-Za-z_]\w*)(\+?)=")
@@ -2133,18 +2135,19 @@ def _reads_body_as_text(reader: str | None) -> bool:
 def _keeps_quotes_literal(words: Sequence[_ShellWord]) -> bool:
     """Whether one simple command takes its quoted words as data, never as a glob it expands or
     code it runs: a GLOB_LITERAL_COMMANDS command by its plain name, `find` with no action and
-    no `$`, `sed` with no word that may be a `w`, `W` or `e` command or an `-f` script, and `rg`
-    with no command option."""
-    name = words[0].value
-    raws = [word.raw for word in words[1:]]
+    no word that may expand to one (`-e{xec,xec}`), `sed` with no word that may be a `w`, `W` or
+    `e` command or an `-f` script, and `rg` with no command option and no brace."""
+    name, args = words[0].value, words[1:]
+    raws = [word.raw for word in args]
     if name == "find":
-        return not any(
-            "$" in raw or _unquoted(raw).startswith(FIND_ACTION_PREFIXES) for raw in raws
+        return not (
+            _may_expand(args)
+            or any(_unquoted(raw).startswith(FIND_ACTION_PREFIXES) for raw in raws)
         )
     if name == "sed":
         return not any(SED_RUN_LETTERS.intersection(raw) for raw in raws)
     if name == "rg":
-        return not any(raw.startswith(("--pre", "--hostname")) for raw in raws)
+        return not any(raw.startswith(("--pre", "--hostname")) or "{" in raw for raw in raws)
     return name in GLOB_LITERAL_COMMANDS
 
 
@@ -2601,15 +2604,15 @@ def _script_word(name: str, args: Sequence[_ShellWord]) -> _ShellWord | None:
     """The script file a shell, python or node runs (`bash -x f`, `python3 -I f`): its first
     operand, after short options from SCRIPT_RUNNERS only. None for any other command, any other
     option (`-c`, `-m`, `-e`, `--eval=` make the operand code or a module), standard input (`-`),
-    or an operand that may expand to an option (`{-c,code}`, a glob)."""
+    or an operand that expands to anything but one path (SCRIPT_PATH: not `{-c,code}`, a glob, or
+    `$Y-c$IFS"code"`)."""
     allowed = PYTHON_SCRIPT_OPTIONS if PYTHON_NAME.fullmatch(name) else SCRIPT_RUNNERS.get(name)
     if allowed is None:
         return None
     for word in args:
         value = word.value
         if value is None:
-            bare = _bare(word.raw)
-            return None if bare.startswith(("-", *BRACE_OR_GLOB)) or "{" in bare else word
+            return word if SCRIPT_PATH.fullmatch(word.raw) else None
         if not value.startswith("-"):
             return word
         if value.startswith("--") or value == "-" or not set(value[1:]) <= allowed:
@@ -2784,14 +2787,14 @@ def _tool_writes(call: Call, zone: _Zone) -> bool:
 
 def _zone_refusal(zone: _Zone, role: str) -> Refused:
     reach = (
-        "write it through Bash (cat, ls, grep, find and running a script there are fine) or reach"
-        " it through MCP tools"
+        "nor reach it through MCP tools; in Bash it may only read it (cat, ls, grep, find) and run"
+        " its scripts"
         if zone.writes_only
-        else "reach it through Bash or MCP tools"
+        else "nor reach it through Bash or MCP tools (use Read)"
     )
     return Refused(
-        f"{PREFIX} a '{role}' session cannot write to {zone.label}, nor {reach} (use Read); only"
-        " the GM session may: ask the GM",
+        f"{PREFIX} a '{role}' session cannot write to {zone.label}, {reach}; only the GM session"
+        " may: ask the GM",
         zone.name,
     )
 

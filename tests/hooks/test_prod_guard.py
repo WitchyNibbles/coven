@@ -4091,6 +4091,7 @@ QUOTED_GLOB_REFUSALS = {
     "substitution-output": "ls -d $(echo '.cl*')",
     # A program that reads its own quoted words as globs or runs them.
     "find-action": "find . -maxdepth 1 -name '.cl*' -exec rm -rf {} +",
+    "find-brace-action": "find /tmp -maxdepth 0 -e{xec,xec} sh -c 'cd ~; rm -rf .cl*/plugins' ';'",
     "git-pathspec": "git rm -r --cached '.cl*'",
     "sed-runs-its-output": "sed 's/^/ls -d .cl* /e' /tmp/x",
     "trap": "trap 'ls .*' EXIT; ls '.x*'",
@@ -4187,6 +4188,7 @@ PLUGIN_WRITES = {
     "brace-python-code": "python3 {-c,\"import shutil; shutil.rmtree('" + SDD + "')\"}",
     "brace-shell-code": 'bash -x {-c,"rm -rf ' + SDD + '"}',
     "node-long-eval": 'node --eval=\'require("fs").rmSync("' + SDD + "\")'",
+    "split-into-code": 'bash $Y-c$IFS"rm$IFS-rf$IFS' + SDD + '"',
     "find-brace-action": f"find {SDD} -d{{elete,elete}}",
     "find-brace-word": f"find {SDD} {{-delete,-print}}",
     "sed-brace-option": f"sed -n 1p {SDD}/x {{-i,-i}}",
