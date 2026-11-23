@@ -33,7 +33,9 @@ blanked, the bodies as written and the first word of each command that reads one
 the scanner cannot follow the line or it has a pipe (see its docstring). `without_patterns(command)`
 is the narrowest form, for the same check: only the pattern words of `grep`, `egrep`, `fgrep`, `rg`
 and `git grep` are blanked, on any line (a pipe or another command on it changes nothing), and the
-command comes back unchanged when the scanner cannot follow it.
+command comes back unchanged when the scanner cannot follow it. `without_quoted_globs(command)`
+serves prod-guard's glob checks: every `*`, `?` and `[` inside quotes or after a backslash, which the
+shell keeps literal, is masked; heredoc bodies and comments are left as written (see its docstring).
 
 Known limits: file content written now and run later by name is outside a text-only guard (`echo
 ... > x.sh` passes, and so does the later `bash x.sh`). So are files a tool runs implicitly that
@@ -138,6 +140,8 @@ LITERAL_DOLLAR_FOLLOWERS = frozenset(' \t\n"')  # a `$` followed by anything els
 # A word holding one of these unquoted may expand to something else (zsh extendedglob: `^`, `#`,
 # `~`): its value is unknown.
 GLOB_CHARS = frozenset("*?[{}^#~")
+PATH_GLOB_MARKS = frozenset("*?[")  # what makes a word a path glob, unquoted
+LITERAL_GLOB_MARK = "%"  # stands for a quoted one: no glob, name or word break reads it
 QUOTE_MARKS = frozenset("'\"\\")  # in a heredoc delimiter: the body is not expanded
 DOUBLE_QUOTE_ESCAPES = frozenset('$`"\\')
 ASCII_DIGITS = frozenset("0123456789")  # a single one before `<` or `>` is a file descriptor
@@ -1034,6 +1038,118 @@ def without_patterns(command: str) -> str:
         return command
     spans = [(w.start, w.end) for c in commands if c.words for w in _pattern_words(c.words)]
     return _blanked(command, spans)
+
+
+class _QuotedGlobs:
+    """One pass over a line that masks the glob characters the shell keeps literal."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.chars = list(text)
+        self.pos = 0
+        self.pending: list[_Heredoc] = []  # heredocs whose body starts after the next newline
+
+    def masked(self) -> str:
+        while self.pos < len(self.text):
+            self._step()
+        if self.pending:
+            raise _GiveUp
+        return "".join(self.chars)
+
+    def _mask(self, start: int, end: int) -> None:
+        for index in range(start, end):
+            if self.text[index] in PATH_GLOB_MARKS:
+                self.chars[index] = LITERAL_GLOB_MARK
+
+    def _step(self) -> None:
+        text, pos = self.text, self.pos
+        char = text[pos]
+        if char == "`" or text.startswith(("$'", '$"'), pos):
+            raise _GiveUp  # a backtick's own quoting, an ANSI-C or translated string
+        if char in "\\'\"":
+            self._quoted(char)
+        elif char == "#" and (pos == 0 or text[pos - 1] in COMMENT_AFTER):
+            end = text.find("\n", pos)
+            self.pos = len(text) if end == -1 else end
+        elif text.startswith("<<<", pos):
+            self.pos += 3
+        elif text.startswith("<<", pos):
+            self._heredoc()
+        elif char == "\n":
+            self._skip_bodies()
+        else:
+            self.pos += 1
+
+    def _quoted(self, mark: str) -> None:
+        """A backslash and the character it escapes, or a single- or double-quoted string."""
+        text, pos = self.text, self.pos
+        if mark == '"':
+            self._double_quoted()
+            return
+        end = pos + 1 if mark == "\\" else text.find("'", pos + 1)
+        if end == -1 or end >= len(text):
+            raise _GiveUp  # a trailing backslash or an unterminated quote
+        self._mask(pos + 1, end + 1 if mark == "\\" else end)
+        self.pos = end + 1
+
+    def _skip_bodies(self) -> None:
+        """A newline, then the bodies of the heredocs started on the line it ends, as written."""
+        self.pos += 1
+        for heredoc in self.pending:
+            self.pos = min(_find_body(self.text, self.pos, heredoc) + 1, len(self.text))
+        self.pending.clear()
+
+    def _double_quoted(self) -> None:
+        """A double-quoted string. A `$(...)` or a backtick in one starts a new quoting context,
+        which this pass does not follow."""
+        text = self.text
+        pos = self.pos + 1
+        while pos < len(text):
+            char = text[pos]
+            if char == '"':
+                self.pos = pos + 1
+                return
+            if char == "`" or text.startswith("$(", pos):
+                raise _GiveUp
+            if char == "\\":
+                pos += 1  # the escaped character is literal either way
+            self._mask(pos, pos + 1)
+            pos += 1
+        raise _GiveUp  # an unterminated quote
+
+    def _heredoc(self) -> None:
+        """A heredoc's delimiter word. Its body, quoted delimiter or not, is left as written: a
+        body is read by its own rules."""
+        text = self.text
+        pos = self.pos + 2
+        strip_tabs = text.startswith("-", pos)
+        pos = _skip_blanks(text, pos + 1 if strip_tabs else pos)
+        start = pos
+        while pos < len(text) and text[pos] not in WORD_BREAKS:
+            if text[pos] in "`$":
+                raise _GiveUp
+            pos += 1
+        delimiter = "".join(char for char in text[start:pos] if char not in QUOTE_MARKS)
+        if not delimiter:
+            raise _GiveUp
+        self.pending.append(_Heredoc(delimiter, strip_tabs))
+        self.pos = pos
+
+
+def without_quoted_globs(command: str) -> str:
+    """`command` with every `*`, `?` and `[` the shell keeps literal, inside single or double
+    quotes or after a backslash, replaced by LITERAL_GLOB_MARK (same length), so a check that
+    reads globs skips them; or `command` unchanged when this pass cannot follow it: a backtick, a
+    `$(...)` inside double quotes, an ANSI-C or translated string (`$'...'`, `$"..."`), an
+    unterminated quote, or a heredoc whose delimiter line never comes.
+
+    Heredoc bodies and comments are left as written, and a quote in them opens nothing. Whether a
+    quoted word is still a glob to the program that gets it (`sh -c '...'`, `find -name '*'`) is
+    the caller's to judge."""
+    try:
+        return _QuotedGlobs(command).masked()
+    except _GiveUp:
+        return command
 
 
 def without_data(command: str) -> str:

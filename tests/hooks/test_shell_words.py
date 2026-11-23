@@ -769,3 +769,71 @@ def test_without_patterns_keeps_a_word_that_is_not_a_known_pattern(command):
 )
 def test_without_patterns_returns_the_command_unchanged_when_the_scanner_gives_up(command):
     assert module.without_patterns(command) == command
+
+
+# without_quoted_globs: a glob character inside quotes or after a backslash is literal to the
+# shell; it is masked (same length) so a glob reading skips it. Bodies and comments stay as written.
+M = "%"
+
+
+@pytest.mark.parametrize(
+    ("command", "masked"),
+    [
+        ("ls '.*'", f"ls '.{M}'"),
+        ('ls ".*"', f'ls ".{M}"'),
+        ("ls .\\*", f"ls .\\{M}"),
+        ("ls '[a-z]?'", f"ls '{M}a-z]{M}'"),
+        ('grep x f ".*)"', f'grep x f ".{M})"'),
+        # Only the quoted part of a word is literal: the bare `*` still globs.
+        ('ls ".c"*', 'ls ".c"*'),
+        ("ls .*", "ls .*"),
+        # Inside an unquoted `$(...)` a quote is a quote again.
+        ("echo $(ls '.*')", f"echo $(ls '.{M}')"),
+        ('echo "${x#*/}"', f'echo "${{x#{M}/}}"'),
+        ("grep -c x <<< '.*'", f"grep -c x <<< '.{M}'"),
+        # A single quote inside double quotes is literal, and so is a double quote inside single.
+        ("echo \"it's\" '.*'", f"echo \"it's\" '.{M}'"),
+        ("echo '\"' '.*'", f"echo '\"' '.{M}'"),
+    ],
+)
+def test_without_quoted_globs_masks_what_the_shell_does_not_expand(command, masked):
+    assert module.without_quoted_globs(command) == masked
+
+
+@pytest.mark.parametrize(
+    ("command", "masked"),
+    [
+        # A heredoc body is left as written, and an apostrophe in it opens no quote.
+        (
+            "cat <<'EOF' > n.md\nit's '.*'\nEOF\nls '.*'",
+            f"cat <<'EOF' > n.md\nit's '.*'\nEOF\nls '.{M}'",
+        ),
+        ("cat <<-'EOF'\n\tit's\n\tEOF\nls '.*'", f"cat <<-'EOF'\n\tit's\n\tEOF\nls '.{M}'"),
+        ("cat <<EOF\n'.*'\nEOF", "cat <<EOF\n'.*'\nEOF"),
+        ("ls # it's\nls '.*'", f"ls # it's\nls '.{M}'"),
+        # A `#` inside a word starts no comment.
+        ("echo a#b '.*'", f"echo a#b '.{M}'"),
+    ],
+)
+def test_without_quoted_globs_leaves_bodies_and_comments_as_written(command, masked):
+    assert module.without_quoted_globs(command) == masked
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo `ls` '.*'",
+        "echo \"$(ls '.*')\"",
+        'echo "`ls .*`"',
+        "echo $'.*'",
+        'echo $".*"',
+        "ls '.*",
+        'ls ".*',
+        "ls \\",
+        "cat <<'EOF'\n'.*'",
+        "cat <<'EOF'",
+        "echo $((1<<2)) '.*'",
+    ],
+)
+def test_without_quoted_globs_returns_the_command_unchanged_when_it_cannot_follow(command):
+    assert module.without_quoted_globs(command) == command

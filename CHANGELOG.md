@@ -16,6 +16,9 @@
   PreToolUse hook refuses any tool call that reaches one unless a live approval names the exact
   command. It also holds project manager sessions off the store, coven's config, Claude Code's
   settings and `plugins/`.
+- The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
+  quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
+  writes there are still refused (#24).
 - A call with no guard set costs one JSON read and one `stat` on top of Python's start-up: the
   hooks start one interpreter instead of two, cache their bytecode, and the guard's entry exits
   before it imports the guard.

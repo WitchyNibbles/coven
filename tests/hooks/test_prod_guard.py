@@ -4041,6 +4041,151 @@ def test_a_restricted_session_reads_claude_settings_and_runs_ordinary_commands(
     assert proc.returncode == 0, proc.stderr
 
 
+# --- a quoted glob is literal: in `~`, `.*` matches `.claude` only when the shell expands it ---
+
+QUOTED_GLOBS = {
+    "single-quoted": "ls '.*'",
+    "double-quoted": 'ls ".*"',
+    "escaped": "ls .\\*",
+    "quoted-file-operand": 'grep x f ".*)"',
+    "quoted-pattern": 'grep ".*)" f',
+    "here-string": "grep -c x <<< '.*'",
+    "python-quoted-heredoc": (
+        "python3 - <<'EOF'\nimport re\nprint(re.sub(r'(a).*', 'b', 'c'))\nEOF"
+    ),
+    "after-a-body-with-an-apostrophe": "cat <<'EOF' > /tmp/n.md\nit's\nEOF\nls '.*'",
+    "find-name": "find ~/proj -name '.*'",
+}
+
+
+@pytest.mark.parametrize("name", QUOTED_GLOBS)
+def test_a_pm_may_quote_a_glob_in_the_home_folder(store: Path, name: str) -> None:
+    assert decide(bash(QUOTED_GLOBS[name], cwd=str(home())), store, "pm") is None
+
+
+def test_a_pm_may_quote_a_glob_in_a_project_with_a_claude_folder(store: Path) -> None:
+    """Read unquoted, `(A|B)\\s*=` gives the word `s*`, which can be `settings.json`, and `.*`
+    can be `.claude`, the folder that holds it."""
+    (project_dir() / ".claude").mkdir()
+    command = 'grep -nE "(A|B)\\s*=" -r app/*.py | sed -E "s/,.*/)/"'
+    assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
+
+
+# Still refused: a glob the shell expands, a quoted word a shell or interpreter runs, a body a
+# shell reads, an unquoted heredoc (its `$(...)` expands), and a Bash read of the settings.
+QUOTED_GLOB_REFUSALS = {
+    "unquoted-dot-glob": "ls .*",
+    "half-quoted-word": 'ls ".c"*/settings.json',
+    "read-settings": "cat ~/.claude/settings.json",
+    "shell-command-string": "bash -c 'ls .*'",
+    "eval": "eval 'ls .*'",
+    "watch": "watch 'ls .*'",
+    "python-c-glob": "python3 -c \"import glob; print(glob.glob('.c*/settings.json'))\"",
+    "quoted-body-a-shell-reads": "bash <<'EOF'\nls .*\nEOF",
+    "unquoted-heredoc-body": "cat <<EOF\n$(ls $HOME/.claude/*)\nEOF",
+    "substitution-in-double-quotes": 'echo "$(ls .*)"',
+    "backticks": "echo `ls .*` '.*'",
+}
+
+
+@pytest.mark.parametrize("name", QUOTED_GLOB_REFUSALS)
+def test_a_pm_cannot_reach_the_settings_with_a_glob_the_shell_expands(
+    store: Path, name: str
+) -> None:
+    refusal = decide(bash(QUOTED_GLOB_REFUSALS[name], cwd=str(home())), store, "pm")
+    assert refusal is not None
+    assert "cannot write to" in refusal
+
+
+# --- a pm may read and run what the plugins folder holds (a skill's own scripts), not write it ---
+
+SDD = "~/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.2/skills/sdd"
+
+
+def plugin_reads() -> dict[str, str]:
+    impeccable = home() / ".claude/plugins/cache/impeccable/impeccable/4.7.0/scripts/impeccable"
+    return {
+        "script-by-variable": (
+            "S=$HOME/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.2/skills/sdd;"
+            " bash $S/scripts/sdd-workspace /tmp/wt /tmp/wt/docs/plan.md"
+        ),
+        "script-by-variable-after-cd": (
+            f"S={SDD}; cd /tmp/wt && git status --porcelain | head -3;"
+            " bash $S/scripts/review-package docs/plan.md 1"
+        ),
+        "script-by-path": f"cd /tmp/wt && bash {SDD}/scripts/review-package docs/plan.md 2",
+        "program-by-quoted-path": f'"{impeccable}" context --target x.html',
+        "python-script": f"python3 -I {SDD}/scripts/x.py --plan p.md",
+        "plugin-root-script": "bash $CLAUDE_PLUGIN_ROOT/bin/x",
+        "sed-print": f"sed -n 60,200p {SDD}/task-reviewer-prompt.md",
+        "cat": "cat ~/.claude/plugins/installed_plugins.json",
+        "ls-into-head": "ls ~/.claude/plugins/marketplaces 2>/dev/null | head",
+        "grep-into-head": "grep -n '^#' ~/.claude/plugins/marketplaces/x/DESIGN.md | head -40",
+        "find": "find ~/.claude/plugins -name '*.md' -path '*impeccable*'",
+        "read-then-write-elsewhere": f"cat {SDD}/SKILL.md > /tmp/skill.md",
+    }
+
+
+@pytest.mark.parametrize("name", list(plugin_reads()))
+def test_a_pm_may_read_and_run_files_in_the_plugins_folder(store: Path, name: str) -> None:
+    command = plugin_reads()[name]
+    assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
+
+
+PLUGIN_WRITES = {
+    "redirect": "echo x > ~/.claude/plugins/foo",
+    "rm-cache": "rm -r ~/.claude/plugins/cache/x",
+    "cp-into-cache": "cp /tmp/x.py ~/.claude/plugins/cache/x/hooks/x.py",
+    "sed-in-place": "sed -i s/a/b/ ~/.claude/plugins/cache/x/hooks/hooks.json",
+    "sed-in-place-cluster": "sed -ni p ~/.claude/plugins/cache/x/hooks/hooks.json",
+    "sed-expression": "sed -e p ~/.claude/plugins/cache/x/hooks/hooks.json",
+    "touch": "touch ~/.claude/plugins/cache/x/hooks/new.py",
+    "dd": "dd if=/tmp/x of=$HOME/.claude/plugins/cache/x/hooks/x.py",
+    "tee": "cat /tmp/x | tee ~/.claude/plugins/x",
+    "read-then-redirect-into": "cat ~/.claude/plugins/a > ~/.claude/plugins/b",
+    "variable-then-rm": "S=~/.claude/plugins/cache; bash $S/x/run; rm -rf $S",
+    "variable-exported": "S=~/.claude/plugins/cache; export S; bash /tmp/x.sh",
+    "variable-in-a-shell-string": "S=~/.claude/plugins/cache; bash -c 'rm -rf $S'",
+    "find-delete": "find ~/.claude/plugins/cache -name '*.pyc' -delete",
+    "find-exec": "find ~/.claude/plugins -name x -exec rm {} \\;",
+    "find-unknown-word": "find ~/.claude/plugins/cache $ACTION",
+    "grep-into-xargs": "grep -rl x ~/.claude/plugins | xargs rm",
+    "find-into-sed-e": "find ~/.claude/plugins | sed 's/^/rm /e'",
+    "plugin-path-as-argument": "bash /tmp/x.sh ~/.claude/plugins/cache",
+    "shell-string": "bash -c 'rm -rf ~/.claude/plugins/cache'",
+    "python-body-writes": "python3 - <<'EOF'\nopen('/h/.claude/plugins/x', 'w')\nEOF",
+    "cd-into": "cd ~/.claude/plugins/cache && rm -rf x",
+    "unparsed-line": "cat ~/.claude/plugins/x; echo $(rm -rf ~/.claude/plugins)",
+    "loop": "for d in ~/.claude/plugins/cache/*; do rm -rf $d; done",
+    "git-in-it": "git -C ~/.claude/plugins/marketplaces/x pull",
+    "sed-write-command": f"sed -n '1w {SDD}/x' {SDD}/SKILL.md",
+    "sed-run-command": f"sed -n 's/^/rm /e' {SDD}/list",
+    "sort-output": f"cat {SDD}/SKILL.md | sort -o {SDD}/SKILL.md",
+    "into-a-shell": f"cat {SDD}/list | sh",
+    "python-code": f"python3 -c 'import shutil; shutil.rmtree(\"{SDD}\")'",
+    "python-module": f"python3 -m shutil {SDD}",
+    "node-code": f"node -e 'x' {SDD}/x.js",
+    "find-fprint": f"find {SDD} -fprint {SDD}/list",
+    "assignment-prefix": f"S={SDD} rm -rf $S",
+}
+
+
+@pytest.mark.parametrize("name", PLUGIN_WRITES)
+def test_a_pm_cannot_write_the_plugins_folder_through_bash(store: Path, name: str) -> None:
+    refusal = decide(bash(PLUGIN_WRITES[name], cwd=str(project_dir())), store, "pm")
+    assert refusal is not None
+    assert PLUGINS_REFUSAL in refusal
+
+
+def test_a_script_in_the_plugins_folder_is_not_run_from_inside_it(store: Path) -> None:
+    """A command whose working folder is in the zone may write it by a relative name."""
+    folder = claude_dir() / "plugins" / "cache" / "x"
+    folder.mkdir(parents=True)
+    refusal = decide(bash("bash scripts/run", cwd=str(folder)), store, "pm")
+    assert refusal is not None
+    assert PLUGINS_REFUSAL in refusal
+
+
 # --- a write into the parent of a zone: replacing `~/.claude` replaces the hooks inside it ---
 
 PARENT_WRITES = {
