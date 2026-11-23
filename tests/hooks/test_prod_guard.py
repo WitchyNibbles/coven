@@ -4085,6 +4085,18 @@ QUOTED_GLOB_REFUSALS = {
     "unquoted-heredoc-body": "cat <<EOF\n$(ls $HOME/.claude/*)\nEOF",
     "substitution-in-double-quotes": 'echo "$(ls .*)"',
     "backticks": "echo `ls .*` '.*'",
+    # A quoted glob the shell expands later: through a variable or a command's output.
+    "loop-variable": "for d in '.cl*'; do rm -rf $d; done",
+    "assigned-variable": "d='.cl*'; ls -d $d",
+    "substitution-output": "ls -d $(echo '.cl*')",
+    # A program that reads its own quoted words as globs or runs them.
+    "find-action": "find . -maxdepth 1 -name '.cl*' -exec rm -rf {} +",
+    "git-pathspec": "git rm -r --cached '.cl*'",
+    "sed-runs-its-output": "sed 's/^/ls -d .cl* /e' /tmp/x",
+    "trap": "trap 'ls .*' EXIT; ls '.x*'",
+    "python-body-glob": (
+        "python3 - <<'EOF'\nimport glob, shutil\nfor p in glob.glob('.cl*'): shutil.rmtree(p)\nEOF"
+    ),
 }
 
 
@@ -4167,6 +4179,21 @@ PLUGIN_WRITES = {
     "node-code": f"node -e 'x' {SDD}/x.js",
     "find-fprint": f"find {SDD} -fprint {SDD}/list",
     "assignment-prefix": f"S={SDD} rm -rf $S",
+    # The shell hands a read's words to a later command.
+    "last-argument": f"cat {SDD}/SKILL.md; rm -rf $_",
+    "debug-trap": f"trap 'rm -rf $BASH_COMMAND' DEBUG; cat {SDD}/SKILL.md",
+    "append-assignment": f"X+={SDD}; rm -rf $X",
+    # A brace or a glob that expands to an option.
+    "brace-python-code": "python3 {-c,\"import shutil; shutil.rmtree('" + SDD + "')\"}",
+    "brace-shell-code": 'bash -x {-c,"rm -rf ' + SDD + '"}',
+    "node-long-eval": 'node --eval=\'require("fs").rmSync("' + SDD + "\")'",
+    "find-brace-action": f"find {SDD} -d{{elete,elete}}",
+    "find-brace-word": f"find {SDD} {{-delete,-print}}",
+    "sed-brace-option": f"sed -n 1p {SDD}/x {{-i,-i}}",
+    "sed-glob-word": f"sed -n 1p {SDD}/x *",
+    # A read in a group or subshell whose output a pipe acts on.
+    "subshell-into-xargs": f"(find {SDD} -type f) | xargs rm",
+    "group-into-xargs": f"{{ :; find {SDD}; }} | xargs rm",
 }
 
 

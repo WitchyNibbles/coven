@@ -28,11 +28,13 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   one or whose text reaches it, by name, by a path that resolves into it (`~`, `$HOME`, symlinks),
   by a glob that can match it, or, after a `cd`, `env -C`, `git -C` or `find` in its holding folder,
   by its plain name. A glob character in quotes or after a backslash is literal (`ls '.*'`, `grep
-  -E "[0-9]*"`, a quoted-delimiter heredoc fed to `cat` or python), except on a line where a shell, a
-  wrapper, an interpreter, `ssh` or `watch` may run a quoted word. In Bash the `plugins/` folder
-  may be read and its scripts run (READ_COMMANDS, `find` without actions, a printing `sed`, `bash`
-  or python with a script, a program by its path, a lone `S=<dir>` used only there, a pipe into
-  PIPE_FILTERS); any other use of it counts as a write. Read, Grep and Glob stay allowed;
+  -E "[0-9]*"`), but only on a line of plain data commands (GLOB_LITERAL_COMMANDS, `find` without
+  actions, a `sed` that cannot run or write) with no unquoted `$`; a heredoc body copied by `cat`
+  or read by python or node with no glob call is read only for words at a fixed place. In Bash the
+  `plugins/` folder may be read and its scripts run (READ_COMMANDS, `find` without actions, a
+  printing `sed`, `bash` or python with a script, a program by its path, a lone `S=<dir>` used only
+  there, a pipe into PIPE_FILTERS); any other use of it counts as a write. Read, Grep and Glob
+  stay allowed;
 - change COVEN_SESSION_ROLE (the lone `printenv COVEN_SESSION_ROLE` self-check stays allowed);
 - start `claude` (`claude --version` and `claude -v` alone excepted) or run its package;
 - run `coven approve`, `coven setup`, `coven memory adopt|init|sync`, or `coven` with a
@@ -172,7 +174,6 @@ ONE_CHARACTER_CLASS = re.compile(r"\[([^\]!^])\]")  # `[w]`: the set holds the o
 # narrower glob reading; any other reader is read strictly.
 READS_BODIES_AS_TEXT = frozenset({"node", "perl", "ruby", "ssh", "cat", "tee"})
 PYTHON_NAME = re.compile(r"python3?(?:\.\d+)?")
-CODE_INTERPRETERS = frozenset({"node", "perl", "ruby", "php", "lua", "awk", "gawk", "mawk", "nawk"})
 # What a restricted session may do with Claude Code's plugins folder in Bash: read its files and
 # run its scripts (`_read_spans`). Every other use of it counts as a write.
 # Commands that only read their arguments: all of them may name the folder.
@@ -193,6 +194,12 @@ PYTHON_SCRIPT_OPTIONS = frozenset("IBEsSuO")
 SED_PRINT_OPTIONS = frozenset("nErsuz")  # sed options that change neither files nor the script
 SED_PRINT_SCRIPT = re.compile(r"[\d,;pq=]+")  # line numbers and print or quit only: no w or e
 FIND_ACTION_PREFIXES = ("-exec", "-ok", "-delete", "-fprint", "-fls")  # find writes or runs
+BRACE_OR_GLOB = frozenset("{*?[")  # unquoted, a word may expand to other words
+# Ways the shell hands a command's words to a later one: the last argument, a trap's command.
+WORDS_HANDED_ON = re.compile(
+    r"\$\{?_(?!\w)|\b(?:BASH_COMMAND|BASH_ARGV|ZSH_EXECUTION_STRING|trap|fc|history)\b"
+)
+GROUP_CLOSERS = frozenset({"}", "done", "fi", "esac"})  # a compound command's last word
 # Commands a read may pipe into: they only print what they read, so no path is acted on.
 PIPE_FILTERS = frozenset(
     {
@@ -318,13 +325,21 @@ COMPOUND_WORDS = frozenset(
 )
 # The keywords that open a simple command before its own first word (`then h=x`, `do ssh $h`).
 LEADING_KEYWORDS = COMPOUND_WORDS - {LOOP, "select"}
-# Commands that may hand a quoted word to a shell or to code of their own, which may expand a glob
-# in it (python by PYTHON): shells and the words that run what they read, wrappers and launchers
-# (`sudo sh -c`, `env -S`, `uv run`), ssh, watch and interpreters. A compound command's keyword
-# (`do`, `if`) runs no string itself; the command after it is read on its own.
-QUOTED_RUNNERS = frozenset(
-    {*SHELL_READERS, *WRAPPERS, *LAUNCHERS, *INPUT_RUNNERS, *CODE_INTERPRETERS, "ssh", "watch"}
-) - (LEADING_KEYWORDS | {"}"})
+# Commands that take every quoted word as data: none expands a glob in one or runs one as code, so
+# a glob character in quotes is literal on a line of these alone (`_quotes_stay_literal`; find,
+# sed and rg by their own checks). Any other command, a wrapper or a keyword (`for`, `do`) keeps
+# the strict reading.
+GLOB_LITERAL_COMMANDS = frozenset(
+    {
+        *("cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "echo"),
+        *("printf", "cut", "tr", "sort", "uniq", "nl", "tac", "jq", "diff", "cmp", "stat"),
+        *("test", "[", "true", "false", ":"),
+    }
+)
+SED_RUN_LETTERS = frozenset("ewWf")  # in a sed word: may run a command, write a file or a script
+# Calls that expand a glob in a python or node heredoc body: such a body is read strictly.
+GLOB_CALLS = ("glob", "fnmatch")
+BODY_COPIERS = frozenset({"cat", "tee"})  # read a heredoc body only to copy it
 CONDITIONAL_MARKS = frozenset("&|(")
 BINDING = re.compile(r"([A-Za-z_]\w*)(\+?)=")
 VARIABLE_ONLY = re.compile(r"""['"]?\$([A-Za-z_]\w*)['"]?""")
@@ -2115,16 +2130,32 @@ def _reads_body_as_text(reader: str | None) -> bool:
     return name in READS_BODIES_AS_TEXT or bool(PYTHON_NAME.fullmatch(name))
 
 
-def _may_run_quoted(command: str) -> bool:
-    """Whether a command on the line, or a wrapper before one, may hand a quoted word to a shell
-    or to code of its own (QUOTED_RUNNERS, python), which may expand a glob in it."""
-    for segment in COMMAND_SPLIT.split(command):
-        words = _unquoted(segment).split()
-        for index in _command_head(words).indices:
-            name = _basename(words[index])
-            if name in QUOTED_RUNNERS or PYTHON.fullmatch(name):
-                return True
-    return False
+def _keeps_quotes_literal(words: Sequence[_ShellWord]) -> bool:
+    """Whether one simple command takes its quoted words as data, never as a glob it expands or
+    code it runs: a GLOB_LITERAL_COMMANDS command by its plain name, `find` with no action and
+    no `$`, `sed` with no word that may be a `w`, `W` or `e` command or an `-f` script, and `rg`
+    with no command option."""
+    name = words[0].value
+    raws = [word.raw for word in words[1:]]
+    if name == "find":
+        return not any(
+            "$" in raw or _unquoted(raw).startswith(FIND_ACTION_PREFIXES) for raw in raws
+        )
+    if name == "sed":
+        return not any(SED_RUN_LETTERS.intersection(raw) for raw in raws)
+    if name == "rg":
+        return not any(raw.startswith(("--pre", "--hostname")) for raw in raws)
+    return name in GLOB_LITERAL_COMMANDS
+
+
+def _quotes_stay_literal(command: str) -> bool:
+    """Whether every command on the line takes its quoted words as data (`_keeps_quotes_literal`),
+    so a glob character in quotes is literal to the end. Not when the scanner cannot follow the
+    line (shell_words.simple_commands)."""
+    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(command)
+    if commands is None:
+        return False
+    return all(_keeps_quotes_literal(each.words) for each in commands if each.words)
 
 
 def _globbing_code(bash: Bash) -> str:
@@ -2132,10 +2163,12 @@ def _globbing_code(bash: Bash) -> str:
     literal (in quotes, after a backslash) is masked (shell_words.without_quoted_globs), so `ls
     '.*'` names no folder. The mask is read from the command as written, since the code text
     blanks a heredoc body newlines and all, which hides where the body ends, and copied onto the
-    code text, which has the same length. Not on a line where a command may run a quoted word
-    (`bash -c '...'`, `python3 -c "glob.glob(...)"`, `xargs`, `ssh`): there it is read as a glob
-    as ever."""
-    if _may_run_quoted(bash.command):
+    code text, which has the same length. Only on a line of plain data commands
+    (`_quotes_stay_literal`): where a command may run a quoted word or read it as a glob
+    (`bash -c '...'`, `python3 -c "glob.glob(...)"`, `xargs`, `git rm '...'`, `for d in '...'`),
+    it is read as a glob as ever. Nor on a line with an unquoted `$` (without_quoted_globs gives
+    up there), which may hand a quoted word back to the shell unquoted (`d='.c*'; ls $d`)."""
+    if not _quotes_stay_literal(bash.command):
         return bash.code
     masked: str = _shell_words().without_quoted_globs(bash.command)
     mark: str = _shell_words().LITERAL_GLOB_MARK
@@ -2158,13 +2191,29 @@ def _text_bodies(command: str) -> _Bodies | None:
     return found
 
 
+def _plain_bodies(found: _Bodies) -> bool:
+    """Whether no heredoc body may expand a relative glob of its own: each is copied (`cat`,
+    `tee`) or read by python or node with no glob call in any body (GLOB_CALLS)."""
+    globbing = any(call in body for body in found.bodies for call in GLOB_CALLS)
+    return all(
+        reader in BODY_COPIERS
+        or (
+            not globbing
+            and reader is not None
+            and (reader == "node" or PYTHON_NAME.fullmatch(reader))
+        )
+        for reader in found.readers
+    )
+
+
 def _shell_glob_words(command: str) -> list[str]:
     """The words of a Bash command's glob text that the shell may expand from the working
-    folder: all of them, but in a heredoc body read as text (`_text_bodies`) only a word that
-    starts at a fixed place (`/`, `~`, `$`). A relative regex in a script (`r'(a).*'`) is not a
-    shell glob; the body's relative words are read after a `cd` by `_bash_glob_names_zone`."""
+    folder: all of them, but in a heredoc body that is copied, or read by python or node with no
+    glob call (`_plain_bodies`), only a word that starts at a fixed place (`/`, `~`, `$`). A
+    relative regex in a script (`r'(a).*'`) is not a shell glob; the body's relative words are
+    read after a `cd` by `_bash_glob_names_zone`."""
     found = _text_bodies(command)
-    if found is None:
+    if found is None or not _plain_bodies(found):
         return _words_of(command)
     fixed = [
         word
@@ -2519,18 +2568,51 @@ def _option_letters(word: _ShellWord) -> str | None:
     return value[1:]
 
 
+def _bare(raw: str) -> str:
+    """The characters of a word as written outside quotes and not escaped: those the shell may
+    still read as a brace or a glob."""
+    kept: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if quote is not None:
+            if char == quote:
+                quote = None
+            elif quote == '"' and char == "\\":
+                index += 1
+        elif char in "'\"":
+            quote = char
+        elif char == "\\":
+            index += 1
+        else:
+            kept.append(char)
+        index += 1
+    return "".join(kept)
+
+
+def _may_expand(words: Sequence[_ShellWord]) -> bool:
+    """Whether a word may expand to other words, an option among them (`{-i,x}`, `*` by a file
+    named `-i`, `$v`)."""
+    return any("$" in word.raw or BRACE_OR_GLOB.intersection(_bare(word.raw)) for word in words)
+
+
 def _script_word(name: str, args: Sequence[_ShellWord]) -> _ShellWord | None:
     """The script file a shell, python or node runs (`bash -x f`, `python3 -I f`): its first
     operand, after short options from SCRIPT_RUNNERS only. None for any other command, any other
-    option (`-c`, `-m`, `-e` make the operand code or a module) or standard input (`-`)."""
+    option (`-c`, `-m`, `-e`, `--eval=` make the operand code or a module), standard input (`-`),
+    or an operand that may expand to an option (`{-c,code}`, a glob)."""
     allowed = PYTHON_SCRIPT_OPTIONS if PYTHON_NAME.fullmatch(name) else SCRIPT_RUNNERS.get(name)
     if allowed is None:
         return None
     for word in args:
-        letters = _option_letters(word)
-        if letters is None:
-            return None if word.value in ("-", "--") else word
-        if not set(letters) <= allowed:
+        value = word.value
+        if value is None:
+            bare = _bare(word.raw)
+            return None if bare.startswith(("-", *BRACE_OR_GLOB)) or "{" in bare else word
+        if not value.startswith("-"):
+            return word
+        if value.startswith("--") or value == "-" or not set(value[1:]) <= allowed:
             return None
     return None
 
@@ -2538,9 +2620,9 @@ def _script_word(name: str, args: Sequence[_ShellWord]) -> _ShellWord | None:
 def _sed_files(args: Sequence[_ShellWord]) -> list[_ShellWord]:
     """The files `sed` only reads: the operands after its script, when its options are only
     SED_PRINT_OPTIONS (no `-i`, no `-e` or `-f`, nothing that takes a value), its script only
-    prints (SED_PRINT_SCRIPT: no `w` or `e` command), and no word holds a `$` or, after the
-    script, starts with `-` (GNU sed reads an option there too)."""
-    if any("$" in word.raw for word in args):
+    prints (SED_PRINT_SCRIPT: no `w` or `e` command), and no word may expand (`_may_expand`) or,
+    after the script, starts with `-` (GNU sed reads an option there too)."""
+    if _may_expand(args):
         return []
     index = 0
     while index < len(args) and (letters := _option_letters(args[index])) is not None:
@@ -2559,9 +2641,9 @@ def _sed_files(args: Sequence[_ShellWord]) -> list[_ShellWord]:
 
 def _find_reads(args: Sequence[_ShellWord]) -> list[_ShellWord]:
     """Every word of a `find` that has no action (FIND_ACTION_PREFIXES: `-delete`, `-exec`,
-    `-fprint` and the like) and no word holding a `$`, which may be one."""
-    if any(
-        "$" in word.raw or _unquoted(word.raw).startswith(FIND_ACTION_PREFIXES) for word in args
+    `-fprint` and the like) and no word that may expand to one (`_may_expand`)."""
+    if _may_expand(args) or any(
+        _unquoted(word.raw).startswith(FIND_ACTION_PREFIXES) for word in args
     ):
         return []
     return list(args)
@@ -2571,8 +2653,8 @@ def _command_reads(words: Sequence[_ShellWord]) -> list[_ShellWord]:
     """The words of one simple command that only read or run a file: a program run by its path
     (`./x`, `"/abs/x"`), every argument of READ_COMMANDS, of `find` without actions and the files
     of a printing `sed`, and the script a shell, python or node runs (`_script_word`). The
-    arguments of a program that is run are never among them."""
-    if not words or ASSIGNMENT.match(words[0].raw):
+    arguments of a program that is run are never among them, nor an assignment (`X+=/a/b`)."""
+    if not words or BINDING.match(words[0].raw):
         return []
     name, args = words[0].value, words[1:]
     if name is None:
@@ -2630,10 +2712,19 @@ def _read_spans(command: str) -> list[tuple[int, int]]:
     """The spans of a Bash command, as written, that only read or run a file (`_command_reads`),
     for a zone a session may read: blanked, they leave what writes. A read in a pipeline counts
     only when the rest of it only prints (`_filters`). Then a lone assignment whose name is only
-    used in those spans (`S=<dir>; bash $S/scripts/x`). None when the scanner cannot follow the
-    command (shell_words.simple_commands): it is then read whole."""
+    used in those spans (`S=<dir>; bash $S/scripts/x`).
+
+    None when the scanner cannot follow the command (shell_words.simple_commands), when the shell
+    may hand a read's words to a later command (WORDS_HANDED_ON: `$_`, a trap's
+    `$BASH_COMMAND`), or when a group, subshell, loop or `if` is piped, since its own commands
+    are not marked as in the pipeline (`(find x) | xargs rm`): it is then read whole."""
+    if WORDS_HANDED_ON.search(command):
+        return []
     commands: list[_SimpleCommand] | None = _shell_words().simple_commands(command)
-    if commands is None:
+    if commands is None or any(
+        each.in_pipeline and (not each.words or each.words[0].raw in GROUP_CLOSERS)
+        for each in commands
+    ):
         return []
     spans = [
         (word.start, word.end)
@@ -2692,9 +2783,15 @@ def _tool_writes(call: Call, zone: _Zone) -> bool:
 
 
 def _zone_refusal(zone: _Zone, role: str) -> Refused:
+    reach = (
+        "write it through Bash (cat, ls, grep, find and running a script there are fine) or reach"
+        " it through MCP tools"
+        if zone.writes_only
+        else "reach it through Bash or MCP tools"
+    )
     return Refused(
-        f"{PREFIX} a '{role}' session cannot write to {zone.label}, nor reach it through Bash or"
-        " MCP tools (use Read); only the GM session may: ask the GM",
+        f"{PREFIX} a '{role}' session cannot write to {zone.label}, nor {reach} (use Read); only"
+        " the GM session may: ask the GM",
         zone.name,
     )
 

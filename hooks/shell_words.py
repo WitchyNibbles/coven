@@ -142,6 +142,8 @@ LITERAL_DOLLAR_FOLLOWERS = frozenset(' \t\n"')  # a `$` followed by anything els
 GLOB_CHARS = frozenset("*?[{}^#~")
 PATH_GLOB_MARKS = frozenset("*?[")  # what makes a word a path glob, unquoted
 LITERAL_GLOB_MARK = "%"  # stands for a quoted one: no glob, name or word break reads it
+# What may follow an unquoted `$` that expands nothing (`a$`, `$ b`, `$;`): any other is an expansion.
+LONE_DOLLAR_BEFORE = frozenset({"", *BLANKS, "\n", ";", "&", "|", ")", "<", ">"})
 QUOTE_MARKS = frozenset("'\"\\")  # in a heredoc delimiter: the body is not expanded
 DOUBLE_QUOTE_ESCAPES = frozenset('$`"\\')
 ASCII_DIGITS = frozenset("0123456789")  # a single one before `<` or `>` is a file descriptor
@@ -1064,8 +1066,10 @@ class _QuotedGlobs:
     def _step(self) -> None:
         text, pos = self.text, self.pos
         char = text[pos]
-        if char == "`" or text.startswith(("$'", '$"'), pos):
-            raise _GiveUp  # a backtick's own quoting, an ANSI-C or translated string
+        if char == "`" or (char == "$" and text[pos + 1 : pos + 2] not in LONE_DOLLAR_BEFORE):
+            # A backtick's own quoting, an ANSI-C or translated string, or an unquoted expansion,
+            # whose value the shell splits and globs: a quoted glob may come back through it.
+            raise _GiveUp
         if char in "\\'\"":
             self._quoted(char)
         elif char == "#" and (pos == 0 or text[pos - 1] in COMMENT_AFTER):
@@ -1139,9 +1143,11 @@ class _QuotedGlobs:
 def without_quoted_globs(command: str) -> str:
     """`command` with every `*`, `?` and `[` the shell keeps literal, inside single or double
     quotes or after a backslash, replaced by LITERAL_GLOB_MARK (same length), so a check that
-    reads globs skips them; or `command` unchanged when this pass cannot follow it: a backtick, a
-    `$(...)` inside double quotes, an ANSI-C or translated string (`$'...'`, `$"..."`), an
-    unterminated quote, or a heredoc whose delimiter line never comes.
+    reads globs skips them; or `command` unchanged when this pass cannot follow it or a quoted
+    glob may still reach the shell: a backtick, a `$(...)` inside double quotes, an unquoted
+    expansion (`$d`, `$(...)`, `${d}`: the shell splits and globs its value, so `d='.*'; ls $d`
+    globs), an ANSI-C or translated string (`$'...'`, `$"..."`), an unterminated quote, or a
+    heredoc whose delimiter line never comes.
 
     Heredoc bodies and comments are left as written, and a quote in them opens nothing. Whether a
     quoted word is still a glob to the program that gets it (`sh -c '...'`, `find -name '*'`) is

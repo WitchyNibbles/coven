@@ -787,9 +787,9 @@ M = "%"
         # Only the quoted part of a word is literal: the bare `*` still globs.
         ('ls ".c"*', 'ls ".c"*'),
         ("ls .*", "ls .*"),
-        # Inside an unquoted `$(...)` a quote is a quote again.
-        ("echo $(ls '.*')", f"echo $(ls '.{M}')"),
         ('echo "${x#*/}"', f'echo "${{x#{M}/}}"'),
+        # A `$` that expands nothing.
+        ("echo a$ '.*'", f"echo a$ '.{M}'"),
         ("grep -c x <<< '.*'", f"grep -c x <<< '.{M}'"),
         # A single quote inside double quotes is literal, and so is a double quote inside single.
         ("echo \"it's\" '.*'", f"echo \"it's\" '.{M}'"),
@@ -833,6 +833,10 @@ def test_without_quoted_globs_leaves_bodies_and_comments_as_written(command, mas
         "cat <<'EOF'\n'.*'",
         "cat <<'EOF'",
         "echo $((1<<2)) '.*'",
+        # An unquoted expansion splits and globs its value: a quoted glob may come back through it.
+        "echo $(ls '.*')",
+        "d='.*'; ls $d",
+        "for d in '.*'; do ls $d; done",
     ],
 )
 def test_without_quoted_globs_returns_the_command_unchanged_when_it_cannot_follow(command):
