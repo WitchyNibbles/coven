@@ -30,14 +30,13 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   by its plain name. A glob character in quotes or after a backslash is literal (`ls '.*'`, `grep
   -E "[0-9]*"`), but only on a line of plain data commands (GLOB_LITERAL_COMMANDS, `find` without
   actions, a `sed` whose script, read command by command in each way a sed may, runs and writes
-  nothing) with no
-  unquoted `$`; a heredoc body copied by `cat` or read by python or node (by name or path) with no
-  glob call is read only for words at a fixed place. In Bash the `plugins/` folder may be read and
-  its scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its operands by a
-  folder variable bound at the start of the line, `bash` or python with a script, a program by its
-  path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS or a sed that
-  only prints); any other use of it counts as a write. Read, Grep and Glob
-  stay allowed;
+  nothing) with no unquoted `$`; a heredoc body copied by `cat` or read by python or node (by name
+  or path) with no glob call is read only for words at a fixed place. In Bash the `plugins/` folder
+  may be read and its scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its
+  operands by a folder variable bound at the start of the line, `bash` or python with a script, a
+  program by its path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS
+  or a sed that only prints); any other use of it counts as a write. Read, Grep and Glob stay
+  allowed;
 - change COVEN_SESSION_ROLE (the lone `printenv COVEN_SESSION_ROLE` self-check stays allowed);
 - start `claude` (`claude --version` and `claude -v` alone excepted) or run its package;
 - run `coven approve`, `coven setup`, `coven memory adopt|init|sync`, or `coven` with a
@@ -2190,7 +2189,7 @@ def _keeps_quotes_literal(words: Sequence[_ShellWord]) -> bool:
     """Whether one simple command takes its quoted words as data, never as a glob it expands or
     code it runs: a GLOB_LITERAL_COMMANDS command by its plain name, `find` with no action and
     no word that may expand to one (`-e{xec,xec}`), `sed` whose scripts run nothing
-    (`_sed_scripts`, `_sed_runs_nothing`), and `rg` with no command option and no brace."""
+    (`_sed_prints_only`), and `rg` with no command option and no brace."""
     name, args = words[0].value, words[1:]
     raws = [word.raw for word in args]
     if name == "find":
@@ -2199,8 +2198,7 @@ def _keeps_quotes_literal(words: Sequence[_ShellWord]) -> bool:
             or any(_unquoted(raw).startswith(FIND_ACTION_PREFIXES) for raw in raws)
         )
     if name == "sed":
-        scripts = _sed_scripts(args)
-        return scripts is not None and _sed_runs_nothing("\n".join(scripts))
+        return _sed_prints_only(args)
     if name == "rg":
         return not any(raw.startswith(("--pre", "--hostname")) or "{" in raw for raw in raws)
     return name in GLOB_LITERAL_COMMANDS
@@ -2248,7 +2246,8 @@ def _sed_option_script(value: str, words: Iterator[_ShellWord]) -> list[str] | N
         return [] if name in SED_LONG_FLAGS and not equals else None
     for at, letter in enumerate(value[1:], start=1):
         if letter == "e":
-            return [value[at + 1 :]] if value[at + 1 :] else _next_value(words)
+            attached = value[at + 1 :]
+            return [attached] if attached else _next_value(words)
         if letter == "i":
             return []  # the rest of the word is the backup suffix
         if letter not in SED_FLAG_LETTERS:
@@ -2372,9 +2371,7 @@ class _SedScript:
         return True
 
     def addresses(self) -> None:
-        if not self.address():
-            return
-        if self.peek() != ",":
+        if not self.address() or self.peek() != ",":
             return
         self.take()
         self.skip(" \t")
@@ -2442,6 +2439,13 @@ def _sed_runs_nothing(script: str) -> bool:
     except _SedRuns:
         return False
     return True
+
+
+def _sed_prints_only(args: Sequence[_ShellWord]) -> bool:
+    """Whether a sed command, by its arguments, only prints: its scripts can be told
+    (`_sed_scripts`) and, read whole, run nothing and write no file (`_sed_runs_nothing`)."""
+    scripts = _sed_scripts(args)
+    return scripts is not None and _sed_runs_nothing("\n".join(scripts))
 
 
 def _quotes_stay_literal(command: str) -> bool:
@@ -2994,14 +2998,13 @@ def _filters(run: Sequence[_SimpleCommand], reader: _SimpleCommand) -> bool:
 
 def _prints_only(words: Sequence[_ShellWord]) -> bool:
     """A PIPE_FILTERS command, or a sed whose scripts run nothing and write no file
-    (`_sed_scripts`, `_sed_runs_nothing`). A sed `-i` edits only its own operands, which are
-    never blanked as reads."""
+    (`_sed_prints_only`). A sed `-i` edits only its own operands, which are never blanked as
+    reads."""
     if not words:
         return False
     if words[0].value in PIPE_FILTERS:
         return True
-    scripts = _sed_scripts(words[1:]) if words[0].value == "sed" else None
-    return scripts is not None and _sed_runs_nothing("\n".join(scripts))
+    return words[0].value == "sed" and _sed_prints_only(words[1:])
 
 
 def _only_read(word: _ShellWord, command: str, spans: Sequence[tuple[int, int]]) -> bool:
