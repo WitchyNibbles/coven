@@ -125,9 +125,9 @@ Its rules are public. Its boundary is the committed store and the approvals in i
     one call and run in a later one.
 - If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
   block the call.
-- False positives, which fail closed (the call is refused, and the PM asks the GM): `cd
-  ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read tool), a
-  symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command outside
+- False positives, which fail closed (the call is refused, and the PM asks the GM):
+  `cd ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read
+  tool), a symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command outside
   the read list (`less`, `awk`, `xargs cat`, `jq`), inside a loop or group, or on a line with a
   `$(...)`, a program by an unquoted `$HOME/...` path (write `"$HOME/..."` or `~/...`), a sed
   operand by a variable that is not a plain folder assigned once at the start of the line (`CM=~/x;
