@@ -117,12 +117,21 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   - plugins loaded with `--plugin-dir`;
   - `git clean` or `git mv` in `~`, when `~` is a git repo;
   - glob forms such as `.cla*` inside a project;
-  - variables other than HOME, CLAUDE_CONFIG_DIR, CLAUDE_PLUGIN_ROOT and XDG_CONFIG_HOME.
+  - variables other than HOME, CLAUDE_CONFIG_DIR, CLAUDE_PLUGIN_ROOT and XDG_CONFIG_HOME;
+  - what a script in `~/.claude/plugins/` does once a PM runs it: running one is allowed, like
+    reading one, and only the command line is read;
+  - a list of `~/.claude/plugins/` written to a file (`find ... > /tmp/l`) and acted on later
+    (`xargs rm < /tmp/l`), in the same line or the next call: the same gap as a script written in
+    one call and run in a later one.
 - If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
   block the call.
 - False positives, which fail closed (the call is refused, and the PM asks the GM):
   `cd ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read
-  tool), and a symlink in `~/projects` that points at `~`.
+  tool), a symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command
+  outside the read list (`less`, `awk`, `xargs cat`, `jq`) or inside a loop or group, a plugin
+  program run by a `~/...` or `$HOME/...` path (use the absolute path or `bash <script>`), and a
+  quoted glob on a line with any command other than plain data commands (`ls`, `grep`, `cat`,
+  `sed`, `find` without actions...) or with an unquoted `$` (`ls '.*' $d`, `ls '.*'; git status`).
 - `coven guard explain` exits 1 on an unreadable store even when the call would be allowed. The
   verdict line still prints.
 - An inline `coven guard explain <command>` that names a target is refused inside a session, for
