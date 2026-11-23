@@ -655,6 +655,45 @@ def test_simple_commands_is_none_on_give_up(command):
     assert module.simple_commands(command) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "~/.pyenv/versions/x/bin/python -V",
+        "$HOME/bin/tool a",
+        '"$HOME/bin/tool" a',
+        "cd /tmp && ~/bin/tool && echo $HOME",
+    ],
+)
+def test_simple_commands_take_a_program_by_its_path_in_the_home_folder(command):
+    """A path always holds a `/`, so it is never a builtin, a function or an alias."""
+    assert module.simple_commands(command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "~/bin/*",
+        "~",
+        "~/",
+        "$HOME",
+        "$HOME/bin/$X",
+        "~user/bin/x",
+        "$HOMEX/bin/x",
+        # Unquoted, `$HOME` is split on IFS: a new HOME or IFS may make its first word `eval`.
+        "IFS=/; $HOME/bin/x",
+        "HOME=/tmp; $HOME/bin/x",
+        "read HOME; $HOME/bin/x",
+    ],
+)
+def test_simple_commands_give_up_on_any_other_program_under_the_home_folder(command):
+    assert module.simple_commands(command) is None
+
+
+def test_heredoc_bodies_names_a_reader_by_its_path_in_the_home_folder():
+    command = "~/.pyenv/versions/x/bin/python - <<'A'\nx\nA"
+    assert module.heredoc_bodies(command).readers == ["~/.pyenv/versions/x/bin/python"]
+
+
 def test_heredoc_bodies_blanks_each_body_and_returns_it_as_written():
     command = "python3 - <<'A' && cat <<-'B'\nx = \"\\w*\"\nA\n\t[a-z]*\n\tB\nls"
     found = module.heredoc_bodies(command)
