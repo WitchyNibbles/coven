@@ -4107,6 +4107,21 @@ def test_a_pm_may_run_python_by_its_path_on_a_body_with_globs(store: Path, pytho
     assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
 
 
+@pytest.mark.parametrize("reader", ["./python3", "/tmp/x/python3", "bin/node"])
+def test_a_pm_cannot_run_a_body_with_a_glob_by_a_reader_anywhere_else(
+    store: Path, reader: str
+) -> None:
+    """A program by another path may be a shell under a reader's name: its body's relative
+    words are read as the shell would expand them, here from the home folder."""
+    command = f"{reader} - <<'PY'\nprint('.cl*')\nPY"
+    assert decide(bash(command, cwd=str(home())), store, "pm") is not None
+
+
+def test_a_pm_may_run_a_body_with_a_glob_by_a_reader_it_knows(store: Path) -> None:
+    command = "python3 - <<'PY'\nprint('.cl*')\nPY"
+    assert decide(bash(command, cwd=str(home())), store, "pm") is None
+
+
 # Still refused: a glob the shell expands, a quoted word a shell or interpreter runs, a body a
 # shell reads, an unquoted heredoc (its `$(...)` expands), and a Bash read of the settings.
 QUOTED_GLOB_REFUSALS = {
@@ -4152,6 +4167,16 @@ QUOTED_GLOB_REFUSALS = {
     # the script.
     "sed-expression-after-the-script": "sed 'e ls -d .cl*' -e p /tmp/x",
     "sed-variable-script": "sed \"$S\" '.cl*'",
+    # GNU sed ends a comment or a file name at the newline, a backslash or not, and reads the
+    # delimiter inside `[...]` as part of the regex.
+    "sed-run-command-after-a-comment-with-a-backslash": "sed -n -e '#x\\' -e 'e ls -d .cl*' f",
+    "sed-run-command-after-a-read-file-with-a-backslash": "sed -n -e 'r x\\' -e 'e ls -d .cl*' f",
+    "sed-run-command-after-a-queued-file": "sed -n -e 'R x\\' -e 'e ls -d .cl*' f",
+    "sed-write-after-a-read-file": "sed -n -e 'r x\\' -e 'w .cl*' f",
+    "sed-piped-run-command-after-a-comment": "cat f | sed -n -e '#x\\' -e 'e ls -d .cl*'",
+    "sed-run-command-in-a-bracket": "sed -n 's/[a/b]x/;/;e ls -d .cl* ;/p' f",
+    "sed-run-command-after-an-address-bracket": "sed -n '/[/]/p;/;e ls -d .cl* ;/p' f",
+    "sed-run-flag-after-a-bracket": "sed 's/x[^/]/;i/e;e ls -d .cl* ;/p' f",
     "trap": "trap 'ls .*' EXIT; ls '.x*'",
     "python-body-glob": (
         "python3 - <<'EOF'\nimport glob, shutil\nfor p in glob.glob('.cl*'): shutil.rmtree(p)\nEOF"
@@ -4221,7 +4246,7 @@ def plugin_reads() -> dict[str, str]:
         ),
         "sed-into-sed": f"S={SDD}; sed -n 1,200p $S/prompt.md | sed -n '/```/,/```/p'",
         "program-under-home-variable": (
-            "$HOME/.claude/plugins/cache/impeccable/impeccable/4.7.0/scripts/impeccable context"
+            '"$HOME/.claude/plugins/cache/impeccable/impeccable/4.7.0/scripts/impeccable" context'
         ),
     }
 
@@ -4294,8 +4319,24 @@ PLUGIN_WRITES = {
     "sed-variable-with-a-default": f"CM={SDD}; sed -n 1p ${{CM:--i}} {SDD}/SKILL.md",
     "sed-second-variable": f"CM={SDD}; sed -n 1p $CM/x $X {SDD}/SKILL.md",
     "sed-variable-in-place": f"CM={SDD}; sed -i 1d $CM/SKILL.md",
+    # A folder variable set again through a name built at run time.
+    "sed-variable-printed-into-a-built-name": (
+        f'CM={SDD}; n=C; m=M; printf -v "$n$m" "%s" -i; sed -n 1p $CM {SDD}/b'
+    ),
+    "sed-variable-read-into-a-built-name": (
+        f'CM={SDD}; n=C; m=M; read $n$m <<< "-i"; sed -n 1p $CM/a {SDD}/b'
+    ),
+    "sed-variable-mapped-into-a-built-name": (
+        f'CM={SDD}; n=C; m=M; mapfile -t $n$m <<< "-i"; sed -n 1p $CM {SDD}/b'
+    ),
+    "sed-variable-set-by-getopts": f"CM={SDD}; getopts i: $n -i; sed -n 1p $CM {SDD}/b",
+    # An unquoted `$HOME` program: a HOME set through a built name splits into other words.
+    "program-under-a-home-read-into-a-built-name": (
+        f'a=HO; b=ME; read $a$b <<< "rm -rf {SDD}"; $HOME/.claude/plugins/x/run'
+    ),
     # A read piped into a sed that writes or runs, or a pipeline after one that only reads.
-    "sed-filter-writes": f"cat {SDD}/SKILL.md | sed -n 'w {SDD}/x'",
+    "sed-filter-writes": f"find {SDD} | sed -n 'w /tmp/list'",
+    "sed-filter-writes-each-line": f"find {SDD} | sed 'W /tmp/list'",
     "sed-filter-in-place": f"cat {SDD}/a | sed -i 1d {SDD}/b",
     "pipeline-after-a-read": f"ls {SDD} | head; find {SDD} | xargs rm",
     # A program run under the home folder is run, its arguments are not read.

@@ -21,7 +21,7 @@
   writes there are still refused (#24).
 - The guard reads a sed script command by command, so a quoted glob next to an ordinary sed
   (`sed -E "s/[[:space:]]*.*/x/"`) stays literal; only a real `e`, `w` or `W` keeps it strict.
-  It also follows a program run by `~/...` or `$HOME/...`, a sed operand by a folder variable
+  It also follows a program run by `~/...` or `"$HOME/..."`, a sed operand by a folder variable
   (`CM=~/x; sed -n 1p $CM/a`), a piped sed that only prints, and each pipeline on a line apart.
   A sed script in a variable (`sed "$S" '.*'`) no longer counts as data. A refusal for glob-like
   text now says to write the script with Write and run it in its own call (#26).

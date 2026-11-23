@@ -659,9 +659,9 @@ def test_simple_commands_is_none_on_give_up(command):
     "command",
     [
         "~/.pyenv/versions/x/bin/python -V",
-        "$HOME/bin/tool a",
         '"$HOME/bin/tool" a',
         "cd /tmp && ~/bin/tool && echo $HOME",
+        "HOME=/tmp; ~/bin/tool",
     ],
 )
 def test_simple_commands_take_a_program_by_its_path_in_the_home_folder(command):
@@ -679,14 +679,24 @@ def test_simple_commands_take_a_program_by_its_path_in_the_home_folder(command):
         "$HOME/bin/$X",
         "~user/bin/x",
         "$HOMEX/bin/x",
-        # Unquoted, `$HOME` is split on IFS: a new HOME or IFS may make its first word `eval`.
-        "IFS=/; $HOME/bin/x",
-        "HOME=/tmp; $HOME/bin/x",
-        "read HOME; $HOME/bin/x",
+        # Unquoted, `$HOME` is split on IFS: a HOME or IFS set by any name, built ones too, may
+        # make its first word `eval`.
+        "$HOME/bin/x",
+        "a=HO; b=ME; read $a$b; $HOME/bin/x",
     ],
 )
 def test_simple_commands_give_up_on_any_other_program_under_the_home_folder(command):
     assert module.simple_commands(command) is None
+
+
+def test_simple_commands_mark_each_command_a_pipe_joins_to_the_one_before():
+    commands = module.simple_commands("ls a | head; find b |& head")
+    assert [(c.words[0].value, c.after_pipe) for c in commands if c.words] == [
+        ("ls", False),
+        ("head", True),
+        ("find", False),
+        ("head", True),
+    ]
 
 
 def test_heredoc_bodies_names_a_reader_by_its_path_in_the_home_folder():

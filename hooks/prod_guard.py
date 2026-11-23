@@ -29,7 +29,8 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   by a glob that can match it, or, after a `cd`, `env -C`, `git -C` or `find` in its holding folder,
   by its plain name. A glob character in quotes or after a backslash is literal (`ls '.*'`, `grep
   -E "[0-9]*"`), but only on a line of plain data commands (GLOB_LITERAL_COMMANDS, `find` without
-  actions, a `sed` whose script, read command by command, runs and writes nothing) with no
+  actions, a `sed` whose script, read command by command in each way a sed may, runs and writes
+  nothing) with no
   unquoted `$`; a heredoc body copied by `cat` or read by python or node (by name or path) with no
   glob call is read only for words at a fixed place. In Bash the `plugins/` folder may be read and
   its scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its operands by a
@@ -351,13 +352,17 @@ SED_LONG_FLAGS = frozenset(
 # `v` and any other letter are none of these: the script counts as one that may run.
 SED_BARE_COMMANDS = frozenset("=dDgGhHnNpPxzF}")
 SED_NUMBER_COMMANDS = frozenset("lLqQ")  # an optional number
-SED_LINE_COMMANDS = frozenset("aicrR")  # text or a file name to the end of the line
+SED_TEXT_COMMANDS = frozenset("aic")  # text to the end of the line, `\` + newline going on
+SED_FILE_COMMANDS = frozenset("rR")  # a file name to the newline, a backslash or not
 SED_LABEL_COMMANDS = frozenset("btT:")
 SED_SUBSTITUTE_FLAGS = frozenset("gpiImM0123456789")  # not `e` (run) or `w` (write)
 SED_COMMAND_ENDS = frozenset({"", ";", "\n", "}", "#"})
 # Calls that expand a glob in a python or node heredoc body: such a body is read strictly.
 GLOB_CALLS = ("glob", "fnmatch", "__import__", "importlib")  # an import by a built name too
 BODY_COPIERS = frozenset({"cat", "tee"})  # read a heredoc body only to copy it
+# Where a heredoc reader named by its path is the program its name says: a system bin folder or
+# the home folder (a pyenv or venv python), not a path the session may have just written.
+TRUSTED_READER_FOLDERS = ("/usr/bin/", "/bin/", "/usr/local/bin/", "~/", "$HOME/")
 CONDITIONAL_MARKS = frozenset("&|(")
 BINDING = re.compile(r"([A-Za-z_]\w*)(\+?)=")
 # A sed operand by a folder variable (`$CM/a.md`, `"$CM/a.md"`), and the plain path such a
@@ -366,6 +371,30 @@ FOLDER_OPERAND = re.compile(r'(?P<q>"?)\$(?P<name>[A-Za-z_]\w*)(?:/[\w./@+:,%=-]
 FOLDER_VALUE = re.compile(r"(?:~|\$HOME)?/[\w./@+:,%=-]*")
 # A bare mention of IFS or HOME (not `$IFS`) may set it: `$CM` may then split into an option.
 SPLIT_VARIABLE = re.compile(r"(?<![\w$])(?:IFS|HOME)(?!\w)")
+# Builtins that set a variable by a name given as a word, which may be built at run time
+# (`read $n$m`): a line with one binds no folder variable.
+NAME_SETTERS = frozenset(
+    {
+        "read",
+        "printf",
+        "mapfile",
+        "readarray",
+        "getopts",
+        "let",
+        "typeset",
+        "readonly",
+        "unset",
+        "wait",
+        "coproc",
+        "source",
+        ".",
+        "declare",
+        "export",
+        "local",
+        "eval",
+        "set",
+    }
+)
 VARIABLE_ONLY = re.compile(r"""['"]?\$([A-Za-z_]\w*)['"]?""")
 VARIABLE_REFERENCE = re.compile(r"\$\{?([A-Za-z_]\w*)")
 PLAIN_REFERENCE = re.compile(r"\$([A-Za-z_]\w*)")  # `$NAME`, which a bound value can replace
@@ -2237,11 +2266,17 @@ class _SedRuns(Exception):
 
 
 class _SedScript:
-    """A reader of one GNU sed script, its `-e` parts joined by newlines as sed joins them."""
+    """A reader of one GNU sed script, its `-e` parts joined by newlines as sed joins them.
 
-    def __init__(self, text: str) -> None:
+    Where sed versions may read a regex apart (does `[/]` end at the `/`? does a backslash
+    escape inside `[...]`?), `brackets` and `bracket_escapes` pick one reading; a script counts
+    as printing only when every reading finds nothing that runs (`_sed_runs_nothing`)."""
+
+    def __init__(self, text: str, *, brackets: bool, bracket_escapes: bool) -> None:
         self.text = text
         self.at = 0
+        self.brackets = brackets
+        self.bracket_escapes = bracket_escapes
 
     def peek(self) -> str:
         return self.text[self.at : self.at + 1]
@@ -2261,20 +2296,47 @@ class _SedScript:
             self.at += 1
         return self.at > start
 
-    def to_line_end(self) -> None:
-        """Text or a file name: up to a newline no backslash escapes."""
+    def text_to_line_end(self) -> None:
+        """The text of `a`, `i` or `c`: up to a newline no backslash escapes."""
         while self.peek() and self.peek() != "\n":
             if self.take() == "\\":
                 self.take()
 
-    def delimited(self, delimiter: str) -> None:
-        """A regex or a replacement: up to `delimiter`, a backslash escaping the next character;
-        an unescaped newline or the end of the script is an error in sed."""
+    def to_newline(self) -> None:
+        """A comment or a file name: up to the next newline, whatever comes before it."""
+        while self.peek() and self.peek() != "\n":
+            self.at += 1
+
+    def delimited(self, delimiter: str, *, regex: bool = False) -> None:
+        """A regex or a replacement: up to `delimiter`, a backslash escaping the next character
+        and, in a regex read with `brackets`, a `[...]` holding it; an unescaped newline or the
+        end of the script is an error in sed."""
         while (char := self.take()) != delimiter:
             if char in ("", "\n"):
                 raise _SedRuns
             if char == "\\" and not self.take():
                 raise _SedRuns
+            if char == "[" and regex and self.brackets:
+                self.bracket()
+
+    def bracket(self) -> None:
+        """The rest of a `[...]` after its `[`: a first `]` (after an optional `^`) is literal,
+        and `[:x:]`, `[.x.]`, `[=x=]` nest."""
+        if self.peek() == "^":
+            self.take()
+        if self.peek() == "]":
+            self.take()
+        while (char := self.take()) != "]":
+            if char in ("", "\n"):
+                raise _SedRuns
+            if char == "\\" and self.bracket_escapes and not self.take():
+                raise _SedRuns
+            if char == "[" and self.peek() in (":", ".", "="):
+                end = self.take() + "]"
+                close = self.text.find(end, self.at)
+                if close == -1 or "\n" in self.text[self.at : close]:
+                    raise _SedRuns
+                self.at = close + len(end)
 
     def label(self) -> None:
         """A label: read to its shortest end (a blank, `;`, `}`), so whatever sed may read as
@@ -2305,7 +2367,7 @@ class _SedScript:
         delimiter = self.take() if char == "\\" else "/"
         if delimiter in ("", "\n", "\\"):
             raise _SedRuns
-        self.delimited(delimiter)
+        self.delimited(delimiter, regex=True)
         self.skip("IM")
         return True
 
@@ -2333,8 +2395,10 @@ class _SedScript:
             self.skip(" \t")
             self.digits()
             self.end_of_command()
-        elif letter in SED_LINE_COMMANDS:
-            self.to_line_end()
+        elif letter in SED_TEXT_COMMANDS:
+            self.text_to_line_end()
+        elif letter in SED_FILE_COMMANDS:
+            self.to_newline()
         elif letter in SED_LABEL_COMMANDS:
             self.skip(" \t")
             self.label()
@@ -2343,7 +2407,7 @@ class _SedScript:
             delimiter = self.take()
             if delimiter in ("", "\n", "\\"):
                 raise _SedRuns
-            self.delimited(delimiter)
+            self.delimited(delimiter, regex=letter == "s")
             self.delimited(delimiter)
             if letter == "s":
                 self.skip("".join(SED_SUBSTITUTE_FLAGS))
@@ -2357,7 +2421,7 @@ class _SedScript:
             if not self.peek():
                 return
             if self.peek() == "#":
-                self.to_line_end()
+                self.to_newline()
                 continue
             self.addresses()
             self.skip(" \t")
@@ -2369,10 +2433,12 @@ class _SedScript:
 
 def _sed_runs_nothing(script: str) -> bool:
     """Whether a GNU sed script, read whole, has no `e`, `w` or `W` command, no `e` or `w` flag
-    of `s`, and only commands the reader knows: it may only print. Anything it cannot read
-    counts as one that may run."""
+    of `s`, and only commands the reader knows: it may only print. It must hold in each way a
+    sed may read a regex (`_SedScript`); anything it cannot read counts as one that may run."""
+    readings = ((False, False), (True, False), (True, True))
     try:
-        _SedScript(script).read()
+        for brackets, bracket_escapes in readings:
+            _SedScript(script, brackets=brackets, bracket_escapes=bracket_escapes).read()
     except _SedRuns:
         return False
     return True
@@ -2424,9 +2490,14 @@ def _text_bodies(command: str) -> _Bodies | None:
 def _plain_bodies(found: _Bodies) -> bool:
     """Whether no heredoc body may expand a relative glob of its own: each is copied (`cat`,
     `tee`) or read by python or node, by name or path (`~/.pyenv/.../python`), with no glob call
-    in any body (GLOB_CALLS)."""
+    in any body (GLOB_CALLS). A reader by its path counts only in TRUSTED_READER_FOLDERS."""
     globbing = any(call in body for body in found.bodies for call in GLOB_CALLS)
-    names = [None if reader is None else _basename(reader) for reader in found.readers]
+    names = [
+        _basename(reader)
+        if reader is not None and ("/" not in reader or reader.startswith(TRUSTED_READER_FOLDERS))
+        else None
+        for reader in found.readers
+    ]
     return all(
         name in BODY_COPIERS
         or (not globbing and name is not None and (name == "node" or PYTHON_NAME.fullmatch(name)))
@@ -3000,8 +3071,9 @@ def _bound_folders(command: str, commands: Sequence[_SimpleCommand]) -> dict[str
     option. Only when that command is lone assignments at the very start of the line (not in a
     group, a subshell or after a test), followed by `;`, `&&` or a newline (not `&` or `|`: a
     subshell), each value a plain path (FOLDER_VALUE: from `/`, `~/` or `$HOME/`, no blank or
-    glob), each name assigned once, and on a line that sets neither IFS nor HOME. The caller
-    keeps only names whose every mention is in a read (`_only_read`)."""
+    glob), each name assigned once, and on a line that sets neither IFS nor HOME and runs no
+    NAME_SETTERS (`read $n$m` sets a name `_only_read` cannot see). The caller keeps only names
+    whose every mention is in a read (`_only_read`)."""
     first = next((each for each in commands if each.words), None)
     if first is None or command[: first.words[0].start].strip():
         return {}
@@ -3010,7 +3082,9 @@ def _bound_folders(command: str, commands: Sequence[_SimpleCommand]) -> dict[str
     after = command[first.words[-1].end :].lstrip(" \t")
     if not (after.startswith(("&&", "\n")) or (after[:1] == ";" and after[1:2] not in (";", "&"))):
         return {}
-    if SPLIT_VARIABLE.search(command):
+    if SPLIT_VARIABLE.search(command) or any(
+        word.value in NAME_SETTERS for each in commands for word in each.words
+    ):
         return {}
     assigned = Counter(
         match[1] for each in commands for word in each.words if (match := BINDING.match(word.raw))

@@ -32,8 +32,8 @@ last word of the previous command, a blanked message or the self-check's words, 
 blanked, the bodies as written and the first word of each command that reads one (`program_name`:
 `~/x/python` as written), or None when the scanner cannot follow the line or it has a pipe (see its
 docstring). The scanner gives up on a command word it cannot name, but for a program by its path
-under the home folder (`home_program`: `~/x/tool`, `$HOME/x/tool` on a line that sets neither HOME
-nor IFS), since a path is never a builtin, a function or an alias. `without_patterns(command)`
+under the home folder (`home_program`: `~/x/tool`, `"$HOME/x/tool"`), since a path is never a
+builtin, a function or an alias. `without_patterns(command)`
 is the narrowest form, for the same check: only the pattern words of `grep`, `egrep`, `fgrep`, `rg`
 and `git grep` are blanked, on any line (a pipe or another command on it changes nothing), and the
 command comes back unchanged when the scanner cannot follow it. `without_quoted_globs(command)`
@@ -186,13 +186,10 @@ PATHSPEC_OPTION = "--pathspec-from-file"  # makes git read paths from a heredoc
 PATHSPEC_ABBREVIATION = "--pathspec-f"  # git takes any unique prefix of a long option
 
 DATA_SINKS = frozenset({"cat", "tee"})  # copy a heredoc to a file or to their output
-# A program by its path under the home folder (`~/x/tool`, `$HOME/x/tool`, `"$HOME/x/tool"`): a
-# path holds a `/`, so the shell runs the file, never a builtin, a function or an alias.
-HOME_PROGRAM_PREFIXES = ("~/", "$HOME/")
+# A program by its path under the home folder (`~/x/tool`, `"$HOME/x/tool"`): a path holds a `/`,
+# so the shell runs the file, never a builtin, a function or an alias. Not an unquoted `$HOME/x`:
+# it is split on IFS, and a HOME set by a name built at run time may make it `eval ...`.
 HOME_PATH_MARKS = frozenset("_./@+:,%=-")  # with letters and digits, what such a path may hold
-# Unquoted, `$HOME` is split on IFS: a line that may set either (`IFS=/`, `read HOME`) may turn
-# `$HOME/x` into `eval ...`. A bare mention of one, not after `$`, may set it.
-SPLIT_VARIABLES = ("HOME", "IFS")
 
 # Short options that take no value, per search tool. Anything else ends the walk over the arguments.
 GREP_LETTERS = frozenset("abcEFGHhIiLlnoPqRrsTUuVvwxyZz")
@@ -610,10 +607,9 @@ def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
             commands[-1].in_pipeline = commands[-1].in_pipeline or pipe
             commands.append(Command(in_pipeline=pipe, after_pipe=pipe))
         previous = token
-    home_kept = not any(_may_set_split_variable(w.raw) for c in commands for w in c.words)
     cwd_moved = False
     for command in commands:
-        _check_first_word(command.words, home_kept=home_kept)
+        _check_first_word(command.words)
         for target in [*command.redirect_targets, *_written_by_argument(command.words)]:
             command.add_write(target, cwd_moved=cwd_moved)
         cwd_moved = cwd_moved or _changes_dir(command.words)
@@ -734,19 +730,16 @@ def _is_assignment(word: Word) -> bool:
     return bool(equals) and name.rstrip("+").isidentifier()
 
 
-def _check_first_word(words: Sequence[Word], *, home_kept: bool) -> None:
+def _check_first_word(words: Sequence[Word]) -> None:
     """Give up when the command proper (after `if`, `command`, `X=1`, ...) is a redefiner, or one
-    whose name is not known: but for a program by its path under the home folder
-    (`home_program`), and for `$HOME/...` only on a line that sets neither HOME nor IFS
-    (`home_kept`)."""
+    whose name is not known but for a program by its path under the home folder
+    (`home_program`)."""
     for word in words:
         if word.raw in LEADING_WORDS or word.value in LEADING_WORDS or _is_assignment(word):
             continue
         if word.value is not None and word.value.startswith("-"):
             continue  # an option of `command` or `time`
         if word.value is None and home_program(word.raw):
-            if not (home_kept or word.raw.startswith("~")):
-                raise _GiveUp
             return
         if word.value is None or word.value in REDEFINERS:
             raise _GiveUp
@@ -755,34 +748,19 @@ def _check_first_word(words: Sequence[Word], *, home_kept: bool) -> None:
 
 def home_program(raw: str) -> str | None:
     """The path of a word that names a program under the home folder, as written but for its
-    quotes (`~/bin/tool`, `$HOME/bin/tool`, `"$HOME/bin/tool"`); None for any other word: one
-    that may expand further (`~/bin/*`, `$HOME/$X`), names a user's home (`~user/x`) or ends in
-    `/`."""
-    path = raw[1:-1] if len(raw) > 1 and raw[0] == raw[-1] == '"' else raw
-    if path is not raw and not path.startswith("$"):
-        return None  # `"~/x"` is no home path: the tilde stays
-    prefix = next((p for p in HOME_PROGRAM_PREFIXES if path.startswith(p)), None)
-    if prefix is None:
+    quotes (`~/bin/tool`, `"$HOME/bin/tool"`); None for any other word: one that may expand
+    further (`~/bin/*`, `"$HOME/$X"`), may split (an unquoted `$HOME/x`), names a user's home
+    (`~user/x`) or ends in `/`."""
+    quoted = len(raw) > 1 and raw[0] == raw[-1] == '"'
+    prefix = '"$HOME/' if quoted else "~/"
+    if not raw.startswith(prefix):
         return None
-    rest = path[len(prefix) :]
+    rest = raw[len(prefix) : -1 if quoted else None]
     if not rest or rest.endswith("/"):
         return None
     if not all(char.isalnum() or char in HOME_PATH_MARKS for char in rest):
         return None
-    return path
-
-
-def _may_set_split_variable(raw: str) -> bool:
-    """Whether a word mentions HOME or IFS other than as `$HOME` or `$IFS`."""
-    for name in SPLIT_VARIABLES:
-        at = raw.find(name)
-        while at != -1:
-            before = raw[at - 1] if at else ""
-            after = raw[at + len(name) : at + len(name) + 1]
-            if before != "$" and not _is_name_char(before) and not _is_name_char(after):
-                return True
-            at = raw.find(name, at + 1)
-    return False
+    return raw[1:-1] if quoted else raw
 
 
 @dataclass(frozen=True)
