@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import urlsplit
@@ -20,6 +20,9 @@ AGENT_ROLES: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
 OPENCODE_KEY_ENV: Final = "OPENCODE_API_KEY"
 PRESETS: Final = ("litellm", "opencode")
 FORMAT: Final = 1
+# What OpenCode 2.3.2 assumes for a model whose config names no context limit.
+ASSUMED_CONTEXT: Final = 200_000
+MAX_LIMIT: Final = 10_000_000
 
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
 RESET_HINT = "re-run coven opencode setup"
@@ -87,16 +90,39 @@ def layout() -> Layout:
 
 
 @dataclass(frozen=True)
+class Limit:
+    """A model's token window: what it takes in (`context`) and what it may write (`output`)."""
+
+    context: int
+    output: int | None = None
+
+    def data(self) -> dict[str, int]:
+        """The JSON object for it, in profile.json and in the config: no `output` when unset."""
+        return {"context": self.context} | (
+            {"output": self.output} if self.output is not None else {}
+        )
+
+
+@dataclass(frozen=True)
 class Profile:
-    """What `setup` chose. `models` holds only the roles given; the others use `lead`."""
+    """What `setup` chose. `models` holds only the roles given; the others use `lead`.
+
+    `limits` maps a model id to its `Limit`; a model with none is left to OpenCode's default.
+    """
 
     preset: Literal["litellm", "opencode"]
     base_url: str | None
     key_env: str
     models: Mapping[str, str]
+    limits: Mapping[str, Limit] = field(default_factory=dict)
 
     def model(self, role: str) -> str:
         return self.models.get(role) or self.models["lead"]
+
+    @property
+    def model_ids(self) -> list[str]:
+        """Every model id the roles use, each once, sorted."""
+        return sorted({self.model(role) for role in ROLES})
 
     @property
     def provider_id(self) -> str:
@@ -161,6 +187,49 @@ def _check_base_url(url: str, *, announce: bool = True) -> str:
     return trimmed
 
 
+def _whole_number(text: str, what: str) -> int:
+    """The digits of `text` as a number; the range is checked later, for stored limits too."""
+    if not (text.isascii() and text.isdigit()):
+        raise OpencodeError(_size_rule(what))
+    return int(text)
+
+
+def _size_rule(what: str) -> str:
+    return f"--limit {what} must be a positive whole number, digits only, at most {MAX_LIMIT}"
+
+
+def _parse_limit(pair: str) -> tuple[str, Limit]:
+    model_id, separator, sizes = pair.rpartition("=")
+    if not separator or not model_id:
+        raise OpencodeError("--limit must be MODEL=CONTEXT[:OUTPUT], for example big=100000:8000")
+    context, has_output, output = sizes.partition(":")
+    return model_id, Limit(
+        _whole_number(context, "context"),
+        _whole_number(output, "output") if has_output else None,
+    )
+
+
+def _parse_limits(pairs: Sequence[str]) -> dict[str, Limit]:
+    limits: dict[str, Limit] = {}
+    for pair in pairs:
+        model_id, limit = _parse_limit(pair)
+        if model_id in limits:
+            raise OpencodeError(f"--limit for model {model_id!r} was given twice")
+        limits[model_id] = limit
+    return limits
+
+
+def _check_limits(limits: Mapping[str, Limit], models: Mapping[str, str]) -> None:
+    for model_id, limit in limits.items():
+        if model_id not in models.values():
+            raise OpencodeError(f"--limit model {model_id!r} is not one of the profile's models")
+        for what, size in (("context", limit.context), ("output", limit.output)):
+            if size is not None and not 1 <= size <= MAX_LIMIT:
+                raise OpencodeError(_size_rule(what))
+        if limit.output is not None and limit.output >= limit.context:
+            raise OpencodeError(f"--limit for {model_id!r}: output must be smaller than context")
+
+
 def _checked_profile(
     preset: str,
     base_url: str | None,
@@ -188,24 +257,63 @@ def _checked_profile(
     return Profile("litellm", url, _check_key_env(key_env), models)
 
 
+def _with_limits(profile: Profile, limits: Mapping[str, Limit]) -> Profile:
+    """`profile` with these limits, once they pass the rules."""
+    if limits and profile.preset != "litellm":
+        raise OpencodeError("--limit needs --preset litellm: OpenCode's own catalog has the limits")
+    _check_limits(limits, profile.models)
+    return replace(profile, limits=limits)
+
+
 def make_profile(
-    preset: str, base_url: str | None, key_env: str | None, model_pairs: Sequence[str]
+    preset: str,
+    base_url: str | None,
+    key_env: str | None,
+    model_pairs: Sequence[str],
+    limit_pairs: Sequence[str] = (),
 ) -> Profile:
     """The checked profile for `setup`'s flags, or an OpencodeError saying what to change."""
-    return _checked_profile(preset, base_url, key_env, _parse_models(model_pairs), from_file=False)
+    models, limits = _parse_models(model_pairs), _parse_limits(limit_pairs)
+    return _with_limits(
+        _checked_profile(preset, base_url, key_env, models, from_file=False), limits
+    )
 
 
 def save_profile(layout: Layout, profile: Profile) -> None:
     """Write `profile.json` (no key, only the env var's name) through a temp file and a rename."""
-    document = {
+    document: dict[str, object] = {
         "format": FORMAT,
         "preset": profile.preset,
         "baseURL": profile.base_url,
         "keyEnv": profile.key_env,
         "models": dict(profile.models),
     }
+    if profile.limits:
+        document["limits"] = {model_id: limit.data() for model_id, limit in profile.limits.items()}
     text = json.dumps(document, indent=2) + "\n"
     write_atomic(layout.profile_file, text.encode("utf-8"), mode=0o600, backup=False)
+
+
+def _stored_limit(entry: object) -> Limit | None:
+    if not isinstance(entry, dict) or set(entry) - {"context", "output"}:
+        return None
+    context, output = entry.get("context"), entry.get("output")
+    if type(context) is not int or ("output" in entry and type(output) is not int):
+        return None
+    return Limit(context, output)
+
+
+def _stored_limits(stored: object) -> dict[str, Limit] | None:
+    """The limits `profile.json` holds, or None when its `limits` is not the right shape."""
+    if not isinstance(stored, dict):
+        return None
+    limits: dict[str, Limit] = {}
+    for model_id, entry in stored.items():
+        limit = _stored_limit(entry)
+        if limit is None:
+            return None
+        limits[model_id] = limit
+    return limits
 
 
 def _from_document(document: object) -> Profile | None:
@@ -228,7 +336,11 @@ def _from_document(document: object) -> Profile | None:
         return None
     for role, model_id in models.items():
         _check_model_id(role, model_id)
-    return _checked_profile(preset, base_url, key_env, dict(models), from_file=True)
+    limits = _stored_limits(document.get("limits", {}))
+    if limits is None:
+        return None
+    checked = _checked_profile(preset, base_url, key_env, dict(models), from_file=True)
+    return _with_limits(checked, limits)
 
 
 def load_profile(layout: Layout) -> Profile | None:

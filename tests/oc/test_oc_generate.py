@@ -354,3 +354,24 @@ def test_a_missing_content_folder_changes_nothing(tmp_path: Path, source: Path):
         )
     assert tree(layout.root) == before
     assert leftovers(layout) == []
+
+
+def test_a_model_with_a_limit_carries_it_and_the_others_do_not(tmp_path: Path):
+    limited = make_profile(
+        "litellm",
+        URL,
+        "GATEWAY_KEY",
+        ["lead=big", "explorer=small", "title=tiny"],
+        ["big=100000:8000", "small=50000"],
+    )
+    models = json.loads(rendered(limited, tmp_path))["providers"]["litellm"]["models"]
+    assert models == {
+        "big": {"name": "big", "limit": {"context": 100000, "output": 8000}},
+        "small": {"name": "small", "limit": {"context": 50000}},
+        "tiny": {"name": "tiny"},
+    }
+
+
+def test_a_profile_without_limits_renders_plain_models(tmp_path: Path):
+    models = json.loads(rendered(LITELLM, tmp_path))["providers"]["litellm"]["models"]
+    assert models == {"big": {"name": "big"}, "small": {"name": "small"}}

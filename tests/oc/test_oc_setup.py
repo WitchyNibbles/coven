@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,13 @@ LITELLM_FLAGS = [
     "--model",
     "title=small",
 ]
+
+
+LIMIT_FLAGS = ["--limit", "big=100000:8000", "--limit", "small=50000"]
+NO_LIMIT_WARNING = (
+    "warning: no limit for big, small: OpenCode assumes 200000 tokens of context "
+    "(add --limit ID=CONTEXT[:OUTPUT] to the setup flags)"
+)
 
 
 @pytest.fixture
@@ -63,6 +71,7 @@ def test_setup_writes_config_profile_and_plugin(
         "explorer: small",
         "final-reviewer: big",
         "title: small",
+        NO_LIMIT_WARNING,
         "next: coven opencode doctor",
     ]
 
@@ -73,7 +82,8 @@ def test_setup_names_the_missing_superpowers_on_one_warning_line(
     install_superpowers(claude_plugins, superpowers.SKILLS[:2])
     assert setup(*LITELLM_FLAGS) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[-2:] == [
+    assert lines[-3:] == [
+        NO_LIMIT_WARNING,
         "warning: superpowers skills not found: test-driven-development, systematic-debugging, "
         "verification-before-completion, using-git-worktrees, finishing-a-development-branch, "
         "executing-plans (install the superpowers plugin in Claude Code, "
@@ -120,7 +130,12 @@ def test_no_profile_and_no_flags_fails(home: Path, capsys: pytest.CaptureFixture
 
 @pytest.mark.parametrize(
     "flags",
-    [["--model", "lead=x"], ["--base-url", "http://h/v1"], ["--key-env", "GATEWAY_KEY"]],
+    [
+        ["--model", "lead=x"],
+        ["--base-url", "http://h/v1"],
+        ["--key-env", "GATEWAY_KEY"],
+        ["--limit", "x=1000"],
+    ],
 )
 def test_flags_without_a_preset_fail(
     home: Path, capsys: pytest.CaptureFixture[str], flags: list[str]
@@ -140,6 +155,11 @@ def test_flags_without_a_preset_fail(
         (["--preset", "opencode"], "--model lead=ID is required"),
         (["--preset", "opencode", "--model", "boss=x"], "unknown role"),
         (["--preset", "opencode", "--key-env", "K", "--model", "lead=x"], "takes no --key-env"),
+        (["--preset", "opencode", "--model", "lead=x", "--limit", "x=1000"], "--limit needs"),
+        ([*LITELLM_FLAGS, "--limit", "nope=1000"], "not one of the profile's models"),
+        ([*LITELLM_FLAGS, "--limit", "big=0"], "positive whole number"),
+        ([*LITELLM_FLAGS, "--limit", "big=1000:1000"], "output must be smaller than context"),
+        ([*LITELLM_FLAGS, "--limit", "big=1000", "--limit", "big=2000"], "given twice"),
     ],
 )
 def test_input_errors_exit_one(
@@ -185,3 +205,63 @@ def test_setup_refuses_a_key_env_that_is_an_opencode_setting(
     assert "OPENCODE_API_KEY" in error
     assert "CONFIG_CONTENT" not in error
     assert not home.exists()
+
+
+def test_limits_reach_the_config_the_profile_and_the_summary(
+    home: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert setup(*LITELLM_FLAGS, *LIMIT_FLAGS) == 0
+    config = json.loads((home / "config" / "opencode" / "opencode.jsonc").read_text())
+    assert config["providers"]["litellm"]["models"] == {
+        "big": {"name": "big", "limit": {"context": 100000, "output": 8000}},
+        "small": {"name": "small", "limit": {"context": 50000}},
+    }
+    assert json.loads((home / "profile.json").read_text())["limits"] == {
+        "big": {"context": 100000, "output": 8000},
+        "small": {"context": 50000},
+    }
+    lines = capsys.readouterr().out.splitlines()
+    first = lines.index("title: small") + 1
+    assert lines[first : first + 2] == [
+        "limit big: 100000 context, 8000 output",
+        "limit small: 50000 context",
+    ]
+    assert not any(line.startswith("warning: no limit") for line in lines)
+
+
+def test_a_partial_limit_warns_only_for_the_model_without_one(
+    home: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert setup(*LITELLM_FLAGS, "--limit", "big=100000") == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "limit big: 100000 context" in lines
+    assert [line for line in lines if line.startswith("warning: no limit")] == [
+        "warning: no limit for small: OpenCode assumes 200000 tokens of context "
+        "(add --limit ID=CONTEXT[:OUTPUT] to the setup flags)"
+    ]
+
+
+def test_rerun_without_flags_keeps_the_limits(home: Path, capsys: pytest.CaptureFixture[str]):
+    assert setup(*LITELLM_FLAGS, *LIMIT_FLAGS) == 0
+    first = snapshot(home)
+    capsys.readouterr()
+    assert setup() == 0
+    assert snapshot(home) == first
+    assert "limit big: 100000 context, 8000 output" in capsys.readouterr().out
+
+
+def test_setup_with_flags_replaces_the_stored_limits(home: Path):
+    assert setup(*LITELLM_FLAGS, *LIMIT_FLAGS) == 0
+    assert setup(*LITELLM_FLAGS, "--limit", "small=4096") == 0
+    assert json.loads((home / "profile.json").read_text())["limits"] == {"small": {"context": 4096}}
+
+
+def test_the_opencode_preset_prints_no_limit_lines_or_warning(
+    home: Path, capsys: pytest.CaptureFixture[str]
+):
+    assert setup("--preset", "opencode", "--model", "lead=big") == 0
+    assert not [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith(("limit", "warning: no limit"))
+    ]

@@ -16,6 +16,7 @@ from coven.opencode.checks_runtime import (
     config_check,
     coven_root_check,
     key_check,
+    limits_check,
     paths_check,
     project_config_check,
     runtime_check,
@@ -39,6 +40,7 @@ CHECKS: Final[tuple[tuple[str, Check], ...]] = (
     ("coven root", coven_root_check),
     ("project config", project_config_check),
     ("superpowers", superpowers_check),
+    ("limits", limits_check),
 )
 
 

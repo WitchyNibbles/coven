@@ -278,3 +278,130 @@ def test_load_applies_the_opencode_rules_of_setup(tmp_path: Path, change: dict[s
     assert str(Layout(tmp_path).profile_file) in message
     assert "re-run coven opencode setup" in message
     assert "sk-live-abc123" not in message
+
+
+# limits
+
+LITELLM_MODELS = ["lead=big", "explorer=small"]
+
+
+def limited(*limits: str) -> Profile:
+    return make_profile("litellm", LITELLM_URL, "GATEWAY_KEY", LITELLM_MODELS, limits)
+
+
+def refused_limit(*limits: str, preset: str = "litellm") -> str:
+    url, key = (LITELLM_URL, "GATEWAY_KEY") if preset == "litellm" else (None, None)
+    with pytest.raises(OpencodeError) as caught:
+        make_profile(preset, url, key, LITELLM_MODELS, limits)
+    return str(caught.value)
+
+
+def test_a_profile_has_no_limits_unless_given():
+    made = make_profile("litellm", LITELLM_URL, "GATEWAY_KEY", LITELLM_MODELS)
+    assert dict(made.limits) == {}
+    assert Profile("opencode", None, "OPENCODE_API_KEY", {"lead": "x"}).limits == {}
+
+
+def test_limits_are_parsed_per_model_with_an_optional_output():
+    made = limited("big=100000:8000", "small=50000")
+    assert made.limits == {"big": profile.Limit(100000, 8000), "small": profile.Limit(50000, None)}
+
+
+def test_a_model_id_may_hold_a_colon_or_an_equals_sign():
+    made = make_profile("litellm", LITELLM_URL, "K", ["lead=a:b=c"], ["a:b=c=1000:10"])
+    assert made.limits == {"a:b=c": profile.Limit(1000, 10)}
+
+
+@pytest.mark.parametrize(
+    ("limits", "phrase"),
+    [
+        (["other=1000"], "not one of the profile's models"),
+        (["big"], "MODEL=CONTEXT"),
+        (["big=0"], "positive whole number"),
+        (["big=-5"], "positive whole number"),
+        (["big=+5"], "positive whole number"),
+        (["big=12k"], "positive whole number"),
+        (["big=1.5"], "positive whole number"),
+        (["big="], "positive whole number"),
+        (["big=١٢"], "positive whole number"),
+        (["big=1000:0"], "positive whole number"),
+        (["big=1000:abc"], "positive whole number"),
+        (["big=1000:"], "positive whole number"),
+        (["big=1000:10:5"], "positive whole number"),
+        (["big=10000001"], "at most 10000000"),
+        (["big=1000:1000"], "output must be smaller than context"),
+        (["big=1000:2000"], "output must be smaller than context"),
+        (["big=1000", "big=2000"], "given twice"),
+    ],
+)
+def test_a_bad_limit_is_refused_with_the_rule(limits: list[str], phrase: str):
+    assert phrase in refused_limit(*limits)
+
+
+def test_the_largest_allowed_limit_is_accepted():
+    assert limited("big=10000000:9999999").limits["big"] == profile.Limit(10_000_000, 9_999_999)
+
+
+def test_a_limit_with_the_opencode_preset_is_refused():
+    message = refused_limit("big=1000", preset="opencode")
+    assert "--limit" in message
+    assert "litellm" in message
+
+
+def test_the_limit_error_never_echoes_the_given_value():
+    assert "sk-secret-9" not in refused_limit("big=sk-secret-9")
+    assert "sk-secret-9" not in refused_limit("big=1000:sk-secret-9")
+
+
+def test_limits_are_saved_in_profile_json_and_load_back(tmp_path: Path):
+    lay = Layout(tmp_path)
+    made = limited("big=100000:8000", "small=50000")
+    profile.save_profile(lay, made)
+    assert json.loads(lay.profile_file.read_text())["limits"] == {
+        "big": {"context": 100000, "output": 8000},
+        "small": {"context": 50000},
+    }
+    assert json.loads(lay.profile_file.read_text())["format"] == 1
+    assert profile.load_profile(lay) == made
+
+
+def test_a_profile_without_limits_writes_no_limits_key(tmp_path: Path):
+    lay = Layout(tmp_path)
+    profile.save_profile(lay, limited())
+    assert "limits" not in json.loads(lay.profile_file.read_text())
+
+
+def test_an_old_profile_file_without_limits_loads_as_no_limits(tmp_path: Path):
+    lay = Layout(tmp_path)
+    lay.profile_file.write_text(json.dumps(GOOD_LITELLM))
+    loaded = profile.load_profile(lay)
+    assert loaded is not None
+    assert dict(loaded.limits) == {}
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"other": {"context": 1000}},
+        {"big": {"context": 0}},
+        {"big": {"context": "1000"}},
+        {"big": {"context": True}},
+        {"big": {"context": 1000, "output": 1000}},
+        {"big": {"context": 1000, "output": -1}},
+        {"big": {"context": 10_000_001}},
+        {"big": {"output": 10}},
+        {"big": 1000},
+        {"big": {"context": 1000, "output": None}},
+        [],
+    ],
+)
+def test_a_bad_stored_limit_is_refused_like_the_other_fields(tmp_path: Path, limits: object):
+    message = str(loading(tmp_path, {**GOOD_LITELLM, "limits": limits}))
+    assert str(Layout(tmp_path).profile_file) in message
+    assert "re-run coven opencode setup" in message
+
+
+def test_stored_limits_with_the_opencode_preset_are_refused(tmp_path: Path):
+    document = {**GOOD_OPENCODE, "limits": {"big": {"context": 1000}}}
+    message = str(loading(tmp_path, document))
+    assert "re-run coven opencode setup" in message
