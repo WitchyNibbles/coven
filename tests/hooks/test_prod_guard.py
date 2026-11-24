@@ -4176,6 +4176,24 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-home-variable-rm-inside": bash("cd $HOME && rm -rf .claude/skills"),
         "cd-unknown-rm-inside": bash('cd "$X" && rm -rf .claude/skills'),
         "cd-unknown-rm-json": bash('cd "$X" && rm .claude.json'),
+        "write-json-backup": bash("echo {} > ~/.claude.json.backup"),
+        "write-json-bak": bash("echo x > ~/.claude.json.bak"),
+        "cp-over-json-backup": bash("cp /tmp/x ~/.claude.json.backup"),
+        "mv-json-backup": bash("mv ~/.claude.json.backup /tmp/x"),
+        "rm-json-backups-glob": bash("rm -f ~/.claude.json.*"),
+        "rm-json-backups-loose-glob": bash("rm -f ~/.claude.j*.b*"),
+        "sed-in-place-json-backup": bash("sed -i s/a/b/ ~/.claude.json.backup"),
+        "write-json-backup-tool": tool(
+            "Write", file_path=str(home() / ".claude.json.backup"), content="{}"
+        ),
+        "edit-json-backup-tool": tool(
+            "Edit", file_path=str(home() / ".claude.json.1"), old_string="a", new_string="b"
+        ),
+        "cd-home-rm-json-backup": bash("cd ~ && rm .claude.json.backup"),
+        "cd-home-rm-json-backups-glob": bash("cd ~ && rm .claude.json.*"),
+        "cd-unknown-rm-json-backup": bash('cd "$X" && rm .claude.json.backup'),
+        "cd-unknown-rm-json-backups-glob": bash('cd "$X" && rm .claude.json.*'),
+        "write-json-backup-in-folder": bash("echo x > ~/.claude/.claude.json.backup"),
         "cd-home-sed-in-place": bash("cd ~ && sed -i s/a/b/ .claude/CLAUDE.md"),
         "cd-home-touch": bash("cd ~ && touch .claude/x"),
         "cd-home-mkdir": bash("cd ~ && mkdir -p .claude/x"),
@@ -4534,7 +4552,14 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-cache-rm": bash("cd ~/.cache && rm -rf x"),
         "write-cache-tool": tool("Write", file_path=f"{user}/.cache/x", content="x"),
         "write-backup": bash("echo x > ~/.claude-backup/x"),
-        "write-json-lookalike": bash("echo x > ~/.claude.json.bak"),
+        "write-json-lookalike": bash("echo x > ~/.claude.json-x"),
+        "write-json-prefix-lookalike": bash("echo x > ~/.claude.jsonl"),
+        "read-json-backup": bash("cat ~/.claude.json.backup"),
+        "grep-json-backups": bash("grep -c x ~/.claude.json.*"),
+        "list-json-backups": bash("ls -la ~/.claude.json.* | head"),
+        "cd-home-list-json-backups": bash("cd ~ && ls .claude.json.*"),
+        "read-tool-json-backup": tool("Read", file_path=f"{user}/.claude.json.backup"),
+        "rm-other-dotfile-glob": bash("rm -f ~/.cache/*.bak"),
         "write-worktree-tool": tool("Write", file_path=f"{worktree}/f.py", content="x"),
         "edit-worktree-tool": tool(
             "Edit", file_path=f"{worktree}/f.py", old_string="a", new_string="b"

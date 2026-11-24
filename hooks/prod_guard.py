@@ -113,6 +113,7 @@ approvals, the restricted refusal and a verdict), so the two cannot disagree.
 """
 
 import fnmatch
+import functools
 import importlib
 import ipaddress
 import logging
@@ -321,6 +322,8 @@ LINE_CONTINUATION = "\\\n"
 # inside a word (\v, \x1c) and on a newline, which makes `--version` a second command.
 LINE_BLANKS = re.compile(r"[ \t]+")
 GLOB_CHARS = frozenset("*?[")
+# One unit of a glob: a `[...]` class, a backslash escape, or any other character.
+GLOB_UNIT = re.compile(r"\[[!^]?\]?[^\]]*\]|\\.|.", re.DOTALL)
 # Remote CLIs whose host a restricted session must write out in the command, and their
 # names as whole words, for a text a shell reads from stdin.
 REMOTE_CLIS = frozenset(
@@ -2196,6 +2199,8 @@ class _Zone(NamedTuple):
     writes_inside: bool = False  # a changed word inside it counts, not only a root or its holder
     own_folders: bool = False  # the session may write in its own scratch folders inside it
     own: tuple[_Own, ...] = ()  # those folders, for one call (`_with_own`)
+    # Files whose siblings `<file>.<anything>` (a backup: `~/.claude.json.backup`) are in it too.
+    siblings: tuple[Path, ...] = ()
 
 
 def _store_zone(store: Path) -> _Zone:
@@ -2285,6 +2290,7 @@ def _claude_folder_zone() -> _Zone:
         shell_reads=True,
         writes_inside=True,
         own_folders=True,
+        siblings=files,
     )
 
 
@@ -2392,8 +2398,51 @@ def _glob_in_own(word: str, base: str, zone: _Zone) -> bool:
 
 
 def _glob_hits(word: str, base: str, zone: _Zone, roots: Sequence[tuple[str, ...]]) -> bool:
-    """`_glob_reaches`, but for a glob that stays in an own scratch folder (`_glob_in_own`)."""
-    return _glob_reaches(word, base, roots) and not _glob_in_own(word, base, zone)
+    """`_glob_reaches`, or one that can match a sibling of a zone file (`_glob_reaches_sibling`);
+    but not for a glob that stays in an own scratch folder (`_glob_in_own`)."""
+    reaches = _glob_reaches(word, base, roots) or _glob_reaches_sibling(word, base, zone)
+    return reaches and not _glob_in_own(word, base, zone)
+
+
+def _glob_reaches_sibling(word: str, base: str, zone: _Zone) -> bool:
+    """Whether a glob word can match a sibling of a zone file (`~/.claude.json.*`), or a path
+    inside one: its folder parts match the file's folder and the next part can start with the
+    file's name and a dot (`_can_start_with`)."""
+    pattern = Path(
+        os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(word))))
+    ).parts
+    for file in zone.siblings:
+        folder = Path(os.path.realpath(file.parent)).parts
+        if len(pattern) > len(folder) and all(
+            fnmatch.fnmatchcase(name, part) for name, part in zip(folder, pattern, strict=False)
+        ):
+            if _can_start_with(pattern[len(folder)], f"{file.name}."):
+                return True
+    return False
+
+
+def _can_start_with(pattern: str, prefix: str) -> bool:
+    """Whether some name that starts with `prefix` matches the glob `pattern` (read as fnmatch
+    reads it: a leading `*` can match a dot)."""
+    units = GLOB_UNIT.findall(pattern)
+
+    @functools.cache
+    def extends(at: int, done: int) -> bool:
+        if done == len(prefix):
+            return True
+        if at == len(units):
+            return False
+        unit = units[at]
+        if unit == "*":
+            return extends(at + 1, done) or extends(at, done + 1)
+        char = prefix[done]
+        if len(unit) == 2 and unit[0] == "\\":  # an escaped character is itself
+            matched = char == unit[1]
+        else:
+            matched = unit == "?" or fnmatch.fnmatchcase(char, unit)
+        return matched and extends(at + 1, done + 1)
+
+    return extends(0, 0)
 
 
 def _zones(store: Path) -> tuple[_Zone, ...]:
@@ -3087,7 +3136,17 @@ def _may_hold_zone(target: str, zone: _Zone) -> bool:
     if not parts:
         return True
     names = _holder_names(zone)
-    return not _has_no_literal(parts[0]) and _matches_any(names, parts[0])
+    if _has_no_literal(parts[0]):
+        return False
+    return _matches_any(names, parts[0]) or _names_sibling(parts[0], zone)
+
+
+def _names_sibling(part: str, zone: _Zone) -> bool:
+    """Whether a relative component that starts with a literal dot, as a sibling's name does,
+    can name a sibling of a zone file (`.claude.json.*`, `.claude.json.bak`)."""
+    return part.startswith(".") and any(
+        _can_start_with(part, f"{file.name}.") for file in zone.siblings
+    )
 
 
 def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
@@ -3230,11 +3289,14 @@ def _expanded_text_reaches(text: str, where: _Where, zone: _Zone, *, glob_text: 
 
 
 def _in_zone(path: str | None, zone: _Zone) -> bool:
-    """Whether a resolved path is one of the zone's roots, inside one, or ends in its suffixes; not
-    when it is one of the session's own scratch folders or inside one (`_in_own`)."""
+    """Whether a resolved path is one of the zone's roots, inside one, a sibling of a zone file
+    (`<file>.<anything>`), or ends in its suffixes; not when it is one of the session's own
+    scratch folders or inside one (`_in_own`)."""
     if path is None or _in_own(path, zone):
         return False
     if any(_inside(path, os.path.realpath(root)) for root in zone.roots):
+        return True
+    if any(path.startswith(f"{os.path.realpath(file)}.") for file in zone.siblings):
         return True
     parts = Path(path).parts
     return any(parts[-len(suffix) :] == suffix for suffix in zone.suffixes)
