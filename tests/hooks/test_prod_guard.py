@@ -4147,6 +4147,15 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "loop-substitution-redirect": bash("for f in $(ls > ~/.claude/x); do cat; done"),
         "loop-substitution-semicolon": bash("for f in $(ls; rm -rf ~/.claude/a); do cat; done"),
         "loop-over-uppercase-variable": bash("for HOME in ~/.claude/a; do ls; done"),
+        # zsh ties these to PATH, CDPATH, FPATH, MANPATH, MODULE_PATH, MAILPATH and FIGNORE.
+        **{
+            f"loop-over-zsh-{name}": bash(f"for {name} in ~/.claude/a; do ls; done")
+            for name in ("path", "cdpath", "fpath", "manpath", "module_path", "mailpath")
+        },
+        "read-into-zsh-path": bash("while read path; do ls; done < ~/.claude/list"),
+        "read-into-zsh-fpath": bash("find ~/.claude/p | while read -r fpath; do ls; done"),
+        "loop-over-fpath-upper": bash("for FPATH in ~/.claude/a; do ls; done"),
+        "read-into-fignore": bash("while read fignore; do ls; done < ~/.claude/list"),
         "cd-reader-heredoc": bash("cd ~/.claude && cat > CLAUDE.md <<EOF\nx\nEOF"),
         "cd-script": bash("cd ~/.claude && sh x.sh"),
         "cd-tee": bash("cd ~/.claude && ls | tee x"),

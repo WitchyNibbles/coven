@@ -510,11 +510,14 @@ UP_PATH = re.compile(r"(?:^|/)\.\.(?:/|$)")
 DESCRIPTOR_TARGET = re.compile(r"\d+|-")
 # A variable a read may set (a loop's, `read`'s, an assignment's): a plain name that no program
 # or the shell reads for what it does (the search path, the field separator, the home folder, a
-# start-up file, the loader), whatever its case.
+# start-up file, the loader). zsh ties a lower-case array to some of them (`path` is PATH), so
+# those count in both cases.
 PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ZSH_TIED_NAMES = ("PATH", "CDPATH", "FPATH", "MANPATH", "MODULE_PATH", "MAILPATH", "FIGNORE")
 BLOCKED_NAMES = frozenset(
     {*("PATH", "IFS", "HOME", "CDPATH", "ENV", "SHELL", "PWD", "OLDPWD", "TMPDIR", "USER")}
     | {*("PROMPT_COMMAND", "PS1", "PS2", "PS3", "PS4", "GLOBIGNORE", "FIGNORE", "MAIL", "LOGNAME")}
+    | {*ZSH_TIED_NAMES, *(name.lower() for name in ZSH_TIED_NAMES)}
 )
 BLOCKED_PREFIXES = (
     "BASH",
