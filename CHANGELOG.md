@@ -21,7 +21,7 @@
   `plugins/`: a `rm -rf ~/.claude` through broken quoting no longer gets through. Reads stay
   allowed (`cat`, `ls`, `grep`, `rg`, `find` without actions, the Read, Grep and Glob tools,
   `jq`, `cd ~/.claude && ls skills 2>/dev/null`, and a `for` loop whose body only reads), and so
-  do writes in a repo's own `.claude/worktrees/`. A read now also works behind `env VAR=x`,
+  do writes in a repo's own `.claude/worktrees/`. A read now also works behind `env LC_ALL=C`,
   `timeout`, `nice` and `command`, in a pipe through `sort`, `uniq`, `cut`, `tr`, `column` and
   the like, with output to a file outside the folder, with input from a file, inside `$(...)`, a
   `{ ...; }` group, `[ ... ]` and `find -printf`, with `cp` out of it, and when the session runs
@@ -30,7 +30,11 @@
   folders themselves. Code in python, `node`, `perl`, `ruby`, `awk` or `sqlite3` that names the
   folder, a read written to a script the same call runs, and writes to `~/.claude.json`'s
   backups stay refused; a `cd` is followed for every word, and read from the text when the scanner
-  cannot follow it (#PR).
+  cannot follow it. A write the guard cannot pin to a path (`${HOME%/}/.claude`, `$D/.claude`,
+  `~/$N`, `{.,}./x`, `~-`, `$OLDPWD`, a climb from a variable's folder), a write through `/proc`
+  or `/dev`, a read in a text that exports what its programs read (`TAR_OPTIONS`), a file naming
+  the folder written beside a command that is not a reader (`git commit`, `crontab`, `at`), and a
+  copy or unpacking into the session folder itself are refused there too (#PR).
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).

@@ -59,14 +59,19 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   zone and the body quoted, is file content. Code that an interpreter (INTERPRETERS, python) runs
   from a word, standard input or a heredoc is a read of nothing: when it names the folder, or looks
   up the home folder, the call is refused (`_interpreter_names_zone`); so is an `xargs` that runs
-  more than a reader (`_xargs_prints_only`), and a read that writes a file the same text may run
-  (`_feeds_code`). After a `cd` every word left is read from its folder (`_names_inside`), and a
+  more than a reader (`_xargs_prints_only`), a read that writes a file the same text may run, or
+  beside any command that is no reader (`_feeds_code`), and a read in a text that sets what its
+  programs read (`_arms_reads`: `export TAR_OPTIONS=...`). A written word the guard cannot pin to
+  a path fails closed when it may lead to the folder (`_writes_unpinned`: `${HOME%/}/.claude`,
+  `~/$N`, `$X/..`), and so does any write under /proc or /dev but the streams and the terminal
+  (`_through_alias`). After a `cd` every word left is read from its folder (`_names_inside`), and a
   `cd` the scanner cannot follow is read from the text (`_written_cds_clear`). `~/.claude.json`'s
   siblings (`.backup`) are in the folder's zone. `cd ~/.claude && ls skills` runs, `cd ~/.claude &&
   rm -rf skills` does not. A restricted session may write in its own scratch folders there
   (`_with_own`): its job folder, the hook's own CLAUDE_JOB_DIR right under `jobs/`, and its session
   folder beside the payload's transcript, but not that one's `subagents/`, nor the folders
-  themselves. Read, Grep and Glob stay allowed;
+  themselves, nor a copy or unpacking into the session folder itself. Read, Grep and Glob stay
+  allowed;
 - change COVEN_SESSION_ROLE (the lone `printenv COVEN_SESSION_ROLE` self-check stays allowed);
 - start `claude` (`claude --version` and `claude -v` alone excepted) or run its package;
 - run `coven approve`, `coven setup`, `coven memory adopt|init|sync`, or `coven` with a
@@ -108,7 +113,9 @@ default, since the command may run under others.
 
 Known limits of the restricted rules: a path built from strings or variables
 (`python3 -c "...'~/cov'+'en-memory'"`, `d=coven-mem; ... ~/${d}ory`, `for d in ~/.claude; do rm
--rf $d; done`, `echo ~/.claude | xargs rm -rf`) is not read.
+-rf $d; done`, `echo ~/.claude | xargs rm -rf`) is not read; in the user folder's zone a written
+`${...}`, `$X` or `$(...)` that may lead there fails closed (`_writes_unpinned`), but a plain
+`$D/x` stays allowed.
 
 Limits. The whole check has a deadline of DEADLINE seconds and each git call a timeout; past either,
 the call is refused. The guard is best effort against a session that follows its role: its rules are

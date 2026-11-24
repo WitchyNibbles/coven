@@ -248,7 +248,8 @@ approval for the exact command. With no guard set up, nothing changes for you.
   with `coven approve --revoke <id>` when the task is done.
 - **What a PM may not write.** The memory store, coven's config, and all of Claude Code's user
   folder (`~/.claude` or `CLAUDE_CONFIG_DIR`, plus `~/.claude.json`): settings, plugins, skills,
-  agents, commands. A PM may read them and may write in its own repo's `.claude/worktrees/`.
+  agents, commands. A PM may read them and may write in its own repo's `.claude/worktrees/`, and
+  in its own job folder (CLAUDE_JOB_DIR) and session folder, but not their `subagents/`.
 - **Explain.** `coven guard explain "<command>"` in your own terminal shows which targets a
   command hits, which approval covers it, and whether a PM or every session would be refused. It
   writes nothing. Inside a Claude Code session, write the command to a file and use
