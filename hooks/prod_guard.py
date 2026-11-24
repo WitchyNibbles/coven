@@ -3887,8 +3887,9 @@ def _program_only_reads(
     """Whether a command, after its wrappers (`_unwrap`), is a program that only reads: a `cd`, a
     reader of READ_COMMANDS or of the zone's `readers` that writes and runs nothing
     (`_reader_acts`), a `find` without actions, a printing `sed` (`_sed_reads`: a `-i` is no
-    print), a `read` of plain names, or a `tee` or a `cp` to a place outside the zone. No command
-    writes a file by an argument (`sort -o`) but `tee`."""
+    print), a `read` of plain names, a `tee` or a `cp` to a place outside the zone, or for a zone
+    with `shell_reads` an `xargs` that only prints (`_xargs_prints_only`). No command writes a file
+    by an argument (`sort -o`) but `tee`."""
     name = _program_name(words[0], zone)
     if BINDING.match(words[0].raw) or name is None or "/" in name:
         return False
@@ -3909,10 +3910,19 @@ def _program_only_reads(
         return True
     if name in SHELL_STRING_RUNNERS:
         return _shell_string_reads(args, zone, cwd)
+    return _acting_reader_reads(name, args, zone)
+
+
+def _acting_reader_reads(name: str, args: Sequence[_ShellWord], zone: _Zone) -> bool:
+    """Whether a reader that can also act, by its arguments, only reads: one of the zone's
+    `readers` (`_reader_acts`), `find` (`_find_acts`), a printing `sed` (`_sed_reads`) or, for a
+    zone with `shell_reads`, `xargs` (`_xargs_prints_only`)."""
     if name in zone.readers:
         return not _reader_acts(name, args)
     if name == "find":
         return not _find_acts(args)
+    if name == "xargs":
+        return zone.shell_reads and _xargs_prints_only(args, zone)
     return name == "sed" and _sed_reads(args) is not None
 
 

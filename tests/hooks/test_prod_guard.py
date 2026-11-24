@@ -4270,6 +4270,9 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "xargs-unknown-option": bash("ls -d ~/.claude/p/* | xargs -E x cat"),
         "xargs-args-file": bash("ls -d ~/.claude/p/* | xargs -a /tmp/l cat"),
         "xargs-into-folder": bash("ls -d ~/.claude/p/* | xargs grep x > ~/.claude/out"),
+        "cd-in-xargs-rm": bash("cd ~/.claude/p && grep -rl x . | xargs -r rm"),
+        "cd-in-xargs-replace": bash("cd ~/.claude/p && ls | xargs -I{} cp {} /tmp"),
+        "cd-in-xargs-into-folder": bash("cd ~/.claude/p && ls | xargs grep x > out"),
         "xargs-then-xargs-rm": bash("ls -d ~/.claude/p/* | xargs grep -l x | xargs rm"),
         "xargs-bare": bash("ls -d ~/.claude/p/* | xargs"),
         "xargs-output-run": bash(
@@ -4514,6 +4517,8 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "xargs-long-options-cat": bash("ls -d ~/.claude/p/* | xargs --null --max-args=1 cat"),
         "xargs-to-file-outside": bash("ls -d ~/.claude/p/* | xargs grep -c x > /tmp/out"),
         "xargs-then-filter": bash("ls -d ~/.claude/p/* | xargs grep -h x | sort | uniq -c"),
+        "cd-in-xargs-ls": bash("cd ~/.claude/p && grep -rl x . | xargs -r ls -t | head -3"),
+        "cd-in-xargs-stat": bash("cd ~/.claude/p && ls | xargs stat -c %y | sort | uniq -c"),
         "find-loop": bash(
             'find ~/.claude/p -name "*.jsonl" | while read f; do grep -c x "$f"; done'
         ),
