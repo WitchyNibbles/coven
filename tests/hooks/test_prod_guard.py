@@ -5077,6 +5077,41 @@ def test_a_job_variable_with_no_job_folder_still_fails_closed_when_it_climbs(
     assert run(payload, role="pm").returncode == 2
 
 
+# Writes through a path that aliases a folder: /proc/self/cwd is where the shell is.
+ALIASED_WRITES: dict[str, tuple[str, str]] = {
+    "proc-cwd-after-cd": ("cd ~/.claude && echo x > /proc/self/cwd/CLAUDE.md", "/tmp"),
+    "proc-cwd-cp": ("cd ~/.claude/skills/x && cp /tmp/e.md /proc/self/cwd/SKILL.md", "/tmp"),
+    "proc-cwd-tee": ("cd ~/.claude/agents && echo x | tee /proc/self/cwd/a.md", "/tmp"),
+    "proc-cwd-from-cwd": ("echo x > /proc/self/cwd/CLAUDE.md", "{C}"),
+    "proc-thread-self": ("cd ~/.claude && echo x > /proc/thread-self/cwd/CLAUDE.md", "/tmp"),
+    "proc-pid-root": ("echo x > /proc/1/root{C}/CLAUDE.md", "/tmp"),
+    "proc-fd": ("cd ~/.claude && exec 3<. && echo x > /proc/self/fd/3/CLAUDE.md", "/tmp"),
+    "dev-fd": ("cd ~/.claude && exec 3<. && echo x > /dev/fd/3/CLAUDE.md", "/tmp"),
+    "proc-cwd-settings": ("cd ~/.claude && echo {} > /proc/self/cwd/settings.json", "/tmp"),
+    "proc-cwd-plugins": ("cd ~/.claude/plugins && echo x > /proc/self/cwd/x", "/tmp"),
+}
+
+ALIASED_IDS = list(ALIASED_WRITES)
+
+
+@pytest.mark.parametrize("name", ALIASED_IDS)
+def test_a_write_through_a_path_that_aliases_a_folder_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in ALIASED_WRITES[name])
+    payload = bash(command, cwd=cwd)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize("device", ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"])
+def test_a_read_of_the_user_folder_may_print_to_a_terminal_device(
+    run: Run, store: Path, device: str
+) -> None:
+    proc = run(bash(f"cat ~/.claude/CLAUDE.md > {device}"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative

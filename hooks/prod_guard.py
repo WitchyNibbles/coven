@@ -504,6 +504,10 @@ UNPINNED_EXPANSION = re.compile(r"\$|`|\{[^{}]*(?:,|\.\.)[^{}]*\}")
 EXPANSION_TEXT = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$\w+|\$.|[{},]")
 # A written word's leading current folder, which the guard knows where the text's `cd`s go.
 CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
+# Folders whose paths stand for others (`/proc/self/cwd`, `/dev/fd/3`), and the files in them a
+# write may still go to: a stream or the terminal.
+ALIAS_FOLDERS = ("/proc", "/dev")
+DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
 # A brace expansion (`{a,b}`, `{1..3}`), and what `_glued_expansions` keeps in an expansion's
 # word: blanks, separators, parentheses, braces and backticks, as private-use characters.
 BRACE_LIST = re.compile(r"\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}")
@@ -3287,6 +3291,8 @@ def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
             return True
         if zone.writes_inside and current and _creates_climbing(step, current, zone):
             return True
+        if zone.writes_inside and any(_through_alias(word, current) for word in _step_writes(step)):
+            return True
         if step.moves:
             current = (_after_pinned_cd if zone.writes_inside else _after_cd)(current, step.folder)
     return zone.writes_inside and _writes_unpinned(text, cwd, zone)
@@ -3309,6 +3315,17 @@ def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
                 return True
             current = _after_pinned_cd(current, step.folder)
     return False
+
+
+def _through_alias(word: str, current: str | None) -> bool:
+    """Whether a written word, as written or as a real path, is in a folder of ALIAS_FOLDERS but
+    for a stream or a terminal (DEV_WRITABLE): `/proc/self/cwd/x` is where the shell is."""
+    base = current or os.sep
+    path = os.path.normpath(os.path.join(base, os.path.expanduser(word)))
+    if path in DEV_WRITABLE:
+        return False
+    places = (path, _resolve(word, base))
+    return any(_inside(place, folder) for place in places for folder in ALIAS_FOLDERS)
 
 
 def _step_writes(step: _Step) -> tuple[str, ...]:
@@ -3972,9 +3989,10 @@ def _outside_zone(target: str | None, zone: _Zone, cwd: str) -> bool:
 
 
 def _written_near_zone(target: str, cwd: str, zone: _Zone) -> bool:
-    """Whether a file a command writes is a word the guard does not follow that may name the zone
-    (`_unpinned_word`)."""
-    return _unpinned_word(target, os.path.realpath(cwd), zone)
+    """Whether a file a command writes may alias a folder (`_through_alias`) or is a word the guard
+    does not follow that may name the zone (`_unpinned_word`)."""
+    current = os.path.realpath(cwd)
+    return _through_alias(target, current) or _unpinned_word(target, current, zone)
 
 
 def _writes_nothing(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
