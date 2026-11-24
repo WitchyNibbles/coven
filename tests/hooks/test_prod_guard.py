@@ -5032,6 +5032,7 @@ UNPINNED_WRITES: dict[str, tuple[str, str]] = {
     "job-glued": ("rm -rf x$CLAUDE_JOB_DIR/../skills", "/tmp"),
     "job-escaped": ("cd .. && echo x > \\$CLAUDE_JOB_DIR", "{J}"),
     "job-single-quoted": ("cd .. && touch '$CLAUDE_JOB_DIR'", "{J}"),
+    "piped-heredoc-to-shell": ("cat <<'E' | sh\nrm -rf ${HOME%/}/.cl${X}aude\nE", "/srv"),
 }
 
 # Written words with an expansion that stays pinned or far from the folder, and reads.
@@ -5046,6 +5047,11 @@ PINNED_WRITES: dict[str, tuple[str, str]] = {
     "read-to-named-file": ("cat ~/.claude/CLAUDE.md > /srv/$(date +%s).md", "/tmp"),
     "python-heredoc-markdown": (
         "cd /srv/docs && python3 - <<'PY'\ns = '> `A or B`.** settled'\nPY",
+        "/srv",
+    ),
+    "python-heredoc-then-piped-substitution": (
+        "python3 - <<'PY'\ns = '> `A or B`.** settled'\nPY\n"
+        'sed -n "$(grep -n x /srv/d.md | cut -d: -f1),+4p" /srv/d.md',
         "/srv",
     ),
 }

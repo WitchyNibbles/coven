@@ -1349,6 +1349,13 @@ class _ShellWord(_Written, Protocol):
     def end(self) -> int: ...
 
 
+class _Heredoc(Protocol):
+    """A shell_words heredoc: where its body is in the text."""
+
+    @property
+    def body(self) -> tuple[int, int]: ...
+
+
 class _SimpleCommand(Protocol):
     """A shell_words.Command: its words, its heredocs, the files it writes and its other
     redirection targets, whether it writes a file at all, and whether a pipe joins it to another
@@ -1358,7 +1365,7 @@ class _SimpleCommand(Protocol):
     def words(self) -> list[_ShellWord]: ...
 
     @property
-    def heredocs(self) -> list[object]: ...
+    def heredocs(self) -> list[_Heredoc]: ...
 
     @property
     def redirect_targets(self) -> list[str | None]: ...
@@ -3309,11 +3316,10 @@ def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether a text writes a word the guard does not follow that may name the zone
     (`_may_name_zone`), or one whose leading current folder, written out (`_pinned`), is a holder
     of the zone or in it, or goes by such a `cd` to a write. Its command substitutions and brace
-    expansions stay in their words (`_glued_expansions`); heredoc bodies read as text or code
-    (`_text_bodies`: python's, `cat`'s) are no commands of the text."""
+    expansions stay in their words (`_glued_expansions`), and its heredoc bodies read as text or
+    code are no commands of it (`_without_text_bodies`)."""
     current: str | None = cwd
-    found = _text_bodies(text)
-    shell = found.rest if found is not None else text
+    shell = _without_text_bodies(text, zone)
     steps = [_restored(step) for step in _write_targets(_glued_expansions(shell))]
     for index, step in enumerate(steps):
         if any(_unpinned_word(word, current, zone) for word in _step_writes(step)):
@@ -3336,6 +3342,23 @@ def _through_alias(word: str, current: str | None) -> bool:
         return False
     places = (path, _resolve(word, base))
     return any(_inside(place, folder) for place in places for folder in ALIAS_FOLDERS)
+
+
+def _without_text_bodies(text: str, zone: _Zone) -> str:
+    """`text` with the heredoc bodies blanked that a command in no pipe reads as text or code
+    (`_reads_body_as_text`: python's, `cat`'s); as it is when the scanner cannot follow it. A
+    piped one stays: `cat <<E | sh` runs its body."""
+    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(text, substitutions=True)
+    if commands is None:
+        return text
+    spans = [
+        heredoc.body
+        for each in commands
+        if each.words and not each.in_pipeline
+        if _reads_body_as_text(_program_name(each.words[0], zone))
+        for heredoc in each.heredocs
+    ]
+    return _blank(text, spans)
 
 
 def _step_writes(step: _Step) -> tuple[str, ...]:
