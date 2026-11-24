@@ -59,7 +59,7 @@ def _limit_lines(profile: Profile) -> list[str]:
 
 def _limit_warning(profile: Profile) -> list[str]:
     """One warning naming the litellm models that have no limit; nothing for any other preset."""
-    missing = [model_id for model_id in profile.model_ids if model_id not in profile.limits]
+    missing = profile.unlimited
     if profile.preset != "litellm" or not missing:
         return []
     return [

@@ -125,6 +125,11 @@ class Profile:
         return sorted({self.model(role) for role in ROLES})
 
     @property
+    def unlimited(self) -> tuple[str, ...]:
+        """The model ids in `model_ids` that have no limit."""
+        return tuple(model_id for model_id in self.model_ids if model_id not in self.limits)
+
+    @property
     def provider_id(self) -> str:
         return self.preset
 

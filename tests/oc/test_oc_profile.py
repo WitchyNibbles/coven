@@ -307,6 +307,12 @@ def test_limits_are_parsed_per_model_with_an_optional_output():
     assert made.limits == {"big": profile.Limit(100000, 8000), "small": profile.Limit(50000, None)}
 
 
+def test_unlimited_lists_the_models_without_a_limit_in_model_id_order():
+    assert limited().unlimited == ("big", "small")
+    assert limited("small=50000").unlimited == ("big",)
+    assert limited("big=100000", "small=50000").unlimited == ()
+
+
 def test_a_model_id_may_hold_a_colon_or_an_equals_sign():
     made = make_profile("litellm", LITELLM_URL, "K", ["lead=a:b=c"], ["a:b=c=1000:10"])
     assert made.limits == {"a:b=c": profile.Limit(1000, 10)}

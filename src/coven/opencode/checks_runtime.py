@@ -179,7 +179,7 @@ def limits_check(ctx: Context) -> Outcome:
         return Outcome("warn", ctx.profile_note or "no profile yet", SETUP)
     if ctx.profile.preset != "litellm":
         return Outcome("ok", "the opencode preset: OpenCode's own catalog holds the limits")
-    missing = [id_ for id_ in ctx.profile.model_ids if id_ not in ctx.profile.limits]
+    missing = ctx.profile.unlimited
     if not missing:
         return Outcome("ok", f"{len(ctx.profile.model_ids)} models, each with a limit")
     return Outcome(
