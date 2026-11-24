@@ -2283,11 +2283,12 @@ def _host_problem(command: str, depth: int = 0) -> _HostProblem | None:
 
 
 class _Own(NamedTuple):
-    """A session's own scratch folder inside a zone (its real path), and the names right below it
-    that stay the zone's (a session folder's `subagents`)."""
+    """A session's own scratch folder inside a zone (its real path), the names right below it
+    that stay the zone's (a session folder's `subagents`), and whether it is the job folder."""
 
     folder: str
     kept: tuple[str, ...] = ()
+    job: bool = False
 
 
 class _Zone(NamedTuple):
@@ -2413,7 +2414,7 @@ def _job_folder(folders: Iterable[Path]) -> _Own | None:
         return None
     real = Path(os.path.realpath(value))
     if any(real.parent == Path(os.path.realpath(folder / JOBS_FOLDER)) for folder in folders):
-        return _Own(str(real))
+        return _Own(str(real), job=True)
     return None
 
 
@@ -2507,8 +2508,8 @@ def _job_written_out(call: Call, zone: _Zone) -> Call:
     """A Bash call with its `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` that the shell expands
     (`_job_references`) written as the job folder, when the zone has one (`_with_own`): the checks
     then follow a `cd` there and see what a path leaves it for."""
-    job = _job_folder(_claude_folders())
-    if call.bash is None or job is None or job not in zone.own:
+    job = next((own for own in zone.own if own.job), None)
+    if call.bash is None or job is None:
         return call
     command = call.bash.command
     for start, end in reversed(_job_references(command)):
