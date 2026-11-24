@@ -5367,8 +5367,9 @@ def _literal_loops(command: str) -> dict[str, list[str]]:
 def _loop_name_kept(command: str, name: str) -> bool:
     """Whether a loop variable's name is a LOOP_NAME the shell sets no value of itself, which a
     Bash text assigns nowhere (`NAME=`, `NAME+=`, `NAME[1]=`)."""
-    assigned = re.search(rf"(?<![\w$]){name}(?:\[[^\]]*\])?\+?=", command)
-    return bool(LOOP_NAME.fullmatch(name)) and name not in SHELL_SET_NAMES and not assigned
+    if not LOOP_NAME.fullmatch(name) or name in SHELL_SET_NAMES:
+        return False
+    return not re.search(rf"(?<![\w$]){name}(?:\[[^\]]*\])?\+?=", command)
 
 
 def _loop_value(word: _ShellWord) -> str | None:
