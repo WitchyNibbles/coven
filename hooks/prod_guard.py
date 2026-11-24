@@ -663,6 +663,7 @@ CHANGES_OPERANDS = frozenset(
     {"rm", "rmdir", "unlink", "mv", "ln", "chmod", "chown", "chgrp", "truncate", "shred", "tee"}
 )
 CHANGES_DESTINATION = frozenset({"cp", "install", "rsync"})
+STANDARD_INPUT = re.compile(r"-|/dev/stdin|/dev/fd/0|/proc/[^/]+/fd/0")
 TARGET_DIRECTORY = re.compile(r"(?:-t|--target-directory=?)(.*)")
 OUTPUT_REDIRECT = re.compile(r"\d*>>?\|?(.*)")
 FIND_ACTIONS = frozenset(
@@ -4702,8 +4703,27 @@ def _runs_code_from_file(each: _SimpleCommand, zone: _Zone) -> bool:
 
 def _writes_text(each: _SimpleCommand, zone: _Zone) -> bool:
     """Whether a simple command writes a file (not /dev/null) with text it was given or read: any
-    writer but code that runs (`_runs_code_from_file`: its output is its own)."""
+    writer but code that runs (`_runs_code_from_file`: its output is its own), and a copy of
+    what the text feeds it (`_copies_input`)."""
+    if _copies_input(each):
+        return True
     return each.writes and (_writes_for_many(each) or not _runs_code_from_file(each, zone))
+
+
+def _copies_input(each: _SimpleCommand) -> bool:
+    """Whether a copy (CHANGES_DESTINATION: `cp`, `install`, `rsync`) may write what the text
+    gives it: it is fed a heredoc, a here-string, a file or a pipe, or copies standard input
+    (STANDARD_INPUT: `/dev/stdin`, `/proc/self/fd/0`, `-`)."""
+    words = _proper_words(each.words)
+    if not words or _basename(words[0].value or "") not in CHANGES_DESTINATION:
+        return False
+    fed = (
+        bool(each.heredocs)
+        or each.after_pipe
+        or bool(each.input_files)
+        or any(not DESCRIPTOR_TARGET.fullmatch(target or "") for target in each.redirect_inputs)
+    )
+    return fed or any(STANDARD_INPUT.fullmatch(word.value or "") for word in words[1:])
 
 
 def _writes_for_many(each: _SimpleCommand) -> bool:

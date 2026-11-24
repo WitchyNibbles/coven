@@ -5589,6 +5589,46 @@ def test_a_two_operand_cd_then_a_read_or_a_far_write_runs(
     assert proc.returncode == 0, proc.stderr
 
 
+# --- a copy of what the text feeds it writes that text: a script the same call may run ---
+
+COPIED_SCRIPTS: dict[str, str] = {
+    "sh": "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nsh /tmp/s",
+    "unnamed": "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.cl''aude/skills\nE\nsh /tmp/s",
+    "python": "cp /dev/stdin /tmp/s.py <<'E'\nimport shutil\nshutil.rmtree('~/.claude/skills')\nE\n"
+    "python3 /tmp/s.py",
+    "proc-fd": "cp /proc/self/fd/0 /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nsh /tmp/s",
+    "dev-fd": "cp /dev/fd/0 /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nbash /tmp/s",
+    "run-by-path": "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\n"
+    "chmod +x /tmp/s; /tmp/s",
+    "git-hook": "cp /dev/stdin /tmp/r/.git/hooks/pre-commit <<'E'\nrm -rf ~/.claude/skills\nE\n"
+    "git -C /tmp/r commit --allow-empty -m x",
+    "here-string": "cp /dev/stdin /tmp/s <<< 'rm -rf ~/.claude/skills'; sh /tmp/s",
+    "install": "install /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nsh /tmp/s",
+}
+COPIED_IDS = list(COPIED_SCRIPTS)
+
+
+@pytest.mark.parametrize("name", COPIED_IDS)
+def test_a_script_copied_from_the_text_and_run_is_no_read(run: Run, store: Path, name: str) -> None:
+    payload = bash(COPIED_SCRIPTS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp /dev/stdin /tmp/n <<'E'\nnotes on ~/.claude\nE\ncat /tmp/n",
+        "cp ~/.claude/CLAUDE.md /tmp/c.md; ls /tmp",
+        "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE",
+    ],
+    ids=["copied-then-read", "copy-out", "copied-not-run"],
+)
+def test_a_copy_beside_reads_only_still_reads(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
