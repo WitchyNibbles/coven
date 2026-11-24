@@ -10,7 +10,8 @@ from test_skills_text import cited_invocations, unknown_parts
 from coven import settings
 
 README = REPO / "README.md"
-DOCS = (README, REPO / "docs/known-gaps.md", REPO / "CHANGELOG.md")
+OPENCODE_README = REPO / "opencode/README.md"
+DOCS = (README, REPO / "docs/known-gaps.md", REPO / "CHANGELOG.md", OPENCODE_README)
 
 
 def readme() -> str:
@@ -37,7 +38,7 @@ def github_slug(heading: str) -> str:
     return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
 
 
-@pytest.mark.parametrize("doc", DOCS, ids=lambda path: path.name)
+@pytest.mark.parametrize("doc", DOCS, ids=lambda path: str(path.relative_to(REPO)))
 def test_relative_links_resolve(doc: Path) -> None:
     text = doc.read_text(encoding="utf-8")
     links = re.findall(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)", text)
@@ -310,3 +311,34 @@ def test_the_changelog_lists_the_guard_work_as_unreleased() -> None:
         "coven memory init",
     ):
         assert needle in entry, needle
+
+
+def test_the_readme_says_how_to_run_on_opencode() -> None:
+    text = readme()
+    headings = re.findall(r"^#+ +(.+)$", text, re.MULTILINE)
+    assert any("OpenCode" in heading for heading in headings)
+    assert "opencode/README.md#install" in text
+    assert "works with Claude Code only" not in text
+
+
+def test_the_opencode_install_section_names_what_a_newcomer_needs() -> None:
+    body = section(OPENCODE_README.read_text(encoding="utf-8"), "Install")
+    for needle in (
+        "3.12",
+        "npm",
+        "git clone",
+        "bin/coven",
+        "covenRoot",
+        "superpowers",
+        "/v1",
+        "docs/known-gaps.md",
+        "opencode-harness",
+    ):
+        assert needle in body, needle
+
+
+def test_known_gaps_covers_opencode() -> None:
+    text = known_gaps()
+    assert "Only Claude Code is supported." not in text
+    headings = re.findall(r"^## +(.+)$", text, re.MULTILINE)
+    assert any("OpenCode" in heading for heading in headings)

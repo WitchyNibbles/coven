@@ -15,6 +15,70 @@ Setup also copies coven's skills, role agents, commands and routing (`opencode/c
 from the Claude Code content by `python -m coven.opencode.content`) and the deny-secrets guard,
 described below.
 
+## Install
+
+You do not need Claude Code. You need:
+
+- Linux or WSL 2. That is what was tested; macOS is untested on OpenCode.
+- Python 3.12 or later as `python3`, and `git`.
+- Node.js with `npm` (tested with Node 24.18.0 and npm 11.16.0; no minimum version is pinned).
+  `coven opencode install` runs npm to fetch the npm package `@opencode/cli` at 2.3.2 into the
+  profile. Without npm it stops with "npm not found on PATH".
+- A gateway that serves an OpenAI-compatible API, and a key for it in an environment variable. Or
+  the `opencode` preset, which reads `OPENCODE_API_KEY` (see Commands below).
+
+The steps, as rehearsed on a clean HOME on 2026-11-24:
+
+```sh
+git clone https://github.com/WitchyNibbles/coven.git ~/coven
+ln -s ~/coven/bin/coven ~/.local/bin/coven     # any folder on PATH; bin/coven works through a symlink
+coven opencode install
+coven opencode setup --preset litellm --base-url https://gateway.example/v1 --key-env GATEWAY_API_KEY --model lead=MODEL_ID
+coven opencode doctor
+coven opencode run
+```
+
+`doctor` prints one line per check and exits 1 when one failed. `coven opencode run` with no
+arguments opens the TUI. A headless run is `coven opencode run -- run "prompt"`; it cannot use
+shell, because shell asks first and a headless run rejects the ask (see Commands below). To use
+OpenCode's own models instead of a gateway, pass `--preset opencode` to `setup` and set
+`OPENCODE_API_KEY`.
+
+**Run coven from a git checkout.** A wheel install (`pip install`, or `uv tool install` without
+`-e`) ships only `src/` (`only-include = ["src"]` in `pyproject.toml`), so setup cannot find
+`opencode/` and `hooks/`. Do not use `coven setup --shim` here: the shim it writes looks up Claude
+Code's coven plugin and exits with "plugin coven@coven is not installed".
+
+**Moving the clone.** Setup writes the checkout's path into `opencode.jsonc` as the plugin option
+`covenRoot`. If you move or delete the clone, `doctor`'s `coven root` check fails, and the
+plugin's deny-secrets guard cannot start `hooks/deny_secrets.py`. The guard fails closed, so the
+tools it covers are refused. Run `coven opencode setup` from the new place; with no flags it
+regenerates from `profile.json`.
+
+**The base URL.** `--base-url` is the URL the gateway serves the OpenAI-compatible API under; for a
+LiteLLM proxy that usually ends in `/v1`. Coven drops one trailing `/` and hands the rest to
+OpenCode as given, and OpenCode appends `/chat/completions`. Setup prints a warning when the URL
+does not end in `/v1`. It refuses a URL that carries credentials, a query or a fragment; the key
+comes from the `--key-env` variable.
+
+**Superpowers.** Setup copies eight superpowers skills (listed under `setup` in Commands below)
+from Claude Code's superpowers plugin, which it finds through Claude Code's installed-plugins
+file. There is no other source for them today. Without that plugin, setup prints one warning, adds
+a note to `AGENTS.md`, and `doctor`'s `superpowers` check warns. The routing still names those
+skills, so a step that loads one is skipped.
+
+**Memory.** `AGENTS.md` points at your memory store when the folder in `memory_path` of
+`~/.config/coven/config.json` exists (default `~/coven-memory`; `coven memory init` creates it).
+With no such folder, one line says there is none.
+
+**opencode-harness** (the team's per-repo setup on OpenCode 1.18.x) is a different thing: it
+installs into a repo's `.opencode/`, which coven's profile ignores
+(`OPENCODE_DISABLE_PROJECT_CONFIG=1`), and it does not load coven. Use the harness in the team's
+repos and coven for your own profile on 2.3.2.
+
+What this setup does not cover is in the OpenCode section of
+[docs/known-gaps.md](../docs/known-gaps.md#opencode).
+
 ## The profile
 
 The profile folder `P` is `$XDG_DATA_HOME/coven/opencode`, which is `~/.local/share/coven/opencode`

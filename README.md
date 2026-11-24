@@ -21,7 +21,7 @@
 
 [Install](#install) ⋆ [Setup](#setup) ⋆ [Walkthrough](#walkthrough-the-toy-project) ⋆
 [Hierarchy](#the-hierarchy-and-what-it-costs) ⋆ [Code standard](#the-code-standard) ⋆
-[Production guard](#production-guard) ⋆ [Known gaps](#known-gaps)
+[Production guard](#production-guard) ⋆ [On OpenCode](#on-opencode) ⋆ [Known gaps](#known-gaps)
 
 </div>
 
@@ -33,7 +33,8 @@ A Claude Code plugin for building software with agents. It packs one working met
   session per project;
 - a small shared memory store (a git repo of short notes) that every session reads when it starts.
 
-It works with Claude Code only. This is version 0.1.0; its rough edges are listed in
+It is built for Claude Code, and part of it also runs on OpenCode 2.3.2 (see
+[On OpenCode](#on-opencode)). This is version 0.1.0; its rough edges are listed in
 [docs/known-gaps.md](docs/known-gaps.md).
 
 ## Requirements
@@ -51,6 +52,7 @@ It works with Claude Code only. This is version 0.1.0; its rough edges are liste
   remote is private.
 - `uv`: only to run the code standard's checks in a Python repo. A TypeScript repo needs `node` and
   its package manager instead.
+- For OpenCode: `node` and `npm` (see [opencode/README.md](opencode/README.md#install)).
 - Linux, macOS or WSL 2. Native Windows is untested.
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
@@ -294,6 +296,22 @@ It reads `coven pm status` and writes only `~/.cache/aquelarre/`. See
 3. Delete what is left of `~/.config/coven` and, if you want, the memory store (`~/coven-memory` or
    the path you chose). The store is your notes: copy out what you keep first. Logs live in
    `${XDG_CACHE_HOME:-~/.cache}/coven`.
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
+
+## On OpenCode
+
+⋆ `coven opencode` sets up its own pinned OpenCode 2.3.2 in a separate profile under
+`~/.local/share/coven/opencode`. It never touches your own OpenCode config. The profile ships
+coven's skills, the four role agents, the routing, the deny-secrets guard and the `await_agents`
+tool (a lead agent waits in it for its subagents' reports).
+
+Not on OpenCode yet: the GM/PM hierarchy and the production guard, which are planned for it. Aquelarre
+is not there either.
+
+You do not need Claude Code for this. The one thing that comes from it is the superpowers skills,
+which setup copies from Claude Code's superpowers plugin. The install steps, and what happens
+without that plugin, are in [opencode/README.md](opencode/README.md#install).
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
