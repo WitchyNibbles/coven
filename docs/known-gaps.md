@@ -170,6 +170,17 @@ store and the approvals in it.
   `s/[/]/x/`), and a quoted glob on a line with any command other than plain data commands (`ls`,
   `grep`, `cat`, a sed whose script runs nothing, `find` without actions...) or with an unquoted `$`
   (`ls '.*' $d`, `ls '.*'; git status`).
+- More false positives for the user folder, kept on purpose since they fail closed:
+  - an MCP tool's repo-relative path that names `.claude` (github's `path=".claude/CLAUDE.md"`,
+    serena's `relative_path=".claude/agents"`): the guard cannot tell the server's root, which
+    may be home. Use the Read, Grep or Edit tools with the repo's absolute path, or `gh api`.
+    Prose and web URLs (`https://...`) in an MCP string are not read this way;
+  - a quoted `"$CLAUDE_JOB_DIR/x"` in a text that sets or changes IFS (`IFS=,; read ...`): the
+    text gets no job folder at all, though a quoted word does not split;
+  - a write of a brace word past 64 words, or with a range the guard cannot work out, that may
+    name the folder, even when none of its words does (`rm -rf ~/.cl{a,b}x{1..100}`);
+  - a count through a bare `xargs` (`n=$(ls ~/.claude | wc -l | xargs)`): a bare `xargs` after a
+    read of the folder is refused on its own.
 - The user folder (`~/.claude`, CLAUDE_CONFIG_DIR, `~/.claude.json`) is a zone with no `.claude`
   token, so a PM may write in a repo's own `.claude/worktrees/`, where Claude Code keeps its
   worktrees. A PM may read it in Bash with the readers (`cat`, `ls`, `grep`, `rg`, `find` without
