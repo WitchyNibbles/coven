@@ -1368,9 +1368,6 @@ class _SimpleCommand(Protocol):
     def heredocs(self) -> list[_Heredoc]: ...
 
     @property
-    def redirect_targets(self) -> list[str | None]: ...
-
-    @property
     def write_paths(self) -> list[str | None]: ...
 
     @property
@@ -2504,8 +2501,7 @@ def _glob_in_own(word: str, base: str, zone: _Zone) -> bool:
     whose kept names (`subagents`) that component cannot match."""
     if not zone.own or UP_PATH.search(word):
         return False
-    path = os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(word))))
-    parts = Path(path).parts
+    parts = _glob_parts(word, base)
     at = next((i for i, part in enumerate(parts) if GLOB_CHARS.intersection(part)), len(parts))
     if at == len(parts):
         return False
@@ -2548,16 +2544,17 @@ def _glob_reaches_sibling(word: str, base: str, zone: _Zone) -> bool:
     """Whether a glob word can match a sibling of a zone file (`~/.claude.json.*`), or a path
     inside one: its folder parts match the file's folder and the next part can start with the
     file's name and a dot (`_can_start_with`)."""
-    pattern = Path(
-        os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(word))))
-    ).parts
+    pattern = _glob_parts(word, base)
     for file in zone.siblings:
         folder = Path(os.path.realpath(file.parent)).parts
-        if len(pattern) > len(folder) and all(
-            fnmatch.fnmatchcase(name, part) for name, part in zip(folder, pattern, strict=False)
+        if (
+            len(pattern) > len(folder)
+            and all(
+                fnmatch.fnmatchcase(name, part) for name, part in zip(folder, pattern, strict=False)
+            )
+            and _can_start_with(pattern[len(folder)], f"{file.name}.")
         ):
-            if _can_start_with(pattern[len(folder)], f"{file.name}."):
-                return True
+            return True
     return False
 
 
@@ -2597,11 +2594,16 @@ def _zones(store: Path) -> tuple[_Zone, ...]:
     )
 
 
+def _glob_parts(word: str, base: str) -> tuple[str, ...]:
+    """The components of a glob word read from `base`, `~` and variables expanded."""
+    return Path(
+        os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(word))))
+    ).parts
+
+
 def _glob_reaches(word: str, cwd: str, roots: Sequence[tuple[str, ...]]) -> bool:
     """Whether a glob word can match a root, one of its parents, or a path inside it."""
-    pattern = Path(
-        os.path.normpath(os.path.join(cwd, os.path.expandvars(os.path.expanduser(word))))
-    ).parts
+    pattern = _glob_parts(word, cwd)
     for root in roots:
         depth = min(len(pattern), len(root))
         if all(fnmatch.fnmatchcase(root[i], pattern[i]) for i in range(depth)):
@@ -3344,11 +3346,18 @@ def _through_alias(word: str, current: str | None) -> bool:
     return any(_inside(place, folder) for place in places for folder in ALIAS_FOLDERS)
 
 
+def _scanned_commands(text: str) -> list[_SimpleCommand] | None:
+    """The simple commands of a text with its plain `$(...)` kept in their words
+    (shell_words.simple_commands with `substitutions`); None when the scanner cannot follow it."""
+    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(text, substitutions=True)
+    return commands
+
+
 def _without_text_bodies(text: str, zone: _Zone) -> str:
     """`text` with the heredoc bodies blanked that a command in no pipe reads as text or code
     (`_reads_body_as_text`: python's, `cat`'s); as it is when the scanner cannot follow it. A
     piped one stays: `cat <<E | sh` runs its body."""
-    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(text, substitutions=True)
+    commands = _scanned_commands(text)
     if commands is None:
         return text
     spans = [
@@ -3786,11 +3795,11 @@ def _uniq_reads(args: Sequence[_ShellWord]) -> bool:
 
 def _runs_program(name: str, args: Sequence[_ShellWord]) -> bool:
     """Whether a reader of a zone's `readers` may run a program: an option of PROGRAM_OPTIONS
-    (`rg --pre`), or a word that may expand to one (a word that starts with `~` or `/` expands to
-    a path, never an option). Only a PROGRAM_READERS command has such options."""
+    (`rg --pre`), or a word that may expand to one (`_expands_to_option`). Only a PROGRAM_READERS
+    command has such options."""
     return name in PROGRAM_READERS and (
         any(_unquoted(word.raw).startswith(PROGRAM_OPTIONS) for word in args)
-        or _may_expand([word for word in args if not word.raw.startswith(("~", "/"))])
+        or _expands_to_option(args)
     )
 
 
@@ -3833,9 +3842,9 @@ def _command_reads(
     write and run no program (`_reader_acts`), of `find` without actions and the files of a
     printing `sed` (`_sed_files`, given `folders`; for a zone with `shell_reads`, `_sed_reads`),
     the script a shell, python or node runs (`_script_word`), and for a zone with `copy_reads` the
-    sources of a copy or an archive (`_copy_sources`). A zone
-    with `shell_reads` reads past the wrappers in front of the command (`_unwrap`). The arguments
-    of a program that is run are never among them, nor an assignment (`X+=/a/b`)."""
+    sources of a copy or an archive (`_copy_sources`). A zone with `shell_reads` reads past the
+    wrappers in front of the command (`_unwrap`). The arguments of a program that is run are never
+    among them, nor an assignment (`X+=/a/b`)."""
     words = _unwrap(words, zone)
     if not words or BINDING.match(words[0].raw):
         return []
@@ -4028,13 +4037,9 @@ def _outside_zone(target: str | None, zone: _Zone, cwd: str) -> bool:
     discard: str = _shell_words().DISCARD
     if target == discard:
         return True
-    if zone.writes_inside and target is not None and _written_near_zone(target, cwd, zone):
+    if target is None or (zone.writes_inside and _written_near_zone(target, cwd, zone)):
         return False
-    return (
-        target is not None
-        and target.startswith(("/", "~/"))
-        and not _is_zone_path(target, cwd, zone)
-    )
+    return target.startswith(("/", "~/")) and not _is_zone_path(target, cwd, zone)
 
 
 def _written_near_zone(target: str, cwd: str, zone: _Zone) -> bool:
@@ -4067,7 +4072,7 @@ def _writes_nothing(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
 def _text_reads(text: str, zone: _Zone, cwd: str) -> bool:
     """Whether a command text only reads (`_reads_only`); not when the scanner cannot follow it
     (shell_words.simple_commands, with the plain `$(...)` of `Word.substitutions` read)."""
-    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(text, substitutions=True)
+    commands = _scanned_commands(text)
     return commands is not None and _reads_only(
         _bound_view(commands, _bound_paths(text, commands), zone), zone, cwd
     )
@@ -4169,7 +4174,7 @@ def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
     if head == "export":
         words = words[1:]
     if all(BINDING.match(word.raw) for word in words):
-        return all(_plain_name(word.raw.partition("=")[0].rstrip("+")) for word in words)
+        return all(map(_plain_assignment, words))
     return _program_only_reads(each, _unwrap(words, zone), zone, cwd)
 
 
@@ -4246,9 +4251,7 @@ def _only_reads_text(command: str, zone: _Zone, cwd: str) -> bool:
     sets what its programs read (`_arms_reads`)."""
     if not (zone.cd_reads or zone.loop_reads):
         return False
-    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
-        command, substitutions=True
-    )
+    commands = _scanned_commands(command)
     return (
         commands is not None
         and not _feeds_code(commands, zone, cwd)
@@ -4272,7 +4275,7 @@ def _exports_all(words: Sequence[_ShellWord]) -> bool:
     if not words or words[0].value != "set":
         return False
     values = [word.value or "" for word in words[1:]]
-    return "allexport" in values or any("a" in (_option_letters(w) or "") for w in words[1:])
+    return "allexport" in values or any("a" in (_option_letters(word) or "") for word in words[1:])
 
 
 def _sets_for_programs(words: Sequence[_ShellWord], *, exported: bool) -> bool:
@@ -4356,8 +4359,7 @@ def _feeds_code(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bo
     does not only read (`_command_only_reads`: `git commit` runs a hook, `crontab`, `at` and
     `npm run` a file's lines), but a compound command's closer (`} > f`: `_writes_for_many`),
     whose commands are judged on their own. What a read prints there, or a text names, may become
-    a script
-    (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
+    a script (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
     return (
         zone.shell_reads
         and any(_writes_text(each, zone) for each in commands)
@@ -4381,11 +4383,14 @@ def _read_runs(
 
 
 def _only_reads_value(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
-    """Whether an assignment of a plain name (`_plain_name`) has only `$(...)` that read
+    """Whether an assignment of a plain name (`_plain_assignment`) has only `$(...)` that read
     (`_substitutions_read`) in its value."""
-    return _plain_name(word.raw.partition("=")[0].rstrip("+")) and _substitutions_read(
-        word, zone, cwd
-    )
+    return _plain_assignment(word) and _substitutions_read(word, zone, cwd)
+
+
+def _plain_assignment(word: _ShellWord) -> bool:
+    """Whether an assignment (`X=...`, `X+=...`) sets a name a read may set (`_plain_name`)."""
+    return _plain_name(word.raw.partition("=")[0].rstrip("+"))
 
 
 def _binds_or_moves(each: _SimpleCommand) -> bool:
@@ -4633,9 +4638,7 @@ def _scanned_cds_clear(command: str, cwd: str, zone: _Zone) -> bool:
     """Whether each `cd` of a text is clear (`_clear_cd`): every `cd` word of the text
     (`_words_of`: one in a quote or a heredoc counts) is the command word of a `cd` of the scanned
     text, and no word has a `..` component."""
-    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
-        command, substitutions=True
-    )
+    commands = _scanned_commands(command)
     if commands is None:
         return False
     if any(UP_PATH.search(_unquoted(word.raw)) for each in commands for word in each.words):
@@ -4727,9 +4730,7 @@ def _interpreter_names_zone(command: str, zone: _Zone) -> bool:
     out of it, heredocs included (`cat <<'E' | python3 -`). Not a script file it runs, nor one
     written by `cat > FILE <<'E'` to run later. False when the scanner cannot follow the text:
     the other checks read it whole."""
-    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
-        command, substitutions=True
-    )
+    commands = _scanned_commands(command)
     if commands is None:
         return False
     return any(

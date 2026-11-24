@@ -1143,16 +1143,17 @@ def _bound_word(word: Word, paths: Mapping[str, str]) -> Word:
     end = 1
     while end < len(body) and _is_name_char(body[end]):
         end += 1
-    rest = body[end:]
+    name, rest = body[1:end], body[end:]
     if (
-        body[1:end] not in paths
-        or body[1:2].isdigit()
+        name not in paths
+        or name[:1].isdigit()
         or not all(char.isalnum() or char in HOME_PATH_MARKS for char in rest)
         or rest[:1] not in ("", "/")
     ):
         return word
-    path = paths[body[1:end]]
-    path = "~/" + path.removeprefix("$HOME/") if path.startswith("$HOME/") else path
+    path = paths[name]
+    if path.startswith("$HOME/"):
+        path = "~/" + path.removeprefix("$HOME/")
     return replace(word, raw=path + rest, value=None if path.startswith("~") else path + rest)
 
 
