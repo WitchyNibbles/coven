@@ -345,4 +345,28 @@ store and the approvals in it.
 - Windows is untested. Linux, macOS and WSL 2 are the target platforms.
 - Setup rewrites a settings file as JSON with 2-space indent, so a hand-made layout is not kept; the
   backup beside the file holds the original.
-- Only Claude Code is supported.
+- Claude Code is the main target. OpenCode 2.3.2 is partly supported through `coven opencode` (see
+  the OpenCode section below and [opencode/README.md](../opencode/README.md)); Codex is not.
+
+## OpenCode
+
+What `coven opencode` does not do, or does not know. The install steps are in
+[opencode/README.md](../opencode/README.md#install).
+
+- Context limits: OpenCode 2.3.2 assumes 200000 tokens of context and 32000 of output for a gateway
+  model with no limit set, so a model with a smaller window can overflow before OpenCode compacts.
+  Give each gateway model its real window if your version of setup offers a way to (see
+  `coven opencode setup` in opencode/README.md); otherwise use models with at least that window.
+- Every `shell` and `webfetch` call asks. A headless `opencode run` rejects the ask, so it cannot
+  use shell.
+- The GM/PM hierarchy does not run on OpenCode yet; it is planned.
+- The production guard and aquelarre are not on OpenCode. Only the deny-secrets guard runs: the
+  plugin layer and the `.env` rules.
+- The copied superpowers skills keep Claude Code's tool names in their text.
+- Superpowers skills come only from Claude Code's superpowers plugin. Without it, a step that loads
+  one is skipped.
+- Coven runs from a full copy of the repo (a git clone), not an installed wheel: `opencode/` and
+  `hooks/` must sit beside `src/`. Moving it breaks `covenRoot` and the deny-secrets guard until
+  `coven opencode setup` runs again.
+- Tested on Linux and WSL 2 with Node 24 only. No CI job installs the real OpenCode: the
+  end-to-end run needs `unshare` and a 2.3.2 binary.

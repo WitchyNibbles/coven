@@ -10,7 +10,8 @@ from test_skills_text import cited_invocations, unknown_parts
 from coven import settings
 
 README = REPO / "README.md"
-DOCS = (README, REPO / "docs/known-gaps.md", REPO / "CHANGELOG.md")
+OPENCODE_README = REPO / "opencode/README.md"
+DOCS = (README, REPO / "docs/known-gaps.md", REPO / "CHANGELOG.md", OPENCODE_README)
 
 
 def readme() -> str:
@@ -37,19 +38,32 @@ def github_slug(heading: str) -> str:
     return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
 
 
-@pytest.mark.parametrize("doc", DOCS, ids=lambda path: path.name)
+def heading_anchors(text: str) -> set[str]:
+    return {github_slug(h) for h in re.findall(r"^#+ +(.+)$", text, re.MULTILINE)}
+
+
+@pytest.mark.parametrize("doc", DOCS, ids=lambda path: str(path.relative_to(REPO)))
 def test_relative_links_resolve(doc: Path) -> None:
     text = doc.read_text(encoding="utf-8")
     links = re.findall(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)", text)
-    anchors = {github_slug(h) for h in re.findall(r"^#+ +(.+)$", text, re.MULTILINE)}
     for target in links:
         if re.match(r"[a-z][a-z0-9+.-]*:", target):  # https:, mailto:
             continue
         path, _, anchor = target.partition("#")
         if not path:
-            assert anchor in anchors, f"{doc.name}: no heading for #{anchor}"
+            assert anchor in heading_anchors(text), f"{doc.name}: no heading for #{anchor}"
             continue
-        assert (doc.parent / path).exists(), f"{doc.name}: {target} does not resolve"
+        linked = doc.parent / path
+        assert linked.exists(), f"{doc.name}: {target} does not resolve"
+        if anchor and linked.suffix == ".md":
+            found = heading_anchors(linked.read_text(encoding="utf-8"))
+            assert anchor in found, f"{doc.name}: {path} has no heading for #{anchor}"
+
+
+def test_the_link_check_looks_for_the_anchor_in_the_linked_file() -> None:
+    found = heading_anchors(OPENCODE_README.read_text(encoding="utf-8"))
+    assert "install" in found
+    assert "no-such-heading" not in found
 
 
 def readme_images() -> tuple[list[tuple[str, str]], list[str]]:
@@ -310,3 +324,85 @@ def test_the_changelog_lists_the_guard_work_as_unreleased() -> None:
         "coven memory init",
     ):
         assert needle in entry, needle
+
+
+def test_the_readme_says_how_to_run_on_opencode() -> None:
+    text = readme()
+    headings = re.findall(r"^#+ +(.+)$", text, re.MULTILINE)
+    assert any("OpenCode" in heading for heading in headings)
+    assert "opencode/README.md#install" in text
+    assert "works with Claude Code only" not in text
+
+
+def flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_the_opencode_install_section_has_each_paragraph() -> None:
+    body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Install"))
+    for needle in (
+        "Python 3.12 or later",
+        "npm not found on PATH",  # the requirement
+        "git clone",
+        "bin/coven",
+        "only `src/`",  # why a clone, not a wheel
+        "plugin coven@coven is not installed",  # why not the Claude Code shim
+        "`covenRoot`",  # moving the clone
+        "`coven root` check fails",
+        "regenerates from `profile.json`",
+        "does not end in `/v1`",  # the base URL warning
+        "a step that loads one is skipped",  # superpowers without the plugin
+        "`superpowers` check warns",
+        "memory_path",
+        "opencode-harness",
+        "installs into a repo's `.opencode/`",
+        "OPENCODE_DISABLE_PROJECT_CONFIG=1",
+        "docs/known-gaps.md",
+    ):
+        assert needle in body, needle
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", body), "the steps carry a date"
+
+
+def test_the_readme_requirements_name_node_and_npm_for_opencode() -> None:
+    body = section(readme(), "Requirements")
+    assert "For OpenCode: `node` and `npm`" in body
+    assert "opencode/README.md#install" in body
+
+
+def test_the_changelog_counts_the_superpowers_skills_setup_copies() -> None:
+    text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = flat(text.split("## Unreleased")[1].split("\n## ")[0])
+    assert "eight superpowers skills" in entry
+
+
+def bullet_about(topic: str) -> str:
+    """The one bullet of known-gaps.md's OpenCode section that mentions `topic`."""
+    body = section(known_gaps(), "OpenCode")
+    found = [flat(bullet) for bullet in body.split("\n- ")[1:] if topic in bullet]
+    assert len(found) == 1, f"{topic}: {len(found)} bullets"
+    return found[0]
+
+
+def test_known_gaps_covers_opencode() -> None:
+    text = known_gaps()
+    assert "Only Claude Code is supported." not in text
+    assert "OpenCode 2.3.2 is partly supported through `coven opencode`" in flat(text)
+    headings = re.findall(r"^## +(.+)$", text, re.MULTILINE)
+    assert any("OpenCode" in heading for heading in headings)
+
+
+def test_known_gaps_says_what_opencode_does_not_have() -> None:
+    hierarchy = bullet_about("GM/PM hierarchy")
+    assert "not" in hierarchy
+    assert "yet" in hierarchy
+    guard = bullet_about("production guard")
+    assert "planned" not in guard  # only the hierarchy is planned
+    assert "aquelarre" in guard.lower()
+
+
+def test_known_gaps_names_the_opencode_context_limit_and_the_clone() -> None:
+    assert "OpenCode 2.3.2 assumes 200000 tokens of context" in bullet_about("200000")
+    clone = bullet_about("git clone")
+    assert "not an installed wheel" in clone
+    assert "`opencode/` and `hooks/` must sit beside `src/`" in clone
+    assert "`covenRoot`" in clone

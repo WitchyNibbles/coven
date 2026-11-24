@@ -5,9 +5,11 @@
 - `coven opencode install | setup | run | doctor`: coven's own OpenCode 2.3.2 in a profile of its
   own, apart from any OpenCode you use, with coven's plugin (`coven_ping`, `await_agents` and a
   `tool_choice` hook for LiteLLM and vLLM gateways) and an offline end-to-end run.
+- The README and `opencode/README.md` say how to install and run coven on OpenCode without Claude
+  Code, and `docs/known-gaps.md` lists the OpenCode gaps.
 - `coven opencode setup` now ships coven's skills (`coven-*`), role agents, the `/coven-grill-me`
   and `/coven-handoff` commands and the routing, rendered from the Claude Code content by
-  `python -m coven.opencode.content`; it copies five superpowers skills from your Claude Code
+  `python -m coven.opencode.content`; it copies eight superpowers skills from your Claude Code
   install, points the model at your memory store and writes the secret rules and `todo` setting
   into the config. The plugin refuses a `read`, `grep`, `glob`, `shell`, `write`, `edit` or `patch`
   that `deny_secrets.py` refuses, and fails closed. `coven opencode doctor` adds a `superpowers`
