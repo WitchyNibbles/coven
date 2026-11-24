@@ -5547,6 +5547,35 @@ def test_a_bare_redirection_is_no_read_when_the_hook_environment_sets_nullcmd(
     assert run(payload, role="pm").returncode == 0
 
 
+# --- zsh's two-operand cd: `cd old new` goes to the folder with `old` replaced by `new` ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/proj && cd proj .claude && rm -rf skills",
+        "cd ~/proj && pushd proj .claude && rm -rf skills",
+    ],
+    ids=["cd", "pushd"],
+)
+def test_a_two_operand_cd_leaves_the_folder_unknown(run: Run, store: Path, command: str) -> None:
+    payload = bash(command)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cd ~/proj && cd proj .claude && ls", "cd /srv/a && cd a b && rm -rf /srv/out"],
+    ids=["then-read", "then-far-write"],
+)
+def test_a_two_operand_cd_then_a_read_or_a_far_write_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative

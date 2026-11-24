@@ -3361,9 +3361,10 @@ def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
 def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether a text writes a word the guard does not follow that may name the zone
     (`_may_name_zone`), or one whose leading current folder, written out (`_pinned`), is a holder
-    of the zone or in it, or goes by such a `cd` to a write. Its command substitutions and brace
-    expansions stay in their words (`_glued_expansions`), and its heredoc bodies read as text or
-    code are no commands of it (`_without_text_bodies`)."""
+    of the zone or in it, or goes by such a `cd` to a write, or writes a relative word after a
+    `cd old new` (`_swaps_folder`). Its command substitutions and brace expansions stay in their
+    words (`_glued_expansions`), and its heredoc bodies read as text or code are no commands of it
+    (`_without_text_bodies`)."""
     current: str | None = cwd
     shell = _without_text_bodies(text, zone)
     steps = [_restored(step) for step in _write_targets(_glued_expansions(shell))]
@@ -3375,8 +3376,22 @@ def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
             later = any(map(_step_writes, steps[index + 1 :]))
             if folder and not _followed(folder) and later and _may_name_zone(folder, current, zone):
                 return True
+            if _swaps_folder(step) and _writes_relative(steps[index + 1 :]):
+                return True
             current = _after_pinned_cd(current, step.folder)
     return False
+
+
+def _swaps_folder(step: _Step) -> bool:
+    """Whether a step is a `cd` or `pushd` with two operands: zsh's `cd old new` goes to the
+    current folder with `old` replaced by `new`, an older bash to the first."""
+    words = step.words
+    return bool(words) and _basename(words[0]) in CHANGE_DIR and len(_operands(words[1:])) == 2
+
+
+def _writes_relative(steps: Sequence[_Step]) -> bool:
+    """Whether a step writes a word relative to the folder it runs in (not from `/` or `~`)."""
+    return any(not word.startswith(("/", "~")) for step in steps for word in _step_writes(step))
 
 
 def _through_alias(word: str, current: str | None) -> bool:
