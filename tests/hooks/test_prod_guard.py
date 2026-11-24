@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -2469,8 +2470,9 @@ def test_pm_cannot_feed_claude_to_a_shell(run: Run, store: Path, command: str) -
     [
         "rg -l 'claude' | xargs sed -n 1p",
         PYTHON_READS_CLAUDE,
-        # `.claude` is not claude
-        "ls ~/.claude | sh",
+        # `.claude` is not claude. Relative on purpose: a read of `~/.claude` piped into a shell is
+        # refused by the user folder zone, and this case is about the word, not the folder.
+        "ls .claude | sh",
         "echo claude | grep -c sh",
         "echo claude | xargs",
         "sh -c 'echo hi' <<< claude",
@@ -4003,7 +4005,7 @@ def test_a_custom_claude_config_dir_is_guarded_where_it_is(
         tool("Glob", pattern="*.json", path="CLAUDE"),
         tool("Write", file_path="/tmp/settings.json", content="{}"),
         tool("Write", file_path="/tmp/n.md", content="see ~/.claude/settings.json"),
-        tool("Write", file_path="CLAUDE/projects/notes.md", content="x"),
+        # No write elsewhere in CLAUDE: the whole user folder is a zone now, so one is refused.
         bash("git status"),
         bash("ls .claude-plugin"),
         bash("echo 'edit ~/.claude/settings.json by hand' >> notes.md"),
@@ -4021,7 +4023,6 @@ def test_a_custom_claude_config_dir_is_guarded_where_it_is(
         "glob-folder",
         "write-another-settings-json",
         "write-text-naming-settings",
-        "write-elsewhere-in-the-folder",
         "git-status",
         "plugin-manifest-folder",
         "echo-text",
@@ -4039,6 +4040,2013 @@ def test_a_restricted_session_reads_claude_settings_and_runs_ordinary_commands(
     text = json.dumps(payload).replace("CLAUDE", str(claude_dir()))
     proc = run(json.loads(text), role="pm")
     assert proc.returncode == 0, proc.stderr
+
+
+# --- all of Claude Code's user folder: a restricted session may read it, not change it ---
+
+FOLDER_REFUSAL = f"{PREFIX} a 'pm' session cannot write to Claude Code's user folder"
+
+
+def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
+    """Calls that write, move or delete something in Claude Code's user folder or `~/.claude.json`,
+    each by a different route: `user` is the home folder, `folder` Claude Code's folder."""
+    mcp = {"tool_name": "mcp__fs__write", "tool_input": {"args": {"path": f"{folder}/skills/x"}}}
+    mcp_command = {"tool_name": "mcp__shell__run", "tool_input": {"command": "rm -rf ~/.claude/x"}}
+    return {
+        "rm-folder": bash("rm -rf ~/.claude"),
+        "rm-home-variable": bash('rm -rf "$HOME/.claude/skills"'),
+        "rm-braced-home-variable": bash("rm -rf ${HOME}/.claude/skills"),
+        "rm-literal-home": bash(f"rm -rf {user}/.claude/skills"),
+        "rm-config-dir-variable": bash("rm -rf $CLAUDE_CONFIG_DIR/skills"),
+        "rm-braced-config-dir-variable": bash("rm -rf ${CLAUDE_CONFIG_DIR}"),
+        "rm-literal-folder": bash(f"rm -rf {folder}/skills"),
+        "mv-agent": bash("mv ~/.claude/agents/x.md ~/.cache/"),
+        "mv-in": bash("mv ~/.cache/x.md ~/.claude/agents/"),
+        "redirect": bash("echo x > ~/.claude/CLAUDE.md"),
+        "redirect-append": bash("echo x >> ~/.claude/CLAUDE.md"),
+        "redirect-home-variable": bash("echo x > $HOME/.claude/CLAUDE.md"),
+        "cp-destination": bash("cp x ~/.claude/commands/"),
+        "tee": bash("echo x | tee ~/.claude/todos/x"),
+        "ln": bash("ln -sf /tmp/x ~/.claude/skills/x"),
+        "chmod": bash("chmod 777 ~/.claude/hooks"),
+        "sed-in-place": bash("sed -i s/a/b/ ~/.claude/CLAUDE.md"),
+        "find-delete": bash("find ~/.claude -delete"),
+        "find-exec": bash("find ~/.claude/skills -name '*.md' -exec rm {} +"),
+        "find-delete-in-skills": bash("find ~/.claude/skills -delete"),
+        "read-piped-to-xargs": bash("ls ~/.claude/skills | xargs rm -rf"),
+        "read-piped-to-sh": bash("cat ~/.claude/CLAUDE.md | sh"),
+        "read-then-redirect-into-it": bash("ls ~/.claude/skills > ~/.claude/CLAUDE.md"),
+        "read-with-substitution": bash("cat $(rm -rf ~/.claude/skills)"),
+        "read-with-quoted-substitution": bash('ls "$(rm -rf ~/.claude/skills)"'),
+        "echo-with-substitution": bash("echo $(rm -rf ~/.claude/skills)"),
+        "echo-with-backticks": bash("echo `rm -rf ~/.claude/skills`"),
+        "echo-piped-to-xargs": bash("echo ~/.claude/skills | xargs rm -rf"),
+        "cp-between-two": bash("cp ~/.claude/a ~/.claude/b"),
+        "cp-target-directory": bash("cp -t ~/.claude/skills x"),
+        "cp-hard-link": bash("cp -l ~/.claude/CLAUDE.md /tmp/c"),
+        "cp-long-option": bash("cp --remove-destination x ~/.claude/y"),
+        "tar-archive-inside": bash("tar -cf ~/.claude/x.tar y"),
+        "tar-removing-files": bash("tar --remove-files -cf /tmp/x.tar ~/.claude/skills"),
+        "tar-extract-to-it": bash("tar -xf x.tar -C ~/.claude"),
+        "env-chdir": bash("env -C ~/.claude rm -rf skills"),
+        "bash-c": bash("bash -c 'rm -rf ~/.claude/skills'"),
+        "touch": bash("touch ~/.claude/skills/x"),
+        "install": bash("install -m 644 x ~/.claude/CLAUDE.md"),
+        "tar": bash("tar -C ~/.claude -xf x.tar"),
+        "dot-dot": bash("rm -rf ~/.claude/../.claude/skills"),
+        "heredoc-into-it": bash("cat > ~/.claude/CLAUDE.md <<EOF\nx\nEOF"),
+        "cd-rm": bash("cd ~/.claude && rm -rf skills"),
+        "cd-rm-after-reads": bash("cd ~/.claude && ls skills; rm -rf skills"),
+        "cd-home-variable-rm": bash("cd $HOME/.claude && rm -rf skills"),
+        "cd-literal-rm": bash(f"cd {user}/.claude && rm -rf skills"),
+        "cd-config-dir-variable-rm": bash("cd $CLAUDE_CONFIG_DIR && rm -rf skills"),
+        "cd-redirect": bash("cd ~/.claude && echo x > CLAUDE.md"),
+        "cd-reader-redirect": bash("cd ~/.claude && ls > out"),
+        "cd-reader-redirect-file-name": bash("cd ~/.claude && ls > out.txt"),
+        "cd-reader-append": bash("cd ~/.claude && ls >> out"),
+        "cd-reader-stderr-to-file": bash("cd ~/.claude && ls 2>err"),
+        "cd-reader-discard-then-file": bash("cd ~/.claude && ls 2>/dev/null > out"),
+        "cd-reader-dup-to-file": bash("cd ~/.claude && ls >&out"),
+        "cd-reader-input-substitution": bash('cd ~/.claude && cat <<< "$(rm -rf skills)"'),
+        "jq-redirect-into-it": bash("jq . ~/.claude.json > ~/.claude.json"),
+        "jq-redirect-into-folder": bash("jq . ~/.claude.json > ~/.claude/x.json"),
+        "jq-after-cd-redirect": bash("cd ~ && jq . .claude.json > .claude/x.json"),
+        "loop-rm": bash('for f in ~/.claude/skills/*; do rm -rf "$f"; done'),
+        "loop-sed-in-place": bash('for f in ~/.claude/agents/*.md; do sed -i s/a/b/ "$f"; done'),
+        "loop-cd-mv": bash('cd ~/.claude && for f in *; do mv "$f" /tmp/; done'),
+        "loop-runs-script": bash('for f in ~/.claude/skills/*.sh; do sh "$f"; done'),
+        "loop-substitution-writes": bash("for f in $(rm -rf ~/.claude); do :; done"),
+        "loop-substitution-find-delete": bash("for f in $(find ~/.claude -delete); do ls; done"),
+        "loop-redirect-in-body": bash('for f in ~/.claude/a; do cat "$f" > "$f.bak"; done'),
+        "loop-redirect-after-done": bash("for f in ~/.claude/a; do ls; done > ~/.claude/out"),
+        "loop-write-after-read": bash('for f in ~/.claude/a; do ls "$f"; rm -rf "$f"; done'),
+        "loop-piped-to-shell": bash('for f in ~/.claude/a; do cat "$f" | sh; done'),
+        "loop-nested": bash(
+            "for f in ~/.claude/a; do for g in ~/.claude/b; do rm -rf $g; done; done"
+        ),
+        "bound-name-assigned-twice-then-rm": bash(
+            "J=~/.claude/x; n=$(grep -c x $J); n=$(grep -c y $J); rm -rf $n"
+        ),
+        "bound-name-assigned-twice-second-writes": bash(
+            "J=~/.claude/x; n=$(grep -c x $J); n=$(rm -rf $J); echo $n"
+        ),
+        "backslash-substitution-writes": bash(
+            'for f in ~/.claude/a; do n=$(grep -c "a\\|b" "$f"; rm -rf ~/.claude/x); done'
+        ),
+        "group-rm": bash("ls ~/.claude && { rm -rf ~/.claude/a; }"),
+        "group-redirect": bash("ls && { echo a; } > ~/.claude/out"),
+        "group-redirect-in-body": bash("ls && { echo a > ~/.claude/out; }"),
+        "loop-over-path-variable": bash("for PATH in ~/.claude/x; do ls; done"),
+        "loop-without-words": bash('cd ~/.claude && for f; do rm -rf "$f"; done'),
+        "loop-then-write": bash("for f in ~/.claude/a; do ls; done; rm -rf ~/.claude/a"),
+        "loop-while": bash("while true; do rm -rf ~/.claude/a; done"),
+        "loop-quoted-substitution": bash('for f in "$(rm -rf ~/.claude)"; do ls; done'),
+        "loop-backticks": bash("for f in `rm -rf ~/.claude`; do ls; done"),
+        "loop-case-in-substitution": bash(
+            "for f in $(case x in a) rm -rf ~/.claude;; esac); do ls; done"
+        ),
+        "loop-two-substitutions": bash("for f in $(ls)$(rm -rf ~/.claude); do ls; done"),
+        "loop-substitution-with-more": bash("for f in $(ls ~/.claude)x; do rm -rf ~/.claude; done"),
+        "loop-substitution-redirect": bash("for f in $(ls > ~/.claude/x); do cat; done"),
+        "loop-substitution-semicolon": bash("for f in $(ls; rm -rf ~/.claude/a); do cat; done"),
+        "loop-over-uppercase-variable": bash("for HOME in ~/.claude/a; do ls; done"),
+        # zsh ties these to PATH, CDPATH, FPATH, MANPATH, MODULE_PATH, MAILPATH and FIGNORE.
+        **{
+            f"loop-over-zsh-{name}": bash(f"for {name} in ~/.claude/a; do ls; done")
+            for name in ("path", "cdpath", "fpath", "manpath", "module_path", "mailpath")
+        },
+        "read-into-zsh-path": bash("while read path; do ls; done < ~/.claude/list"),
+        "read-into-zsh-fpath": bash("find ~/.claude/p | while read -r fpath; do ls; done"),
+        "loop-over-fpath-upper": bash("for FPATH in ~/.claude/a; do ls; done"),
+        "read-into-fignore": bash("while read fignore; do ls; done < ~/.claude/list"),
+        "cd-reader-heredoc": bash("cd ~/.claude && cat > CLAUDE.md <<EOF\nx\nEOF"),
+        "cd-script": bash("cd ~/.claude && sh x.sh"),
+        "cd-tee": bash("cd ~/.claude && ls | tee x"),
+        "cd-substitution": bash("cd ~/.claude && ls $(rm -rf skills)"),
+        "cd-backticks": bash("cd ~/.claude && ls `rm -rf skills`"),
+        "cd-sed-in-place": bash("cd ~/.claude && sed -i s/a/b/ CLAUDE.md"),
+        "cd-glob-rm": bash("cd ~/.claude && rm -rf s*"),
+        "cd-pushd-rm": bash("pushd ~/.claude && rm -rf skills"),
+        "cd-home-rm": bash("cd ~ && rm -rf .claude"),
+        "cd-home-glob-rm": bash("cd ~ && rm -rf .cl*"),
+        "cd-reads-then-cd-away-rm": bash("cd ~/.claude && ls; cd /tmp && rm -rf x"),
+        "cd-relative-rm": bash("cd .claude && rm -rf skills", cwd=str(user)),
+        "cd-relative-redirect": bash("cd .claude && echo x > CLAUDE.md", cwd=str(user)),
+        "rm-relative-from-home": bash("rm -rf .claude/skills", cwd=str(user)),
+        "cd-home-rm-inside": bash("cd ~ && rm -rf .claude/skills"),
+        "cd-home-variable-rm-inside": bash("cd $HOME && rm -rf .claude/skills"),
+        "cd-unknown-rm-inside": bash('cd "$X" && rm -rf .claude/skills'),
+        "cd-unknown-rm-json": bash('cd "$X" && rm .claude.json'),
+        "write-json-backup": bash("echo {} > ~/.claude.json.backup"),
+        "write-json-bak": bash("echo x > ~/.claude.json.bak"),
+        "cp-over-json-backup": bash("cp /tmp/x ~/.claude.json.backup"),
+        "mv-json-backup": bash("mv ~/.claude.json.backup /tmp/x"),
+        "rm-json-backups-glob": bash("rm -f ~/.claude.json.*"),
+        "rm-json-backups-loose-glob": bash("rm -f ~/.claude.j*.b*"),
+        "sed-in-place-json-backup": bash("sed -i s/a/b/ ~/.claude.json.backup"),
+        "write-json-backup-tool": tool(
+            "Write", file_path=str(home() / ".claude.json.backup"), content="{}"
+        ),
+        "edit-json-backup-tool": tool(
+            "Edit", file_path=str(home() / ".claude.json.1"), old_string="a", new_string="b"
+        ),
+        "cd-home-rm-json-backup": bash("cd ~ && rm .claude.json.backup"),
+        "cd-home-rm-json-backups-glob": bash("cd ~ && rm .claude.json.*"),
+        "cd-unknown-rm-json-backup": bash('cd "$X" && rm .claude.json.backup'),
+        "cd-unknown-rm-json-backups-glob": bash('cd "$X" && rm .claude.json.*'),
+        "write-json-backup-in-folder": bash("echo x > ~/.claude/.claude.json.backup"),
+        "cd-home-sed-in-place": bash("cd ~ && sed -i s/a/b/ .claude/CLAUDE.md"),
+        "cd-home-touch": bash("cd ~ && touch .claude/x"),
+        "cd-home-mkdir": bash("cd ~ && mkdir -p .claude/x"),
+        "cd-home-dd": bash("cd ~ && dd if=/tmp/x of=.claude/x"),
+        "cd-home-curl": bash("cd ~ && curl -o .claude/x https://example.com/x"),
+        "cd-home-curl-glued": bash("cd ~ && curl -o.claude/x https://example.com/x"),
+        "cd-home-sort-output": bash("cd ~ && sort --output=.claude/x /tmp/a"),
+        "cd-home-patch": bash("cd ~ && patch .claude/x /tmp/p"),
+        "cd-home-touch-json": bash("cd ~ && touch .claude.json"),
+        "cd-home-then-folder-touch": bash("cd ~ && cd .claude && touch x"),
+        "cd-project-touch-up": bash("cd ~/proj && touch ../.claude/x"),
+        "cd-home-variable-sed": bash("cd $HOME && sed -i s/a/b/ .claude/CLAUDE.md"),
+        "cd-braced-home-variable-touch": bash('cd "${HOME}" && touch .claude/x'),
+        "bare-cd-touch": bash("cd && touch .claude/x"),
+        "cd-back-touch": bash("cd - && touch .claude/x"),
+        "cd-unknown-sed": bash('cd "$X" && sed -i s/a/b/ .claude/x'),
+        "cd-unknown-touch-up": bash('cd "$X" && touch ../.claude/x'),
+        "echo-script-then-sh": bash("echo 'rm -rf ~/.claude/skills' > /tmp/s.sh; sh /tmp/s.sh"),
+        "printf-script-then-bash": bash(
+            "printf 'rm -rf %s\\n' ~/.claude/skills > /tmp/s.sh && bash /tmp/s.sh"
+        ),
+        "echo-script-then-source": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; . /tmp/s"),
+        "echo-script-run-by-path": bash("echo 'rm -rf ~/.claude/x' >> /tmp/s.sh; /tmp/s.sh"),
+        "echo-script-nohup": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; nohup /tmp/s"),
+        "echo-script-to-python": bash(
+            "echo \"import shutil; shutil.rmtree('$HOME/.claude')\" > /tmp/s.py; python3 /tmp/s.py"
+        ),
+        "tee-script-then-sh": bash("echo 'rm -rf ~/.claude/x' | tee /tmp/s; sh /tmp/s"),
+        "listing-made-script": bash(
+            "ls -d ~/.claude/skills/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s"
+        ),
+        "group-made-script": bash("{ echo 'rm -rf ~/.claude/x'; } > /tmp/s; sh /tmp/s"),
+        "loop-made-script": bash(
+            'for f in ~/.claude/skills/*; do echo "rm -rf $f"; done > /tmp/s; bash /tmp/s'
+        ),
+        "exec-made-script": bash("exec > /tmp/s; echo 'rm -rf ~/.claude/x'; sh /tmp/s"),
+        "subshell-made-script": bash("(echo 'rm -rf ~/.claude/x') > /tmp/s; sh /tmp/s"),
+        "if-made-script": bash("if true; then echo 'rm -rf ~/.claude/x'; fi > /tmp/s; sh /tmp/s"),
+        "env-runs-made-script": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; env sh /tmp/s"),
+        "find-runs-made-script": bash(
+            "echo 'rm -rf ~/.claude/x' > /tmp/s; find /tmp -name s -exec sh {} \\;"
+        ),
+        "variable-runs-made-script": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; $RUN /tmp/s"),
+        "cwd-in-folder": bash("rm -rf skills", cwd=str(folder)),
+        "cwd-in-folder-redirect": bash("echo x > CLAUDE.md", cwd=str(folder / "skills")),
+        "cwd-in-folder-read-then-rm": bash("ls skills; rm -rf skills", cwd=str(folder)),
+        "cwd-in-folder-cp-in": bash("cp CLAUDE.md CLAUDE.bak", cwd=str(folder)),
+        "cwd-in-folder-copy-relative-out": bash("cp CLAUDE.md out", cwd=str(folder)),
+        "cwd-in-folder-sed-i": bash("sed -i s/a/b/ CLAUDE.md", cwd=str(folder)),
+        "cwd-in-folder-tee": bash("ls | tee CLAUDE.md", cwd=str(folder)),
+        "cwd-in-folder-script": bash('python3 -c \'open("x", "w")\'', cwd=str(folder)),
+        "glob-dotted": bash("rm -rf ~/.cl*"),
+        "glob-folder-contents": bash("rm -rf ~/.claude/*"),
+        "glob-name": bash("rm -rf ~/.claude/sk*"),
+        "rm-json": bash("rm ~/.claude.json"),
+        "rm-json-variable": bash("rm $HOME/.claude.json"),
+        "redirect-json": bash("echo > ~/.claude.json"),
+        "mv-json": bash("mv ~/.claude.json /tmp/c.json"),
+        "cp-json": bash("cp /tmp/c.json ~/.claude.json"),
+        "glob-json": bash("rm ~/.claude.js*"),
+        "cd-home-rm-json": bash("cd ~ && rm .claude.json"),
+        "pipe-into-xargs": bash("grep -l x ~/.claude/p/*.jsonl | xargs rm"),
+        "xargs-replace": bash("ls -d ~/.claude/p/* | xargs -I{} cp {} /tmp"),
+        "xargs-replace-glued": bash("ls -d ~/.claude/p/* | xargs -I% cat %"),
+        "xargs-i": bash("ls -d ~/.claude/p/* | xargs -i cat {}"),
+        "xargs-replace-long": bash("ls -d ~/.claude/p/* | xargs --replace cat {}"),
+        "xargs-shell": bash("ls -d ~/.claude/p/* | xargs sh -c 'cat $0'"),
+        "xargs-bash": bash("ls -d ~/.claude/p/* | xargs -n1 bash"),
+        "xargs-env": bash("ls -d ~/.claude/p/* | xargs env cat"),
+        "xargs-sed": bash("ls -d ~/.claude/p/* | xargs sed -n 1p"),
+        "xargs-find": bash("ls -d ~/.claude/p/* | xargs find"),
+        "xargs-sort": bash("ls -d ~/.claude/p/* | xargs sort"),
+        "xargs-xargs": bash("ls -d ~/.claude/p/* | xargs -n1 xargs rm"),
+        "xargs-unknown-option": bash("ls -d ~/.claude/p/* | xargs -E x cat"),
+        "xargs-args-file": bash("ls -d ~/.claude/p/* | xargs -a /tmp/l cat"),
+        "xargs-into-folder": bash("ls -d ~/.claude/p/* | xargs grep x > ~/.claude/out"),
+        "cd-in-xargs-rm": bash("cd ~/.claude/p && grep -rl x . | xargs -r rm"),
+        "cd-in-xargs-replace": bash("cd ~/.claude/p && ls | xargs -I{} cp {} /tmp"),
+        "cd-in-xargs-into-folder": bash("cd ~/.claude/p && ls | xargs grep x > out"),
+        "xargs-then-xargs-rm": bash("ls -d ~/.claude/p/* | xargs grep -l x | xargs rm"),
+        "xargs-bare": bash("ls -d ~/.claude/p/* | xargs"),
+        "xargs-output-run": bash(
+            "ls -d ~/.claude/p/* | xargs -n1 basename | sed 's/^/rm /' > /tmp/s; sh /tmp/s"
+        ),
+        "sort-output-file": bash("sort -o ~/.claude/a ~/.claude/b"),
+        "sort-output-long-option": bash("ls ~/.claude | sort --output=~/.claude/x"),
+        "uniq-second-operand": bash("uniq ~/.claude/a ~/.claude/b"),
+        "read-redirected-into-it": bash("grep x ~/.claude/a > ~/.claude/out"),
+        "read-appended-into-it": bash("grep x ~/.claude/a | sort >> ~/.claude/out"),
+        "cd-read-redirected-to-relative": bash("cd ~/.claude && grep x a | sort > out"),
+        "env-chdir-write": bash("env -C ~/.claude touch x"),
+        "timeout-rm": bash("timeout 5 rm ~/.claude/x"),
+        "environment-rm": bash("LC_ALL=C rm ~/.claude/x"),
+        "reader-by-writable-path": bash("/tmp/bin/grep x ~/.claude/a"),
+        "reader-by-local-bin": bash("/usr/local/bin/grep x ~/.claude/a"),
+        "cd-cp-into-it": bash("cd ~/.claude && cp /tmp/x relfile"),
+        "cp-into-it": bash("cp /tmp/x ~/.claude/y"),
+        "cd-cp-then-rm": bash("cd ~/.claude && cp a /tmp/b; rm a"),
+        "find-fprint": bash("find ~/.claude -fprint ~/.claude/x"),
+        "find-fprintf": bash("find ~/.claude -fprintf ~/.claude/x '%p'"),
+        "find-fls": bash("find ~/.claude -fls ~/.claude/x"),
+        "find-delete-iname": bash("find ~/.claude -iname '*.tmp' -delete"),
+        "find-exec-semicolon": bash("find ~/.claude -name x -exec rm {} ;"),
+        "find-execdir": bash("find ~/.claude -name x -execdir rm {} ;"),
+        "find-ok": bash("find ~/.claude -name x -ok rm {} ;"),
+        "find-okdir": bash("find ~/.claude -name x -okdir rm {} ;"),
+        "read-loop-rm": bash('while read f; do rm "$f"; done < ~/.claude/list'),
+        "find-loop-rm": bash('find ~/.claude/p | while read f; do rm "$f"; done'),
+        "substitution-name-rm": bash('f=$(grep -l k ~/.claude/p/*.jsonl | head -1); rm "$f"'),
+        "substitution-in-reader-writes": bash("ls -la $(rm ~/.claude/x)"),
+        "substitution-assignment-writes": bash('n=$(rm ~/.claude/x); [ "$n" != 0 ]'),
+        "sed-range-writes": bash("sed -n '/x/,$w ~/.claude/o' ~/.claude/a"),
+        "heredoc-cat-into-it": bash("cat > ~/.claude/x <<'EOF'\ntext\nEOF"),
+        "heredoc-tee-into-it": bash("tee ~/.claude/x <<'EOF'\ntext\nEOF"),
+        "heredoc-cat-relative-after-cd": bash("cd ~/.claude && cat > x <<'EOF'\ntext\nEOF"),
+        "heredoc-unquoted-substitution": bash("cat > /tmp/f <<EOF\n$(rm ~/.claude/x)\nEOF"),
+        "bound-name-rm": bash("F=~/.claude/a; sed -n 1p $F; rm $F"),
+        "bound-name-read-into": bash("F=~/.claude/a; read F; sed -n p $F"),
+        "bound-name-rebound": bash("F=~/.claude/a; F=-i; sed -n p $F x"),
+        "bash-c-writes": bash("bash -c 'rm ~/.claude/x'"),
+        "bash-c-with-arguments": bash("bash -c 'cat ~/.claude/a' x"),
+        "bash-c-redirected-into-it": bash("bash -c 'cat ~/.claude/a' > ~/.claude/b"),
+        "sleep-then-rm": bash("sleep 1; rm ~/.claude/x"),
+        "command-rm": bash("command rm ~/.claude/x"),
+        "cd-then-unknown-program": bash("cd ~/.claude && ls; mytool x"),
+        "cd-away-then-home-glob-rm": bash(
+            "cd /tmp/x && git log --grep 'a.*b'; cd ~ && rm -rf .cl*"
+        ),
+        "node-reads-it": bash("node -e \"require('fs').readFileSync('~/.claude/a')\""),
+        "perl-reads-it": bash("perl -e 'open F, \"~/.claude/a\"'"),
+        "ruby-reads-it": bash("ruby -e 'File.read(\"~/.claude/a\")'"),
+        "awk-reads-it": bash("awk '{print}' ~/.claude/a"),
+        "sqlite-reads-it": bash("sqlite3 ~/.claude/a.db 'select 1'"),
+        "python-heredoc-piped": bash("cat <<'E' | python3 -\nopen('~/.claude/a')\nE"),
+        "python-home-lookup": bash(
+            "python3 -c \"import os; open(os.path.expanduser('~/.claude/a'))\""
+        ),
+        "rg-pre": bash("rg --pre sh x ~/.claude"),
+        "rg-pre-equals": bash("rg --pre=sh x ~/.claude/skills"),
+        "rg-pre-glob": bash("rg --pre-glob '*.gz' --pre sh x ~/.claude"),
+        "rg-relative-glob-after-cd": bash("cd ~/.claude && rg -l x *.md"),
+        "rg-loop-variable": bash("for f in $(ls ~/.claude/p/*.jsonl); do rg -c x $f; done"),
+        "write": tool("Write", file_path=f"{folder}/agents/x.md", content="x"),
+        "write-json": tool("Write", file_path=f"{user}/.claude.json", content="{}"),
+        "edit": tool("Edit", file_path=f"{folder}/CLAUDE.md", old_string="a", new_string="b"),
+        "notebook-edit": tool("NotebookEdit", notebook_path=f"{folder}/skills/x.ipynb"),
+        "mcp-path": mcp,
+        "mcp-command": mcp_command,
+    }
+
+
+FOLDER_IDS = list(folder_calls(Path("/x"), Path("/y")))
+
+
+@pytest.mark.parametrize("name", FOLDER_IDS)
+def test_a_restricted_session_cannot_change_claude_codes_user_folder(
+    run: Run, store: Path, name: str
+) -> None:
+    """Refused for a restricted session, by this zone or by a zone of a file inside it that names
+    the call first; a plain session is not refused."""
+    payload = folder_calls(home(), claude_dir())[name]
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize("name", FOLDER_IDS)
+def test_the_user_folder_zone_refuses_each_call_by_itself(
+    store: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """With no other zone, so each call shows a hole in this one."""
+    monkeypatch.setattr(pg, "_zones", lambda _store: (pg._claude_folder_zone(),))
+    message = decide(folder_calls(home(), claude_dir())[name], store, "pm")
+    assert message is not None
+    assert FOLDER_REFUSAL in message
+    assert decide(folder_calls(home(), claude_dir())[name], store) is None
+
+
+def test_a_restricted_session_cannot_remove_the_home_folder(run: Run, store: Path) -> None:
+    """Whichever zone names it first: `~` holds the user folder and the store."""
+    payload = bash("rm -rf ~")
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+def test_a_custom_claude_config_dir_is_a_zone_where_it_is(
+    run: Run, store: Path, tmp_path: Path
+) -> None:
+    folder = tmp_path / "elsewhere"
+    env = {"CLAUDE_CONFIG_DIR": str(folder)}
+    for payload in (
+        bash(f"rm -rf {folder}/skills"),
+        bash("rm -rf $CLAUDE_CONFIG_DIR/skills"),
+        bash(f"cd {folder} && rm -rf skills"),
+        bash(f"echo x > {folder}/CLAUDE.md"),
+        bash("rm -rf ~/.claude/skills"),
+        bash("rm ~/.claude.json"),
+        tool("Write", file_path=f"{folder}/agents/x.md"),
+    ):
+        proc = run(payload, role="pm", env=env)
+        assert proc.returncode == 2, payload
+        assert FOLDER_REFUSAL in proc.stderr
+        assert run(payload, env=env).returncode == 0
+    assert run(bash(f"cd {folder} && ls skills"), role="pm", env=env).returncode == 0
+    assert run(bash(f"cat {folder}/CLAUDE.md"), role="pm", env=env).returncode == 0
+
+
+def test_a_custom_claude_config_dir_is_followed_after_a_cd(run: Run, store: Path) -> None:
+    folder = home() / "cfgdir"
+    env = {"CLAUDE_CONFIG_DIR": str(folder)}
+    for command in ("cd ~ && touch cfgdir/x", "cd ~ && sed -i s/a/b/ cfgdir/CLAUDE.md"):
+        proc = run(bash(command), role="pm", env=env)
+        assert proc.returncode == 2, command
+        assert FOLDER_REFUSAL in proc.stderr
+        assert run(bash(command), env=env).returncode == 0
+    assert run(bash("cd ~ && cat cfgdir/CLAUDE.md"), role="pm", env=env).returncode == 0
+
+
+def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
+    """Calls a restricted session may make: reading the user folder, and writing next to it."""
+    worktree = user / "proj" / ".claude" / "worktrees" / "x"
+    return {
+        "cat": bash("cat ~/.claude/CLAUDE.md"),
+        "cat-home-variable": bash('cat "$HOME/.claude/CLAUDE.md"'),
+        "cat-literal-home": bash(f"cat {user}/.claude/CLAUDE.md"),
+        "cat-config-dir-variable": bash("cat $CLAUDE_CONFIG_DIR/CLAUDE.md"),
+        "ls": bash("ls -la ~/.claude/skills"),
+        "ls-folder": bash("ls ~/.claude"),
+        "head-json": bash("head ~/.claude.json"),
+        "wc-json": bash("wc -c ~/.claude.json"),
+        "rg": bash("rg foo ~/.claude/skills"),
+        "rg-options": bash("rg -n -i --glob '*.md' foo ~/.claude/agents"),
+        "rg-files": bash("rg --files ~/.claude/skills"),
+        "rg-absolute-glob": bash(f"rg -o 'x[^\"]{{0,40}}' {folder}/p/*.jsonl | sort -u"),
+        "grep": bash("grep -r x ~/.claude/agents"),
+        "find": bash("find ~/.claude/skills -name '*.md'"),
+        "find-print": bash("find ~/.claude -maxdepth 2 -type d -print"),
+        "sed-print": bash("sed -n 1,5p ~/.claude/CLAUDE.md"),
+        "read-piped": bash("cat ~/.claude/CLAUDE.md | grep x | head -3"),
+        "ls-piped-to-wc": bash("ls ~/.claude/skills | wc -l"),
+        "read-then-read": bash("ls ~/.claude/skills && cat ~/.claude/CLAUDE.md"),
+        "diff": bash("diff ~/.claude/CLAUDE.md /tmp/CLAUDE.md"),
+        "cd-ls": bash("cd ~/.claude && ls skills"),
+        "cd-ls-bare": bash("cd ~/.claude && ls"),
+        "cd-grep-discarding-errors": bash(
+            "cd ~/.claude/projects/p && grep -l foo *.jsonl 2>/dev/null | head"
+        ),
+        "cd-ls-errors-to-output": bash("cd ~/.claude/projects/p && ls -t 2>&1 | head -5"),
+        "cd-ls-to-stderr": bash("cd ~/.claude && ls >&2"),
+        "cd-ls-numbered-to-stderr": bash("cd ~/.claude && ls 1>&2"),
+        "cd-ls-to-null": bash("cd ~/.claude && ls >/dev/null"),
+        "cd-ls-both-to-null": bash("cd ~/.claude && ls &>/dev/null"),
+        "jq": bash("jq '.projects | keys' ~/.claude.json"),
+        "jq-options": bash("jq -r --arg k x '.[$k]' ~/.claude.json"),
+        "jq-files": bash("jq --slurpfile s ~/.claude/a.json -f ~/.claude/p.jq ~/.claude.json"),
+        "jq-piped": bash("cat ~/.claude/projects/p/a.jsonl | jq -c .type | head -3"),
+        "cd-jq": bash("cd ~/.claude && jq . history.json | head"),
+        "loop-over-files": bash(
+            "for f in ~/.claude/projects/p/a.jsonl ~/.claude/projects/p/b.jsonl;"
+            ' do grep -c foo "$f"; done'
+        ),
+        "loop-over-listing": bash(
+            "cd ~/.claude/projects/p && for f in $(ls -t *.jsonl | head -3);"
+            ' do grep -l foo "$f"; done'
+        ),
+        "loop-over-glob-with-pipe": bash(
+            "for f in ~/.claude/projects/*/x.jsonl;"
+            ' do echo "== $f"; grep -o \'k.\\{0,40\\}\' "$f" | head -3; done'
+        ),
+        "loop-over-find": bash(
+            'for f in $(find ~/.claude/projects -name "*.jsonl"); do wc -l "$f"; done'
+        ),
+        "loop-multiline": bash('for f in ~/.claude/a ~/.claude/b\ndo\n  cat "$f"\ndone'),
+        "loop-discarding-errors": bash('for f in ~/.claude/a; do cat "$f" 2>/dev/null; done'),
+        "loop-body-reads-path": bash('for f in ~/.claude/a; do cat ~/.claude/b "$f"; done'),
+        "cd-relative-ls": bash("cd .claude && ls skills", cwd=str(user)),
+        "read-redirected-elsewhere": bash("cat ~/.claude/CLAUDE.md > /tmp/x"),
+        "echo-the-folder": bash("echo $CLAUDE_CONFIG_DIR"),
+        "echo-text-naming-it": bash("echo see ~/.claude/CLAUDE.md > /tmp/n.md"),
+        "cp-out-of-it": bash("cp ~/.claude/CLAUDE.md ~/.cache/c.md"),
+        "cp-folder-out": bash("cp -a ~/.claude ~/.cache/c"),
+        "tar-out-of-it": bash("tar -czf ~/.cache/b.tgz ~/.claude/skills"),
+        "read-discarding-errors": bash("ls ~/.claude 2>/dev/null"),
+        "cd-reads": bash("cd ~/.claude && cat CLAUDE.md && rg foo skills | head"),
+        "cd-semicolon-reads": bash("cd ~/.claude; ls skills; pwd"),
+        "cd-echo": bash("cd ~/.claude && echo skills && printf x && true"),
+        "cd-config-dir-variable-ls": bash("cd $CLAUDE_CONFIG_DIR && ls skills"),
+        "cd-home-variable-ls": bash("cd $HOME/.claude && ls skills"),
+        "cd-find": bash("cd ~/.claude && find skills -name '*.md'"),
+        "environment-reader": bash("LC_ALL=C grep -c x ~/.claude/a.jsonl"),
+        "timeout-reader": bash("timeout 30 grep x ~/.claude/a"),
+        "nice-reader": bash("nice -n 5 rg x ~/.claude/a"),
+        "env-unset-reader": bash("env -u X grep x ~/.claude/a"),
+        "reader-by-system-path": bash("/usr/bin/grep x ~/.claude/a"),
+        "reader-in-bin": bash("/bin/ls ~/.claude"),
+        "filters": bash(
+            "grep -l k ~/.claude/p/*.jsonl | sort -u | uniq -c | cut -d: -f1 | tr a b"
+            " | column -t | basename -a $(head -1) | wc -l"
+        ),
+        "filter-sed-jq": bash("cat ~/.claude/a.jsonl | sed -n 2p | jq .type | tail -1"),
+        "read-to-file-outside": bash("grep x ~/.claude/a > /tmp/out"),
+        "read-to-file-then-count": bash("grep x ~/.claude/a > /tmp/out; wc -l /tmp/out"),
+        "read-word-naming-a-shell": bash("grep -c bash ~/.claude/a > /tmp/n"),
+        "script-output-to-file": bash("bash ~/.claude/skills/x/run.sh > /tmp/log"),
+        "read-to-file-then-assign": bash("tr -d x < ~/.claude/a > /tmp/b; F=/tmp/b; wc -l $F"),
+        "read-to-file-then-dot-pattern": bash("cut -c1-9 ~/.claude/a > /tmp/b; grep -c . /tmp/b"),
+        "note-written-then-script-reads-elsewhere": bash(
+            "echo done > /tmp/n; sh ~/proj/x.sh; J=~/.claude/a; grep -c x $J"
+        ),
+        "read-appended-outside": bash("grep x ~/.claude/a >> /tmp/out"),
+        "read-sorted-to-file-outside": bash("ls ~/.claude/p | sort > /tmp/x"),
+        "input-redirect-wc": bash("wc -l < ~/.claude/a.jsonl"),
+        "input-redirect-grep": bash("grep x < ~/.claude/a.jsonl"),
+        "read-loop-over-file": bash('while read f; do wc -l "$f"; done < ~/.claude/list.txt'),
+        "xargs-basename": bash("ls -d ~/.claude/p/* | xargs -n1 basename"),
+        "xargs-grep": bash("find ~/.claude/p -name '*.jsonl' | xargs grep -l x"),
+        "xargs-null-wc": bash("find ~/.claude/p -name '*.jsonl' -print0 | xargs -0 wc -l"),
+        "xargs-options-head": bash("ls -d ~/.claude/p/* | xargs -r -P4 -n 2 head -3"),
+        "xargs-long-options-cat": bash("ls -d ~/.claude/p/* | xargs --null --max-args=1 cat"),
+        "xargs-to-file-outside": bash("ls -d ~/.claude/p/* | xargs grep -c x > /tmp/out"),
+        "xargs-then-filter": bash("ls -d ~/.claude/p/* | xargs grep -h x | sort | uniq -c"),
+        "cd-in-xargs-ls": bash("cd ~/.claude/p && grep -rl x . | xargs -r ls -t | head -3"),
+        "cd-in-xargs-stat": bash("cd ~/.claude/p && ls | xargs stat -c %y | sort | uniq -c"),
+        "find-loop": bash(
+            'find ~/.claude/p -name "*.jsonl" | while read f; do grep -c x "$f"; done'
+        ),
+        "substitution-after-cd": bash(
+            "cd ~/.claude/projects/p && ls -la $(grep -l k *.jsonl | head -5)"
+        ),
+        "substitution-name": bash('f=$(grep -l k ~/.claude/p/*.jsonl | head -1); grep -o x "$f"'),
+        "substitution-count-test": bash(
+            'cd ~/.claude && n=$(grep -c x a.jsonl); [ "$n" != "0" ] && echo hit'
+        ),
+        "test-after-cd": bash("cd ~/.claude && [ -f CLAUDE.md ] && ls skills"),
+        "test-command": bash("test -d ~/.claude/skills && ls ~/.claude/skills"),
+        "find-tests": bash(
+            "find ~/.claude -maxdepth 3 -iname '*.md' -newermt 2026-01-01 -size +1k"
+            " -not -path '*/x/*' -ipath '*s*' -printf '%p\\n'"
+        ),
+        "sed-range-to-end": bash("sed -n '/start/,$p' ~/.claude/a.md"),
+        "cd-cp-out": bash("cd ~/.claude && cp CLAUDE.md /tmp/x.md"),
+        "cd-cp-several-out": bash("cd ~/.claude && cp -p a b /var/tmp/"),
+        "heredoc-text-to-cat": bash("cat > /tmp/n.md <<'EOF'\nsee ~/.claude/CLAUDE.md\nEOF"),
+        "heredoc-text-to-tee": bash("tee /tmp/n.md <<'EOF'\nsee ~/.claude/CLAUDE.md\nEOF"),
+        "bound-name": bash("F=~/.claude/p/a.jsonl; sed -n '/a/,/b/p' \"$F\" | head -3"),
+        "bound-name-test": bash('J=~/.claude/x.jsonl; [ -f "$J" ] && grep -c x $J'),
+        "bound-name-in-text-with-other-commands": bash(
+            "docker ps; F=~/.claude/a.txt; sed -n 1p $F | cut -c1-20; git log -1"
+        ),
+        "bound-name-assigned-twice": bash(
+            'J=~/.claude/x.jsonl; n=$(grep -c x $J); [ "$n" -ge 2 ] || { n=$(grep -c y $J); echo $n; }'
+        ),
+        "bound-name-folder-listing": bash(
+            'W=~/.claude/w; ls $W | tail -2; for f in $W/a-*; do wc -l < "$f"; done'
+        ),
+        "sleep-until": bash(
+            'until [ "$(grep -c x ~/.claude/p/j.jsonl)" -ge 2 ]; do sleep 5; done; echo ok'
+        ),
+        "command-wrapper": bash("command sleep 1; ls ~/.claude"),
+        "cwd-in-folder-reads": bash(
+            "ls skills | head -3; grep -c x CLAUDE.md; find . -name '*.md' | sort | wc -l",
+            cwd=str(folder),
+        ),
+        "cwd-in-folder-copy-out": bash("cp CLAUDE.md /var/tmp/out", cwd=str(folder)),
+        "backslash-in-quoted-pattern-of-substitution": bash(
+            "cd ~/.claude/projects && find . -maxdepth 1 -name '*.jsonl' -newermt '2026-09-11'"
+            ' | while read f; do n=$(grep -c "a\\|b" "$f"); echo "$(stat -c %y "$f") $n"; done'
+            " | sort"
+        ),
+        "group-reads": bash(
+            'n=$(grep -c x ~/.claude/p/j.jsonl); [ "$n" -gt 0 ] && { echo found $n; exit 0; }'
+        ),
+        "bash-c-reads": bash("bash -c 'grep -c x ~/.claude/a.jsonl | head -1'"),
+        "cd-away-quoted-glob": bash(
+            "cd /tmp/x && git log --grep 'a.*b' | head -3; cat ~/.claude/a"
+        ),
+        "read-tool": tool("Read", file_path=f"{folder}/CLAUDE.md"),
+        "read-tool-json": tool("Read", file_path=f"{user}/.claude.json"),
+        "grep-tool": tool("Grep", pattern="x", path=f"{folder}/agents"),
+        "glob-tool": tool("Glob", pattern="*.md", path=f"{folder}/skills"),
+        "write-tmp": bash("echo x > /tmp/x"),
+        "rm-tmp": bash("rm -rf /tmp/x"),
+        "write-cache": bash("echo x > ~/.cache/x"),
+        "rm-cache": bash("rm -rf ~/.cache/x"),
+        "cd-cache-rm": bash("cd ~/.cache && rm -rf x"),
+        "write-cache-tool": tool("Write", file_path=f"{user}/.cache/x", content="x"),
+        "write-backup": bash("echo x > ~/.claude-backup/x"),
+        "write-json-lookalike": bash("echo x > ~/.claude.json-x"),
+        "write-json-prefix-lookalike": bash("echo x > ~/.claude.jsonl"),
+        "read-json-backup": bash("cat ~/.claude.json.backup"),
+        "grep-json-backups": bash("grep -c x ~/.claude.json.*"),
+        "list-json-backups": bash("ls -la ~/.claude.json.* | head"),
+        "cd-home-list-json-backups": bash("cd ~ && ls .claude.json.*"),
+        "read-tool-json-backup": tool("Read", file_path=f"{user}/.claude.json.backup"),
+        "rm-other-dotfile-glob": bash("rm -f ~/.cache/*.bak"),
+        "write-worktree-tool": tool("Write", file_path=f"{worktree}/f.py", content="x"),
+        "edit-worktree-tool": tool(
+            "Edit", file_path=f"{worktree}/f.py", old_string="a", new_string="b"
+        ),
+        "rm-worktree": bash(f"rm -rf {worktree}"),
+        "rm-worktree-tilde": bash("rm -rf ~/proj/.claude/worktrees/x"),
+        "redirect-worktree": bash(f"echo x > {worktree}/f.py"),
+        "cd-worktree-redirect": bash(f"cd {worktree} && echo x > f.py"),
+        "cd-worktree-rm": bash(f"cd {worktree} && rm -rf build"),
+        "cwd-worktree-redirect": bash("echo x > f.py", cwd=str(worktree)),
+        "cwd-worktree-rm": bash("rm -rf build", cwd=str(worktree)),
+        "mkdir-worktree": bash("mkdir -p ~/proj/.claude/worktrees/y"),
+        "cp-into-worktree": bash("cp -r a ~/proj/.claude/worktrees/x/"),
+        "git-worktree-add": bash("git worktree add ~/proj/.claude/worktrees/y"),
+        "git-in-worktree": bash("git -C ~/proj/.claude/worktrees/x commit -m x"),
+        "cd-repo-git-worktree-remove": bash("cd ~/proj && git worktree remove .claude/worktrees/x"),
+        "ln-lookalike": bash("ln -s a ~/.claude-x"),
+        "cwd-repo-relative-worktree-rm": bash("rm -rf .claude/worktrees/x", cwd=str(user / "proj")),
+        "cd-home-cat-relative": bash("cd ~ && cat .claude/CLAUDE.md"),
+        "cd-home-grep-relative": bash("cd ~ && grep -r x .claude/agents | head"),
+        "cd-home-list-then-git": bash("cd ~ && ls -la .claude; git status"),
+        "cd-project-touch": bash("cd ~/proj && touch notes.md"),
+        "cd-home-touch-lookalike": bash("cd ~ && touch .claude-notes"),
+        "cd-unknown-touch": bash('cd "$X" && touch notes.md'),
+        "cd-project-edit-own-claude": bash("cd ~/proj && sed -i s/a/b/ .claude/worktrees/x/f.py"),
+        "cd-home-heredoc-naming-it": bash(
+            "cd ~ && cat > /tmp/n.md <<'EOF'\nsee .claude/CLAUDE.md\nEOF"
+        ),
+        "cd-home-commit-message": bash("cd ~/proj && git commit -m 'edit ../.claude/CLAUDE.md'"),
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg foo ~/.claude/plugins",
+        "rg foo ~/coven-memory",
+        "rg foo ~/.config/coven",
+        "rg foo ~/.claude/settings.json",
+        "cd ~/coven-memory && ls",
+        "cd ~/.config/coven && cat config.json",
+        "cd ~/.claude/plugins && ls",
+        "cat ~/.claude/settings.json",
+        "cat ~/coven-memory/systems/guard.json",
+        "jq . ~/.claude/settings.json",
+        "jq . ~/coven-memory/systems/guard.json",
+        "cd ~/coven-memory && ls 2>/dev/null",
+        "cd ~/.config/coven && ls 2>&1",
+        'for f in ~/.claude/plugins/*; do cat "$f"; done',
+        'for f in ~/coven-memory/systems/*; do cat "$f"; done',
+    ],
+)
+def test_the_other_zones_take_no_reader_of_the_user_folders_zone(
+    run: Run, store: Path, command: str
+) -> None:
+    """`rg` and a `cd` that only reads are the user folder's own: the store, config, settings and
+    plugins zones judge them as they did."""
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+
+
+PYTHON_READS_FOLDER = "python3 - <<'EOF'\nprint(open('~/.claude/projects/p/a.jsonl').read())\nEOF"
+
+
+def test_an_interpreter_reading_the_user_folder_stays_refused(run: Run, store: Path) -> None:
+    """python3 is no reader of the user folder: its code could write there as well. Pinned until
+    the question is decided."""
+    for command in (PYTHON_READS_FOLDER, "python3 -c \"print(open('~/.claude.json').read())\""):
+        proc = run(bash(command), role="pm")
+        assert proc.returncode == 2, command
+        assert FOLDER_REFUSAL in proc.stderr
+        assert run(bash(command)).returncode == 0
+
+
+READS_IDS = list(folder_reads(Path("/x"), Path("/y")))
+
+
+@pytest.mark.parametrize("name", READS_IDS)
+def test_a_restricted_session_reads_claude_codes_user_folder_and_writes_next_to_it(
+    run: Run, store: Path, name: str
+) -> None:
+    (home() / "proj" / ".claude" / "worktrees" / "x").mkdir(parents=True)
+    proc = run(folder_reads(home(), claude_dir())[name], role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- a session's own scratch folders: its CLAUDE_JOB_DIR and its transcript's session folder ---
+
+SESSION_ID = "0b5d3c1e-2f4a-4b6c-8d9e-0123456789ab"
+OTHER_SESSION_ID = "9f8e7d6c-5b4a-4321-8fed-cba987654321"
+JOB_ID = SESSION_ID[:8]
+OTHER_JOB_ID = OTHER_SESSION_ID[:8]
+
+
+def job_folder(job: str = JOB_ID) -> Path:
+    return claude_dir() / "jobs" / job
+
+
+def session_folder(session: str = SESSION_ID) -> Path:
+    return claude_dir() / "projects" / "-proj" / session
+
+
+def transcript(session: str = SESSION_ID) -> str:
+    return f"{session_folder(session)}.jsonl"
+
+
+def in_session(payload: Payload, transcript_path: object = None) -> Payload:
+    """The payload as Claude Code sends it for this session: with its transcript's path."""
+    path = transcript() if transcript_path is None else transcript_path
+    return {**payload, "transcript_path": path}
+
+
+def job_env(job_dir: str | None = None) -> dict[str, str]:
+    """The hook's own environment, where Claude Code sets CLAUDE_JOB_DIR for a background
+    session."""
+    return {"CLAUDE_JOB_DIR": str(job_folder()) if job_dir is None else job_dir}
+
+
+def own_folder_writes(job: Path, session: Path) -> dict[str, Payload]:
+    """Writes inside the session's own folders: allowed for a restricted session."""
+    return {
+        "write-in-job": tool("Write", file_path=f"{job}/notes.md", content="x"),
+        "edit-in-job": tool("Edit", file_path=f"{job}/notes.md", old_string="a", new_string="b"),
+        "write-in-session": tool("Write", file_path=f"{session}/plan.md", content="x"),
+        "edit-in-session": tool(
+            "Edit", file_path=f"{session}/plan.md", old_string="a", new_string="b"
+        ),
+        "notebook-in-job": tool("NotebookEdit", notebook_path=f"{job}/x.ipynb"),
+        "redirect-job-variable": bash('echo x > "$CLAUDE_JOB_DIR/out.txt"'),
+        "redirect-braced-job-variable": bash("echo x >> ${CLAUDE_JOB_DIR}/out.txt"),
+        "redirect-job-literal": bash(f"echo x > {job}/out.txt"),
+        "redirect-session-literal": bash(f"printf x > {session}/notes.md"),
+        "mkdir-in-job": bash('mkdir -p "$CLAUDE_JOB_DIR/sub/deeper"'),
+        "mkdir-the-job-folder": bash('mkdir -p "$CLAUDE_JOB_DIR"'),
+        "mkdir-in-session": bash(f"mkdir -p {session}/scratch"),
+        "cp-into-job": bash('cp /tmp/x "$CLAUDE_JOB_DIR/x"'),
+        "cp-into-job-folder": bash('cp /tmp/x "$CLAUDE_JOB_DIR/"'),
+        "cp-into-session": bash(f"cp -r /tmp/d {session}/d"),
+        "rm-file-in-job": bash('rm "$CLAUDE_JOB_DIR/out.txt"'),
+        "rm-folder-in-job": bash('rm -rf "$CLAUDE_JOB_DIR/sub"'),
+        "rm-glob-in-job": bash('rm -f "$CLAUDE_JOB_DIR"/*.tmp'),
+        "rm-file-in-session": bash(f"rm -f {session}/notes.md"),
+        "mv-inside-job": bash('mv "$CLAUDE_JOB_DIR/a" "$CLAUDE_JOB_DIR/b"'),
+        "tee-in-job": bash('ls | tee "$CLAUDE_JOB_DIR/list.txt"'),
+        "sed-in-place-in-job": bash('sed -i s/a/b/ "$CLAUDE_JOB_DIR/notes.md"'),
+        "touch-in-session": bash(f"touch {session}/x"),
+        "cd-job-then-write": bash('cd "$CLAUDE_JOB_DIR" && echo x > out.txt && mkdir -p sub'),
+        "cd-session-then-write": bash(f"cd {session} && echo x > notes.md"),
+        "heredoc-into-job": bash("cat > \"$CLAUDE_JOB_DIR/s.md\" <<'EOF'\ntext\nEOF"),
+        "read-then-write-in-job": bash('grep x ~/.claude/a > "$CLAUDE_JOB_DIR/hits.txt"'),
+    }
+
+
+OWN_WRITE_IDS = list(own_folder_writes(Path("/j"), Path("/s")))
+
+
+@pytest.mark.parametrize("name", OWN_WRITE_IDS)
+def test_a_restricted_session_writes_in_its_own_scratch_folders(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(own_folder_writes(job_folder(), session_folder())[name])
+    proc = run(payload, role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", ["echo x > out.txt", "rm -rf sub", "mkdir -p a/b"])
+def test_a_restricted_session_working_in_its_job_folder_writes_there(
+    run: Run, store: Path, command: str
+) -> None:
+    job_folder().mkdir(parents=True)
+    payload = in_session(bash(command, cwd=str(job_folder())))
+    assert run(payload, role="pm", env=job_env()).returncode == 0
+
+
+def own_folder_refusals(job: Path, session: Path, folder: Path) -> dict[str, Payload]:
+    """What stays refused with the session's own folders known: the folders themselves, what is
+    beside or above them, and their way out."""
+    other_job, other_session = folder / "jobs" / OTHER_JOB_ID, session.parent / OTHER_SESSION_ID
+    return {
+        "rm-job-folder": bash('rm -rf "$CLAUDE_JOB_DIR"'),
+        "rm-job-folder-slash": bash('rm -rf "$CLAUDE_JOB_DIR/"'),
+        "rm-job-folder-literal": bash(f"rm -rf {job}"),
+        "rm-job-folder-dot": bash('rm -rf "$CLAUDE_JOB_DIR/."'),
+        "rm-session-folder": bash(f"rm -rf {session}"),
+        "mv-job-folder": bash('mv "$CLAUDE_JOB_DIR" /tmp/j'),
+        "mv-into-job-folder-name": bash('mv /tmp/l "$CLAUDE_JOB_DIR"'),
+        "chmod-job-folder": bash('chmod 000 "$CLAUDE_JOB_DIR"'),
+        "chmod-session-folder": bash(f"chmod -R 000 {session}"),
+        "ln-job-folder": bash('ln -sfn ~/.claude/skills "$CLAUDE_JOB_DIR"'),
+        "ln-inside-job": bash('ln -s ../../skills "$CLAUDE_JOB_DIR/s"'),
+        "find-delete-job-folder": bash('find "$CLAUDE_JOB_DIR" -name "*.tmp" -delete'),
+        "rm-jobs-root": bash("rm -rf ~/.claude/jobs"),
+        "rm-projects-root": bash("rm -rf ~/.claude/projects"),
+        "rm-project-of-session": bash(f"rm -rf {session.parent}"),
+        "write-jobs-root": bash("echo x > ~/.claude/jobs/x"),
+        "write-projects-root": tool("Write", file_path=f"{folder}/projects/x.md", content="x"),
+        "write-transcript": bash(f"echo x >> {session}.jsonl"),
+        "write-transcript-tool": tool("Write", file_path=f"{session}.jsonl", content="x"),
+        "write-other-job": bash(f"echo x > {other_job}/x"),
+        "write-other-job-tool": tool("Write", file_path=f"{other_job}/x", content="x"),
+        "write-other-session": bash(f"echo x > {other_session}/x"),
+        "write-other-session-tool": tool("Write", file_path=f"{other_session}/x", content="x"),
+        "glob-other-jobs": bash('rm -rf "$CLAUDE_JOB_DIR"*'),
+        "glob-beside-job": bash('rm -rf "$CLAUDE_JOB_DIR"/../*'),
+        "escape-job": bash(f'echo x > "$CLAUDE_JOB_DIR/../{OTHER_JOB_ID}/x"'),
+        "escape-job-tool": tool("Write", file_path=f"{job}/../{OTHER_JOB_ID}/x", content="x"),
+        "escape-session": bash(f"echo x > {session}/../{OTHER_SESSION_ID}/x"),
+        "escape-session-tool": tool(
+            "Write", file_path=f"{session}/../{OTHER_SESSION_ID}/x", content="x"
+        ),
+        "escape-to-skills": bash('echo x > "$CLAUDE_JOB_DIR/../../skills/x"'),
+        "cd-job-then-up": bash('cd "$CLAUDE_JOB_DIR" && rm -rf ../x'),
+        "subagents": bash(f"echo x > {session}/subagents/x"),
+        "subagents-tool": tool("Write", file_path=f"{session}/subagents/a.jsonl", content="x"),
+        "rm-subagents": bash(f"rm -rf {session}/subagents"),
+        "glob-subagents": bash(f"rm -rf {session}/sub*"),
+        "glob-session-contents": bash(f"rm -rf {session}/*"),
+        "auto-memory": tool("Write", file_path=f"{session.parent}/memory/MEMORY.md", content="x"),
+        "auto-memory-bash": bash(f"echo x >> {session.parent}/memory/MEMORY.md"),
+        "skills": bash("echo x > ~/.claude/skills/x"),
+        "claude-json": bash("echo x > ~/.claude.json"),
+        "inline-job-variable": bash('CLAUDE_JOB_DIR=~/.claude/skills; rm -rf "$CLAUDE_JOB_DIR/x"'),
+        "inline-job-variable-prefix": bash(
+            "CLAUDE_JOB_DIR=~/.claude/skills sh -c 'echo x > \"$CLAUDE_JOB_DIR/y\"'"
+        ),
+        "exported-job-variable": bash(
+            'export CLAUDE_JOB_DIR=~/.claude/skills && echo x > "$CLAUDE_JOB_DIR/y"'
+        ),
+        "unset-job-variable": bash('unset CLAUDE_JOB_DIR; echo x > "$CLAUDE_JOB_DIR/y"'),
+        "read-into-job-variable": bash(
+            'read CLAUDE_JOB_DIR < /tmp/p; echo x > "$CLAUDE_JOB_DIR/y"'
+        ),
+        "loop-job-variable": bash(
+            'for CLAUDE_JOB_DIR in ~/.claude/skills; do echo x > "$CLAUDE_JOB_DIR/y"; done'
+        ),
+    }
+
+
+OWN_REFUSAL_IDS = list(own_folder_refusals(Path("/j"), Path("/s"), Path("/f")))
+
+
+@pytest.mark.parametrize("name", OWN_REFUSAL_IDS)
+def test_a_restricted_session_cannot_change_its_scratch_folders_or_what_is_beside_them(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(own_folder_refusals(job_folder(), session_folder(), claude_dir())[name])
+    proc = run(payload, role="pm", env=job_env())
+    assert proc.returncode == 2
+    assert FOLDER_REFUSAL in proc.stderr
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize("command", ["rm -rf .", "rm -rf ..", "rm -rf ../x", "chmod 000 ."])
+def test_a_restricted_session_working_in_its_job_folder_changes_nothing_around_it(
+    run: Run, store: Path, command: str
+) -> None:
+    job_folder().mkdir(parents=True)
+    payload = in_session(bash(command, cwd=str(job_folder())))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+
+
+def test_a_restricted_session_working_in_another_job_folder_writes_nothing_there(
+    run: Run, store: Path
+) -> None:
+    job_folder(OTHER_JOB_ID).mkdir(parents=True)
+    payload = in_session(bash("echo x > out.txt", cwd=str(job_folder(OTHER_JOB_ID))))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+
+
+@pytest.mark.parametrize(
+    "job_dir",
+    ["", "jobs/0b5d3c1e", "JOBS", "SKILLS", "JOBS/0b5d3c1e/deeper", "/tmp/jobs/0b5d3c1e"],
+    ids=["empty", "relative", "jobs-root", "not-under-jobs", "nested", "another-folder"],
+)
+def test_a_job_folder_that_is_not_one_widens_nothing(run: Run, store: Path, job_dir: str) -> None:
+    """Only a CLAUDE_JOB_DIR that is a folder right under `<claude folder>/jobs/` is a scratch
+    folder: any other value leaves the zone whole."""
+    value = job_dir.replace("JOBS", str(claude_dir() / "jobs"))
+    value = value.replace("SKILLS", str(claude_dir() / "skills"))
+    for payload in (
+        bash(f"echo x > {job_folder()}/out.txt"),
+        bash(f"echo x > {claude_dir()}/skills/x"),
+        bash(f"mkdir -p {claude_dir()}/jobs/0b5d3c1e/deeper/x"),
+        tool("Write", file_path=f"{job_folder()}/notes.md", content="x"),
+    ):
+        proc = run(payload, role="pm", env=job_env(value))
+        assert proc.returncode == 2, (payload, proc.stderr)
+
+
+def test_without_a_job_folder_the_jobs_folder_stays_refused(run: Run, store: Path) -> None:
+    payload = bash(f"echo x > {job_folder()}/out.txt")
+    proc = run(payload, role="pm", env={"CLAUDE_JOB_DIR": ""})
+    assert proc.returncode == 2
+    assert FOLDER_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "transcript_path",
+    [
+        None,
+        "",
+        7,
+        f"projects/-proj/{SESSION_ID}.jsonl",
+        "CLAUDE/SESSION.jsonl",
+        "CLAUDE/projects/SESSION.jsonl",
+        "CLAUDE/projects/-proj/x/SESSION.jsonl",
+        "CLAUDE/projects/-proj/SESSION",
+        "CLAUDE/projects/-proj/SESSION.txt",
+        "CLAUDE/projects/-proj/memory.jsonl",
+        "CLAUDE/projects/-proj/../-proj/SESSION.jsonl",
+        f"/tmp/projects/-proj/{SESSION_ID}.jsonl",
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "not-a-string",
+        "relative",
+        "not-under-projects",
+        "projects-root",
+        "too-deep",
+        "no-jsonl",
+        "other-suffix",
+        "memory-name",
+        "dot-dot",
+        "another-folder",
+    ],
+)
+def test_an_odd_transcript_path_widens_nothing(
+    run: Run, store: Path, transcript_path: object
+) -> None:
+    """Only a transcript right under `<claude folder>/projects/<project>/`, named for a session id,
+    gives a scratch folder; anything else leaves the zone whole."""
+    if isinstance(transcript_path, str):
+        transcript_path = transcript_path.replace("CLAUDE", str(claude_dir()))
+        transcript_path = transcript_path.replace("SESSION", SESSION_ID)
+    extra = {} if transcript_path is None else {"transcript_path": transcript_path}
+    for payload in (
+        tool("Write", file_path=f"{session_folder()}/x.md", content="x"),
+        bash(f"echo x > {session_folder()}/x.md"),
+        bash(f"echo x > {session_folder().parent}/memory/x"),
+    ):
+        proc = run({**payload, **extra}, role="pm", env=job_env(""))
+        assert proc.returncode == 2, (payload, proc.stderr)
+
+
+def test_a_symlink_out_of_a_scratch_folder_is_followed(run: Run, store: Path) -> None:
+    """The guard resolves a path that exists through its symlinks (os.path.realpath), so a link in
+    the job folder that points at the skills folder is the skills folder."""
+    job_folder().mkdir(parents=True)
+    (claude_dir() / "skills").mkdir()
+    (job_folder() / "out").symlink_to(claude_dir() / "skills")
+    for payload in (
+        bash('echo x > "$CLAUDE_JOB_DIR/out/y"'),
+        tool("Write", file_path=f"{job_folder()}/out/y", content="x"),
+    ):
+        assert run(in_session(payload), role="pm", env=job_env()).returncode == 2
+
+
+def test_a_job_folder_that_is_a_symlink_elsewhere_is_no_scratch_folder(
+    run: Run, store: Path
+) -> None:
+    (claude_dir() / "skills").mkdir(parents=True)
+    (claude_dir() / "jobs").mkdir()
+    job_folder().symlink_to(claude_dir() / "skills")
+    payload = bash(f"echo x > {claude_dir()}/skills/y")
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+
+
+def test_the_settings_zone_still_holds_inside_a_scratch_folder(run: Run, store: Path) -> None:
+    """The scratch folders are the user folder zone's alone: a settings file in one stays the
+    settings zone's."""
+    for payload in (
+        bash('echo {} > "$CLAUDE_JOB_DIR/.claude/settings.json"'),
+        tool("Write", file_path=f"{session_folder()}/.claude/settings.local.json", content="{}"),
+    ):
+        proc = run(in_session(payload), role="pm", env=job_env())
+        assert proc.returncode == 2
+        assert SETTINGS_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize("name", ["redirect-job-literal", "write-in-session", "mkdir-in-job"])
+def test_a_plain_session_writes_in_the_scratch_folders_as_before(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(own_folder_writes(job_folder(), session_folder())[name])
+    assert run(payload, env=job_env()).returncode == 0
+
+
+# --- the user folder: a write the guard cannot pin to a path, or that may alias a folder ---
+
+
+def pinned(text: str) -> str:
+    """A case with its folders written in: H home, C the user folder, J the job folder, S the
+    session folder."""
+    return (
+        text.replace("{S}", str(session_folder()))
+        .replace("{J}", str(job_folder()))
+        .replace("{C}", str(claude_dir()))
+        .replace("{H}", str(home()))
+    )
+
+
+# Written words with an expansion the guard does not follow: each fails closed when it names
+# `.claude`, puts the expansion right under home or `/`, or climbs from a folder it cannot pin.
+UNPINNED_WRITES: dict[str, tuple[str, str]] = {
+    "variable-holds-home": ("D=~; rm -rf $D/.claude/skills", "/tmp"),
+    "stripped-home": ("rm -rf ${HOME%/}/.claude/skills", "/tmp"),
+    "stripped-home-mv": ("mv /tmp/e.md ${HOME%/}/.claude/CLAUDE.md", "/tmp"),
+    "stripped-home-json": ("echo {} > ${HOME%/}/.claude.json", "/tmp"),
+    "stripped-home-cp": ("cp /tmp/s.json ${HOME%/}/.claude/agents/x.md", "/tmp"),
+    "stripped-home-ln": ("ln -sf /tmp/x ${HOME%/}/.claude/skills/x", "/tmp"),
+    "stripped-config-dir": ("rm -rf ${CLAUDE_CONFIG_DIR%/}/skills", "/tmp"),
+    "defaulted-home": ('rm -rf "${HOME:-/}"/.claude', "/tmp"),
+    "split-name": ("rm -rf ~/.cl${X}aude/skills", "/tmp"),
+    "split-name-plain": ("rm -rf ~/.cl$Xaude/skills", "/tmp"),
+    "split-json": ("echo {} > ~/.cl${X}aude.json", "/tmp"),
+    "name-in-variable": ("N=.claude; rm -rf ~/$N/skills", "/tmp"),
+    "array-holds-home": ("a=(~); rm -rf ${a[0]}/.claude/skills", "/tmp"),
+    "substitution-dirname": ('rm -rf "$(dirname ~/x)/.claude/skills"', "/tmp"),
+    "substitution-pwd": ('rm -rf "$(pwd)/../.claude/skills"', "{H}/proj"),
+    "backtick-pwd": ("rm -rf `pwd`/../.claude/skills", "{H}/proj"),
+    "tilde-plus": ("rm -rf ~+/../.claude/skills", "{H}/proj"),
+    "tilde-plus-two-up": ("rm -rf ~+/../../.claude/skills", "{H}/proj/sub"),
+    "pwd-variable": ('rm -rf "$PWD"/../.claude/skills', "{H}/proj"),
+    "pwd-variable-two-up": ('rm -rf "$PWD"/../../.claude/skills', "{H}/proj/sub"),
+    "brace-climb": ("rm -rf {.,}./.claude/skills", "{H}/proj"),
+    "brace-climb-after": ("rm -rf .{.,}/.claude/skills", "{H}/proj"),
+    "tilde-minus": ("cd ~ && cd /tmp && rm -rf ~-/.claude/skills", "/tmp"),
+    "oldpwd": ("cd ~ && cd /tmp && rm -rf $OLDPWD/.claude/skills", "/tmp"),
+    "dir-stack": ("cd ~ && pushd /tmp && rm -rf ~1/.claude/skills", "/tmp"),
+    "unknown-climb": ("rm -rf $X/../../skills", "{C}/jobs"),
+    "cd-unknown-climb": ("cd $X/.. && rm -rf skills", "/tmp"),
+    "cd-tilde-plus": ("cd ~+/.. && rm -rf .claude/skills", "{H}/proj"),
+    "job-defaulted": ("rm -rf ${CLAUDE_JOB_DIR:-x}/../../skills", "/tmp"),
+    "job-stripped": ("echo x > ${CLAUDE_JOB_DIR%/*}/../CLAUDE.md", "/tmp"),
+    "job-stripped-twice": ("rm -rf ${CLAUDE_JOB_DIR%/*/*}/skills", "/tmp"),
+    "job-unset-climb": ('rm -rf "$CLAUDE_JOB_DIR/../../skills"; export A=1', "/tmp"),
+    "job-zsh-modifier": ("rm -rf $CLAUDE_JOB_DIR:h/../skills", "/tmp"),
+    "job-glued": ("rm -rf x$CLAUDE_JOB_DIR/../skills", "/tmp"),
+    "job-escaped": ("cd .. && echo x > \\$CLAUDE_JOB_DIR", "{J}"),
+    "job-single-quoted": ("cd .. && touch '$CLAUDE_JOB_DIR'", "{J}"),
+    "piped-heredoc-to-shell": ("cat <<'E' | sh\nrm -rf ${HOME%/}/.cl${X}aude\nE", "/srv"),
+}
+
+# Written words with an expansion that stays pinned or far from the folder, and reads.
+PINNED_WRITES: dict[str, tuple[str, str]] = {
+    "unknown-variable-folder": ('echo x > "$OUT/result.txt"', "/tmp"),
+    "substitution-in-tmp": ("echo x > /srv/run-$(date +%s).log", "/tmp"),
+    "brace-in-tmp": ("mkdir -p /tmp/w/{a,b}", "/tmp"),
+    "pid-in-tmp": ("rm -rf /srv/x-$$", "/tmp"),
+    "home-variable-elsewhere": ('echo x > "$HOME/proj/out.txt"', "/tmp"),
+    "job-folder-file": ('echo x > "$CLAUDE_JOB_DIR/out.txt"', "/tmp"),
+    "job-braced-file": ("echo x > ${CLAUDE_JOB_DIR}/out.txt", "/tmp"),
+    "read-to-named-file": ("cat ~/.claude/CLAUDE.md > /srv/$(date +%s).md", "/tmp"),
+    "python-heredoc-markdown": (
+        "cd /srv/docs && python3 - <<'PY'\ns = '> `A or B`.** settled'\nPY",
+        "/srv",
+    ),
+    "python-heredoc-then-piped-substitution": (
+        "python3 - <<'PY'\ns = '> `A or B`.** settled'\nPY\n"
+        'sed -n "$(grep -n x /srv/d.md | cut -d: -f1),+4p" /srv/d.md',
+        "/srv",
+    ),
+}
+
+UNPINNED_IDS = list(UNPINNED_WRITES)
+PINNED_IDS = list(PINNED_WRITES)
+
+
+@pytest.mark.parametrize("name", UNPINNED_IDS)
+def test_a_written_word_the_guard_cannot_pin_fails_closed_near_the_user_folder(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in UNPINNED_WRITES[name])
+    payload = in_session(bash(command, cwd=cwd))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize("name", PINNED_IDS)
+def test_a_written_word_with_an_expansion_far_from_the_user_folder_runs(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in PINNED_WRITES[name])
+    proc = run(in_session(bash(command, cwd=cwd)), role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_job_variable_with_no_job_folder_still_fails_closed_when_it_climbs(
+    run: Run, store: Path
+) -> None:
+    payload = bash('rm -rf "$CLAUDE_JOB_DIR/../../skills"')
+    assert run(payload, role="pm").returncode == 2
+
+
+# Writes through a path that aliases a folder: /proc/self/cwd is where the shell is.
+ALIASED_WRITES: dict[str, tuple[str, str]] = {
+    "proc-cwd-after-cd": ("cd ~/.claude && echo x > /proc/self/cwd/CLAUDE.md", "/tmp"),
+    "proc-cwd-cp": ("cd ~/.claude/skills/x && cp /tmp/e.md /proc/self/cwd/SKILL.md", "/tmp"),
+    "proc-cwd-tee": ("cd ~/.claude/agents && echo x | tee /proc/self/cwd/a.md", "/tmp"),
+    "proc-cwd-from-cwd": ("echo x > /proc/self/cwd/CLAUDE.md", "{C}"),
+    "proc-thread-self": ("cd ~/.claude && echo x > /proc/thread-self/cwd/CLAUDE.md", "/tmp"),
+    "proc-pid-root": ("echo x > /proc/1/root{C}/CLAUDE.md", "/tmp"),
+    "proc-fd": ("cd ~/.claude && exec 3<. && echo x > /proc/self/fd/3/CLAUDE.md", "/tmp"),
+    "dev-fd": ("cd ~/.claude && exec 3<. && echo x > /dev/fd/3/CLAUDE.md", "/tmp"),
+    "proc-cwd-settings": ("cd ~/.claude && echo {} > /proc/self/cwd/settings.json", "/tmp"),
+    "proc-cwd-plugins": ("cd ~/.claude/plugins && echo x > /proc/self/cwd/x", "/tmp"),
+}
+
+ALIASED_IDS = list(ALIASED_WRITES)
+
+
+@pytest.mark.parametrize("name", ALIASED_IDS)
+def test_a_write_through_a_path_that_aliases_a_folder_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in ALIASED_WRITES[name])
+    payload = bash(command, cwd=cwd)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize("device", ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"])
+def test_a_read_of_the_user_folder_may_print_to_a_terminal_device(
+    run: Run, store: Path, device: str
+) -> None:
+    proc = run(bash(f"cat ~/.claude/CLAUDE.md > {device}"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# What a read sets for the programs it runs: an option variable turns a read into a write.
+ARMED_READS: dict[str, str] = {
+    "export-tar-options": "export TAR_OPTIONS=--remove-files; tar -cf /tmp/x.tar ~/.claude/skills",
+    "export-tar-options-and": (
+        "export TAR_OPTIONS=--remove-files && tar -cf /tmp/x.tar ~/.claude/skills"
+    ),
+    "export-tar-checkpoint": (
+        "export TAR_OPTIONS=--checkpoint-action=exec=sh; tar -cf /tmp/x.tar ~/.claude/a"
+    ),
+    "prefix-tar-options": "TAR_OPTIONS=--remove-files tar -cf /tmp/x.tar ~/.claude/skills",
+    "prefix-ripgrep-config": "RIPGREP_CONFIG_PATH=/tmp/rc rg x ~/.claude",
+    "env-ripgrep-config": "env RIPGREP_CONFIG_PATH=/tmp/rc rg x ~/.claude",
+    "export-ripgrep-config": (
+        "printf -- '--pre=/tmp/x\\n' > /tmp/rc; export RIPGREP_CONFIG_PATH=/tmp/rc; rg x ~/.claude"
+    ),
+    "prefix-lessopen": "LESSOPEN='|/tmp/x %s' cat ~/.claude/a",
+    "declare-exported": "declare -x TAR_OPTIONS=--remove-files; tar -cf /tmp/x ~/.claude/a",
+    "all-export": "set -a; TAR_OPTIONS=--remove-files; tar -cf /tmp/x ~/.claude/a",
+    "export-later": "TAR_OPTIONS=--remove-files; export TAR_OPTIONS; tar -cf /tmp/x ~/.claude/a",
+    "printf-to-variable": (
+        "printf -vTAR_OPTIONS %s --remove-files; export TAR_OPTIONS; tar -cf /tmp/x ~/.claude/a"
+    ),
+    "printf-to-path": (
+        "mkdir -p /tmp/b; echo 'rm -rf ~/.claude/skills' > /tmp/b/cat; chmod +x /tmp/b/cat;"
+        " printf -vPATH %s /tmp/b; cat /x"
+    ),
+}
+
+ARMED_IDS = list(ARMED_READS)
+
+
+@pytest.mark.parametrize("name", ARMED_IDS)
+def test_a_read_of_the_user_folder_is_no_read_once_the_text_sets_what_programs_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(ARMED_READS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "LC_ALL=C grep -c x ~/.claude/a.jsonl",
+        "export LANG=C.UTF-8; cat ~/.claude/CLAUDE.md",
+        "TZ=UTC ls -l ~/.claude",
+        "COLUMNS=200 NO_COLOR=1 ls ~/.claude",
+        "export TERM=xterm-256color; ls --color=always ~/.claude",
+        "J=~/.claude/x.jsonl; grep -c x $J",
+    ],
+    ids=["lc-all", "export-lang", "tz", "columns-no-color", "export-term", "lone-name"],
+)
+def test_a_read_of_the_user_folder_may_set_what_only_changes_its_output(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_lone_assignment_of_a_name_the_environment_holds_turns_a_read_off(
+    run: Run, store: Path
+) -> None:
+    """The shell hands an exported name's new value to every program it runs."""
+    payload = bash("TAR_OPTIONS=--remove-files; tar -cf /tmp/x.tar ~/.claude/skills")
+    assert run(payload, role="pm", env={"TAR_OPTIONS": "-v"}).returncode == 2
+
+
+# A file written with words that name the folder, in a text that runs more than readers.
+SAME_CALL_RUNS: dict[str, tuple[str, str]] = {
+    "git-hook": (
+        "printf '#!/bin/sh\\nrm -rf ~/.claude/skills\\n' > /tmp/r/.git/hooks/pre-commit;"
+        " chmod +x /tmp/r/.git/hooks/pre-commit; git -C /tmp/r commit --allow-empty -m x",
+        "/tmp",
+    ),
+    "heredoc-git-hook": (
+        "cat > .git/hooks/pre-commit <<'E'\n#!/bin/sh\nrm -rf ~/.claude/skills\nE\n"
+        "chmod +x .git/hooks/pre-commit && git commit -m x",
+        "{H}/proj",
+    ),
+    "git-alias": (
+        "printf '[alias]\\n\\tx = !rm -rf ~/.claude/skills\\n' > /tmp/gc;"
+        " git -c include.path=/tmp/gc x",
+        "/tmp",
+    ),
+    "npm-script": (
+        'echo \'{"scripts":{"x":"rm -rf ~/.claude/skills"}}\' > /tmp/p/package.json;'
+        " npm --prefix /tmp/p run x",
+        "/tmp",
+    ),
+    "pytest-conftest": (
+        "echo 'import shutil; shutil.rmtree(\"{C}/skills\")' > /tmp/t/conftest.py; pytest /tmp/t",
+        "/tmp",
+    ),
+    "uv-run": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; uv run sh /tmp/s", "/tmp"),
+    "busybox": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; busybox sh /tmp/s", "/tmp"),
+    "unshare": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; unshare -r sh /tmp/s", "/tmp"),
+    "setpriv": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; setpriv sh /tmp/s", "/tmp"),
+    "at-file": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; at -f /tmp/s now", "/tmp"),
+    "at-input": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; at now < /tmp/s", "/tmp"),
+    "batch-input": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; batch < /tmp/s", "/tmp"),
+    "crontab-heredoc": (
+        "cat > /tmp/c <<'E'\n* * * * * rm -rf ~/.claude/skills\nE\ncrontab /tmp/c",
+        "/tmp",
+    ),
+    "crontab-printf": (
+        "printf '* * * * * rm -rf ~/.claude/skills\\n' > /tmp/c; crontab /tmp/c",
+        "/tmp",
+    ),
+    "make": ("printf 'all:\\n\\trm -rf ~/.claude/skills\\n' > /tmp/M; make -f /tmp/M", "/tmp"),
+    "echo-then-git": ("echo see ~/.claude/a > /tmp/n.md; git status", "/tmp"),
+    "tee-then-tool": ("echo 'rm -rf ~/.claude/x' | tee /tmp/s >/dev/null; mytool /tmp/s", "/tmp"),
+}
+
+SAME_CALL_IDS = list(SAME_CALL_RUNS)
+
+
+@pytest.mark.parametrize("name", SAME_CALL_IDS)
+def test_a_file_naming_the_user_folder_is_refused_beside_a_command_that_is_no_reader(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in SAME_CALL_RUNS[name])
+    payload = bash(command, cwd=cwd)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat > /tmp/notes.md <<'EOF'\nthe skills live in ~/.claude/skills\nEOF",
+        "echo 'see ~/.claude/skills' > /tmp/n; cat /tmp/n",
+        "grep x ~/.claude/p/a.jsonl > /tmp/out; wc -l /tmp/out",
+        "printf '%s\\n' ~/.claude/a > /tmp/l; sort /tmp/l | uniq",
+        'cd /srv && { echo "transcripts: ~/.claude/projects/"; ls ~/.claude; } > /srv/i; wc -l i',
+    ],
+    ids=["heredoc-alone", "echo-then-cat", "grep-then-count", "printf-then-sort", "group-to-file"],
+)
+def test_a_file_naming_the_user_folder_may_be_written_beside_readers(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# A write into the session folder itself, with names the guard does not know: `subagents/`.
+SESSION_FOLDER_FILLS: dict[str, tuple[str, str]] = {
+    "cp-folder": ("cp -r /tmp/subagents {S}", "/tmp"),
+    "cp-folder-slash": ("cp -r /tmp/subagents {S}/", "/tmp"),
+    "cp-file": ("cp /tmp/a {S}", "/tmp"),
+    "mv-folder": ("mv /tmp/subagents {S}/", "/tmp"),
+    "tar-into": ("tar -xf /tmp/x.tar -C {S}", "/tmp"),
+    "rsync-delete": ("rsync -a --delete /tmp/empty/ {S}/", "/tmp"),
+    "unzip-into": ("unzip /tmp/x.zip -d {S}", "/tmp"),
+    "cd-then-tar": ("cd {S} && tar -xf /tmp/x.tar", "/tmp"),
+    "cwd-tar": ("tar -xf /tmp/x.tar", "{S}"),
+    "cwd-cp-here": ("cp -r /tmp/subagents .", "{S}"),
+    "cwd-unzip": ("unzip /tmp/x.zip", "{S}"),
+}
+
+SESSION_FILL_IDS = list(SESSION_FOLDER_FILLS)
+
+
+@pytest.mark.parametrize("name", SESSION_FILL_IDS)
+def test_a_copy_or_unpacking_into_the_session_folder_itself_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in SESSION_FOLDER_FILLS[name])
+    payload = in_session(bash(command, cwd=cwd))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp /tmp/a {S}/a.txt",
+        "tar -xf /tmp/x.tar -C {S}/unpacked",
+        "cp -r /tmp/subagents {S}/copy",
+        "tar -xf /tmp/x.tar -C {J}",
+        "rsync -a /tmp/d/ {J}/",
+    ],
+    ids=["named-file", "tar-into-sub", "cp-folder-named", "tar-into-job", "rsync-into-job"],
+)
+def test_a_named_file_in_the_session_folder_or_any_copy_into_the_job_folder_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    payload = in_session(bash(pinned(command)))
+    proc = run(payload, role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- brace expansions: a word read as each of the words the shell makes of it ---
+
+# Writes whose brace expansion makes a word in the user folder: `{/tmp/zz,~}/.cl{a,}ude` is
+# `/tmp/zz/.claude ~/.claude /tmp/zz/.clude ~/.clude`.
+BRACED_WRITES: dict[str, str] = {
+    "tee": "echo x | tee {/tmp/zz,~}/.cl{a,}ude/CLAUDE.md",
+    "rm": "rm -rf {/tmp/zz,~}/.cl{a,}ude/skills",
+    "redirect-json": "echo x > {/tmp/zz,~}/.cl{a,}ude.json",
+    "cp-destination": "cp /tmp/e.md {~/.cl{a,}ude,/tmp/zz}/agents/x.md",
+    "letter-range": "rm -rf {/tmp/zz,~}/.cl{a..b}ude/skills",
+    "number-range": "rm -rf {/srv,~}/.cl{a,}ude/skills{1..3}",
+    "nested": "rm -rf {/tmp/zz,{/srv,~}}/.cl{a,{b,}}ude/skills",
+    "from-root": "echo x | tee /{srv,{H}}/.cl{a,}ude/CLAUDE.md",
+    "command-word": "{rm,-rf,~/.cl{a,}ude/skills}",
+    "cd-then-write": "cd {/srv,~}/.cl{a,}ude && rm -rf skills",
+    "past-the-cap": "rm -rf {/srv,~}/.cl{a,}ude{1..100}",
+    "range-from-variable": "rm -rf ~/.cl{a..$X}ude",
+}
+
+BRACED_IDS = list(BRACED_WRITES)
+
+
+@pytest.mark.parametrize("name", BRACED_IDS)
+def test_a_write_whose_brace_expansion_makes_a_word_in_the_user_folder_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(bash(pinned(BRACED_WRITES[name])))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls {/tmp/zz,~}/.cl{a,}ude/skills",
+        "cat ~/.claude/{CLAUDE.md,agents/a.md}",
+        "rm -rf /srv/{a,b}/x",
+        "mkdir -p /srv/w/{a..c}/{x,y}",
+        "cp /srv/f{,.bak}",
+        "touch /srv/f{1..60}",
+    ],
+    ids=["ls", "cat-two", "rm-far", "mkdir-ranges", "backup-copy", "many-far"],
+)
+def test_a_brace_expansion_that_stays_far_from_the_user_folder_or_only_reads_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(in_session(bash(command)), role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf {/tmp/zz,~}/coven-mem{o,}ry/systems",
+        "echo x > {/srv,~}/coven-mem{o,}ry/systems/guard.json",
+    ],
+    ids=["rm", "redirect"],
+)
+def test_a_brace_expansion_that_makes_the_store_is_refused_in_a_restricted_session(
+    run: Run, store: Path, command: str
+) -> None:
+    assert run(bash(command), role="pm").returncode == 2
+    assert run(bash(command)).returncode == 0
+
+
+# --- a printf that sets a variable is no read ---
+
+# `printf -v NAME` and `printf -vNAME` set NAME to the path: a later write by `$NAME` goes there.
+PRINTED_VARIABLES: dict[str, str] = {
+    "glued-rm": 'printf -vD %s ~/.claude/skills; rm -rf "$D"',
+    "glued-cd": 'printf -vD %s ~/.claude; cd "$D" && rm -rf skills',
+    "glued-redirect": 'printf -vD %s ~/.claude/CLAUDE.md; cat /tmp/e > "$D"',
+    "spaced-rm": 'printf -v D %s ~/.claude/skills; rm -rf "$D"',
+}
+
+PRINTED_IDS = list(PRINTED_VARIABLES)
+
+
+@pytest.mark.parametrize("name", PRINTED_IDS)
+def test_a_printf_that_sets_a_variable_to_the_user_folder_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(PRINTED_VARIABLES[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf '%s\\n' ~/.claude/skills",
+        'D=~/.claude/skills; ls "$D"',
+        'printf -vD %s /srv/x; rm -rf "$D"',
+    ],
+    ids=["printf-prints", "assigned-then-read", "printf-sets-far"],
+)
+def test_a_printf_that_prints_the_user_folder_or_sets_a_far_path_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- a variable's subscript or arithmetic runs the command substitutions in it ---
+
+# `D='a[$(...)]'`: whatever reads D as a variable name or a number runs what is in the brackets.
+RUN_BY_SUBSCRIPT = "D='a[$(rm${IFS}-rf${IFS}~/.claude/skills)]'; "
+SUBSCRIPT_RUNS: dict[str, str] = {
+    "test-v": 'test -v "$D"',
+    "bracket-v": '[ -v "$D" ]',
+    "bracket-named-ref": '[ -R "$D" ]',
+    "test-eq": 'test "$D" -eq 0',
+    "bracket-gt": '[ 1 -gt "$D" ]',
+    "operator-from-variable": 'O=-v; test "$O" "$D"',
+    "indirect": 'echo "${!D}"',
+    "substring-offset": 'x=abc; echo "${x:D}"',
+    "array-subscript": 'a=(x y); echo "${a[D]}"',
+    "zsh-subscript": "a=(x y); echo $a[D]",
+    "printf-number": 'printf %d "$D"',
+    "count-or-variable": 'n=$(grep -c x ~/.claude/a || echo "$D"); [ "$n" -ge 2 ]',
+    "copied-variable": 'm=$D; [ "$m" -gt 0 ]',
+    "variable-through-tr": 'n=$(echo "$D" | tr -d " "); [ "$n" -gt 0 ]',
+    "break-count": 'for f in x; do break "$D"; done',
+    "exit-status": 'exit "$D"',
+}
+SUBSCRIPT_IDS = list(SUBSCRIPT_RUNS)
+
+
+@pytest.mark.parametrize("name", SUBSCRIPT_IDS)
+def test_a_read_that_may_evaluate_a_variable_as_a_name_or_number_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(RUN_BY_SUBSCRIPT + SUBSCRIPT_RUNS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# The command text a value keeps for later: single quotes, an escape, ANSI-C quoting.
+KEPT_COMMAND_VALUES: dict[str, str] = {
+    "escaped": 'D=a[\\$\\(rm\\ -rf\\ ~/.claude/skills\\)]; ls "$D"',
+    "ansi-c": "D=$'a[\\x24(rm -rf ~/.claude/skills)]'; ls \"$D\"",
+    "backtick": "D='a[`rm -rf ~/.claude/skills`]'; ls \"$D\"",
+}
+KEPT_IDS = list(KEPT_COMMAND_VALUES)
+
+
+@pytest.mark.parametrize("name", KEPT_IDS)
+def test_an_assignment_that_keeps_command_text_is_no_read(run: Run, store: Path, name: str) -> None:
+    payload = bash(KEPT_COMMAND_VALUES[name])
+    assert run(payload, role="pm").returncode == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "test -d ~/.claude/skills && ls ~/.claude/skills",
+        "[ -f ~/.claude/CLAUDE.md ] && cat ~/.claude/CLAUDE.md",
+        '[ "$x" = y ] && cat ~/.claude/CLAUDE.md',
+        '[ -n "$(ls ~/.claude)" ] && ls ~/.claude',
+        "n=$(grep -c x ~/.claude/a); printf '%d files\\n' \"$n\"; ls ~/.claude",
+        'n=$(grep -c x ~/.claude/a 2>/dev/null || echo 0); [ "$n" -ge 2 ] && ls ~/.claude',
+        '[ "$(grep -c x ~/.claude/a || grep -c y ~/.claude/a)" -gt 6 ] && ls ~/.claude',
+        'n=$([ -f ~/.claude/a ] && grep -c x ~/.claude/a || echo 0); [ "$n" -ge 2 ]',
+        "n=$(wc -l < ~/.claude/a | tr -d ' '); [ \"$n\" -gt 0 ] && ls ~/.claude",
+        'n=$(grep -c x ~/.claude/a || true); [ "$n" -gt 0 ]',
+        'n=$(grep -c x ~/.claude/a || :); [ "$n" -gt 0 ]',
+        'n=$(grep -c x ~/.claude/a); m=$n; [ "$m" -gt 0 ]',
+        'D=~/.claude/skills; ls "$D"',
+    ],
+    ids=[
+        "test-d",
+        "bracket-f",
+        "bracket-equals",
+        "count-test",
+        "printf-count",
+        "count-or-zero",
+        "count-or-count",
+        "tested-count",
+        "count-through-tr",
+        "count-or-true",
+        "count-or-colon",
+        "copied-count",
+        "assigned-path",
+    ],
+)
+def test_a_test_or_expansion_that_evaluates_nothing_still_reads(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- uniq's operands, after `--` and a lone `-` too: the second one is where it writes ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/.claude/projects && uniq /tmp/e -- -tmp-proj/memory/MEMORY.md",
+        "cd ~/.claude/skills && uniq -c -- /tmp/e -SKILL.md",
+        "echo x | uniq - ~/.claude/CLAUDE.md",
+        "uniq - ~/.claude/.credentials.json < /dev/null",
+        "printf '{}\\n' | uniq - ~/.claude.json",
+        "echo x | uniq -z - ~/.claude/agents/e.md",
+        "cd ~/.claude && echo x | uniq - CLAUDE.md",
+    ],
+    ids=["after-cd", "counted", "stdin-dash", "dash-redirected", "json", "zero-ended", "dash-cd"],
+)
+def test_a_uniq_with_a_second_operand_is_no_read(run: Run, store: Path, command: str) -> None:
+    payload = bash(command)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uniq -c ~/.claude/a.txt",
+        "uniq -- ~/.claude/a.txt",
+        "cat ~/.claude/a.txt | sort | uniq -c",
+        "cat ~/.claude/a.txt | uniq -c -",
+    ],
+    ids=["count", "double-dash-one-file", "piped", "stdin-dash-alone"],
+)
+def test_a_uniq_of_one_file_in_the_user_folder_reads(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- zsh's NULLCMD and READNULLCMD: a redirection with no command runs them ---
+
+NULL_COMMAND_RUNS: dict[str, str] = {
+    "nullcmd-heredoc": "NULLCMD=sh\n<<'E'\nrm -rf ~/.cl''aude/skills\nE",
+    "nullcmd-file": "echo 'rm -rf ~/.claude/skills' > /tmp/s; NULLCMD=sh; < /tmp/s",
+    "readnullcmd-file": "echo 'rm -rf ~/.claude/skills' > /tmp/s; READNULLCMD=sh; < /tmp/s",
+    "precmd-array": "precmd_functions+=(x); ls ~/.claude",
+    "rprompt": "RPROMPT='$(x)'; ls ~/.claude",
+}
+NULL_COMMAND_IDS = list(NULL_COMMAND_RUNS)
+
+
+@pytest.mark.parametrize("name", NULL_COMMAND_IDS)
+def test_a_text_that_sets_what_the_shell_runs_on_its_own_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(NULL_COMMAND_RUNS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+def test_a_bare_redirection_is_no_read_when_the_hook_environment_sets_nullcmd(
+    run: Run, store: Path
+) -> None:
+    payload = bash("< ~/.claude/CLAUDE.md")
+    assert run(payload, role="pm", env={"READNULLCMD": "sh"}).returncode == 2
+    assert run(payload, role="pm").returncode == 0
+
+
+# --- zsh's two-operand cd: `cd old new` goes to the folder with `old` replaced by `new` ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/proj && cd proj .claude && rm -rf skills",
+        "cd ~/proj && pushd proj .claude && rm -rf skills",
+    ],
+    ids=["cd", "pushd"],
+)
+def test_a_two_operand_cd_leaves_the_folder_unknown(run: Run, store: Path, command: str) -> None:
+    payload = bash(command)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cd ~/proj && cd proj .claude && ls", "cd /srv/a && cd a b && rm -rf /srv/out"],
+    ids=["then-read", "then-far-write"],
+)
+def test_a_two_operand_cd_then_a_read_or_a_far_write_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- a copy of what the text feeds it writes that text: a script the same call may run ---
+
+COPIED_SCRIPTS: dict[str, str] = {
+    "sh": "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nsh /tmp/s",
+    "unnamed": "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.cl''aude/skills\nE\nsh /tmp/s",
+    "python": "cp /dev/stdin /tmp/s.py <<'E'\nimport shutil\nshutil.rmtree('~/.claude/skills')\nE\n"
+    "python3 /tmp/s.py",
+    "proc-fd": "cp /proc/self/fd/0 /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nsh /tmp/s",
+    "dev-fd": "cp /dev/fd/0 /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nbash /tmp/s",
+    "run-by-path": "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\n"
+    "chmod +x /tmp/s; /tmp/s",
+    "git-hook": "cp /dev/stdin /tmp/r/.git/hooks/pre-commit <<'E'\nrm -rf ~/.claude/skills\nE\n"
+    "git -C /tmp/r commit --allow-empty -m x",
+    "here-string": "cp /dev/stdin /tmp/s <<< 'rm -rf ~/.claude/skills'; sh /tmp/s",
+    "install": "install /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE\nsh /tmp/s",
+}
+COPIED_IDS = list(COPIED_SCRIPTS)
+
+
+@pytest.mark.parametrize("name", COPIED_IDS)
+def test_a_script_copied_from_the_text_and_run_is_no_read(run: Run, store: Path, name: str) -> None:
+    payload = bash(COPIED_SCRIPTS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp /dev/stdin /tmp/n <<'E'\nnotes on ~/.claude\nE\ncat /tmp/n",
+        "cp ~/.claude/CLAUDE.md /tmp/c.md; ls /tmp",
+        "cp /dev/stdin /tmp/s <<'E'\nrm -rf ~/.claude/skills\nE",
+        "cp ~/.claude/CLAUDE.md /tmp/x < /dev/null; git status",
+    ],
+    ids=["copied-then-read", "copy-out", "copied-not-run", "copy-out-null-input"],
+)
+def test_a_copy_beside_reads_only_still_reads(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- an MCP tool's relative path or `file://` URL: its folder is the tool's own, unknown ---
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".claude/CLAUDE.md",
+        ".claude.json",
+        ".claude/skills/x/SKILL.md",
+        "../.claude/CLAUDE.md",
+        "file://{home}/.claude/CLAUDE.md",
+        "file://localhost{home}/.claude/%43LAUDE.md",
+    ],
+    ids=["folder-file", "json", "skill", "climbing", "file-url", "file-url-host"],
+)
+def test_an_mcp_relative_path_or_file_url_into_the_folder_is_refused(
+    run: Run, store: Path, path: str
+) -> None:
+    payload = tool("mcp__fs__write_file", path=path.format(home=home()), content="x")
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["notes/CLAUDE.md", "src/claude.py", "file:///tmp/CLAUDE.md"],
+    ids=["other-folder", "like-named", "file-url-far"],
+)
+def test_an_mcp_relative_path_outside_the_folder_is_allowed(
+    run: Run, store: Path, path: str
+) -> None:
+    proc = run(tool("mcp__fs__write_file", path=path, content="x"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        tool("mcp__github__create_issue", body="Changed packages/app/.claude/agents/foo.md"),
+        tool("mcp__web__fetch", url="https://example.com/.claude/x"),
+        tool("mcp__web__fetch", url="ssh://host/.claude/x"),
+    ],
+    ids=["prose", "https-url", "other-scheme"],
+)
+def test_mcp_prose_or_a_web_url_naming_a_claude_folder_is_no_relative_path(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    proc = run(payload, role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- a text that changes how words split gets no job folder: its pieces may be the folder ---
+
+SPLIT_JOB_WRITES: dict[str, str] = {
+    "ifs-assigned": "cd ~; IFS=/; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-exported": "cd ~; export IFS=/; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-declared": "cd ~; declare IFS=/; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-read": "cd ~; IFS=/ read -r a; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-unset": "cd ~; unset IFS; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-word-split": "cd ~; setopt shwordsplit; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-word-split-underscored": "cd ~; setopt SH_WORD_SPLIT; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-emulate-sh": "cd ~; emulate sh; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-emulate-ksh-local": "cd ~; emulate -L ksh; rm -rf $CLAUDE_JOB_DIR/x",
+}
+SPLIT_JOB_IDS = list(SPLIT_JOB_WRITES)
+
+
+@pytest.mark.parametrize("name", SPLIT_JOB_IDS)
+def test_a_job_folder_write_in_a_text_that_changes_word_splitting_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(bash(SPLIT_JOB_WRITES[name]))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~; rm -rf $CLAUDE_JOB_DIR/x",
+        'echo x > "$CLAUDE_JOB_DIR/out.txt"',
+        "rm${IFS}-f $CLAUDE_JOB_DIR/x",
+    ],
+    ids=["after-cd-home", "quoted", "ifs-only-read"],
+)
+def test_a_job_folder_write_that_leaves_word_splitting_alone_is_allowed(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(in_session(bash(command)), role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- long words and many braces: decided fast, as words the guard cannot expand ---
+
+# Loose enough for a loaded machine; the quadratic scan took minutes on these.
+FAST_DECISION_SECONDS = 10.0
+LONG_WORD = "A" * 100_000
+MANY_BRACES = "{a,b}" * 1500
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bash("ls ~/.claude; echo " + LONG_WORD),
+        bash("ls ~/.claude; echo " + LONG_WORD[:50_000] + "{" + LONG_WORD[:50_000]),
+        tool("mcp__x__send", body=LONG_WORD),
+        tool("mcp__x__send", body=LONG_WORD[:50_000] + "{" + LONG_WORD[:50_000]),
+        tool("mcp__x__send", body="[" + ",".join(['{"a":1,"b":2}'] * 1500) + "]"),
+        bash("touch /tmp/" + MANY_BRACES),
+    ],
+    ids=["bash-no-brace", "bash-one-brace", "mcp-no-brace", "mcp-one-brace", "mcp-json", "far"],
+)
+def test_a_long_word_or_many_braces_is_decided_fast_and_allowed(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    started = time.monotonic()
+    proc = run(payload, role="pm")
+    assert proc.returncode == 0, proc.stderr
+    assert time.monotonic() - started < FAST_DECISION_SECONDS
+
+
+def test_a_folder_write_with_more_braces_than_the_cap_is_refused(run: Run, store: Path) -> None:
+    payload = bash("rm -rf ~/.cl{a,b}ude" + MANY_BRACES)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# --- a quoted word holds no command: `$(` or a backtick in quotes is text, unless a shell runs it ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -o 'a[^`]*b' ~/.claude/projects/p/s.jsonl | head -2",
+        'rg -o "x\\`y" ~/.claude/projects/p/s.jsonl',
+        "grep -c 'a$(b)' ~/.claude/projects/p/s.jsonl",
+        "timeout 5 grep 'a`b' ~/.claude/CLAUDE.md",
+        "bash -c 'f=$(ls ~/.claude/projects | head -1); echo \"$f\"'",
+    ],
+    ids=["backtick-in-single-quotes", "escaped-backtick", "dollar-paren", "wrapped", "shell-reads"],
+)
+def test_a_quoted_command_text_in_a_read_is_only_text(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+QUOTED_RUNS: dict[str, str] = {
+    "bash-c": "bash -c 'rm -rf ~/.claude/skills'",
+    "eval": "eval 'rm -rf ~/.claude/skills'",
+    "sh-c-substitution": "sh -c \"$(printf 'rm -rf ~/.claude/x')\"",
+    "bash-c-backtick": "bash -c 'echo `rm -rf ~/.claude/skills`'",
+    "bash-c-escaped-backtick": 'bash -c "cat \\`rm -rf ~/.claude/skills\\`"',
+    "eval-reader": "eval cat '$(rm -rf ~/.claude/skills)'",
+    "watch-reader": "watch -n1 cat '$(rm -rf ~/.claude/skills)'",
+    "env-shell": "env bash -c 'cat ~/.claude/a; rm -rf ~/.claude/skills'",
+    "shell-extra-argument": "bash -c 'cat ~/.claude/a' '$(rm -rf ~/.claude/skills)'",
+    "xargs-shell": "echo x | xargs sh -c 'rm -rf ~/.claude/skills'",
+    "find-exec-shell": "find ~/.claude -name x -exec sh -c 'rm -rf \"$1\"' _ {} \\;",
+    "test-subscript": "[ -v 'a[$(rm -rf ~/.claude/skills)]' ]",
+    "printf-number": "printf '%d' 'a[$(rm -rf ~/.claude/skills)]'",
+    "rg-pre": "rg --pre 'sh -c $(rm -rf ~/.claude/skills)' x ~/.claude",
+}
+
+
+@pytest.mark.parametrize("name", list(QUOTED_RUNS))
+def test_a_quoted_command_text_a_shell_may_run_is_refused(run: Run, store: Path, name: str) -> None:
+    payload = bash(QUOTED_RUNS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# --- a write under /dev reaches a file only through /dev/fd and /dev/stdin; /proc stays shut ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "awk '{print}' f > /dev/shm/.p_$$; rm -f /dev/shm/.p_$$",
+        'timeout 4 bash -c "cat < /dev/null > /dev/tcp/10.0.0.1/6379"',
+        "echo x > /dev/udp/10.0.0.1/53",
+        "/opt/v/bin/python - <<'EOF'\ns = 'sort > /dev/shm/.p_$$; rm -f /dev/shm/.p_$$'\nEOF",
+    ],
+    ids=["shm", "tcp", "udp", "heredoc-body"],
+)
+def test_a_write_to_a_device_that_names_no_file_is_allowed(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/.claude && echo x > /dev/fd/1",
+        "cd ~/.claude && echo x > /dev/stdin",
+        "cd ~/.claude && echo x > /dev/fd/3/CLAUDE.md",
+        "echo x > /proc/self/task/1/cwd/CLAUDE.md",
+    ],
+    ids=["dev-fd-1", "dev-stdin", "dev-fd-folder", "proc-task-cwd"],
+)
+def test_a_write_through_a_device_alias_is_still_refused(
+    run: Run, store: Path, command: str
+) -> None:
+    payload = bash(command, cwd=str(claude_dir()) if "proc" in command else "/tmp")
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# --- a redirect is no operand of cd, and a discard after a cd the guard cannot follow is no write ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /tmp/x 2>/dev/null || mkdir -p /tmp/x; cd /tmp/x && cat > a.py <<'EOF'\nprint(1)\nEOF\n"
+        "python3 a.py",
+        "cd /srv/app 2>/dev/null && echo x > notes.txt",
+        "cd /srv/app 2> /dev/null && echo x > notes.txt",
+        "cd $(dirname $(find /srv -name u.py 2>/dev/null | head -1))/..; git log -1 2>/dev/null",
+    ],
+    ids=["scratch-script", "discard", "discard-apart", "unknown-cd-discard"],
+)
+def test_a_cd_with_a_redirect_or_a_discard_after_an_unknown_cd_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/proj && cd proj .claude && rm -rf skills",
+        "cd ~/proj && cd proj .claude 2>/dev/null && rm -rf skills",
+        "cd ~/proj && cd proj .claude > /dev/null && rm -rf skills",
+        "cd ~/proj && cd '>proj' .claude && rm -rf skills",
+        "cd ~/proj && cd \\>proj .claude && rm -rf skills",
+        "cd $(dirname $X)/.. ; rm -rf skills",
+        "cd $(dirname $X)/.. 2>/dev/null; rm -rf skills 2>/dev/null",
+        "cd 2>/dev/null ~/.claude && rm -rf skills",
+        "cd /tmp/x 2>/dev/null && cat > a.sh <<'EOF'\nrm -rf ~/.claude/skills\nEOF\nsh a.sh",
+    ],
+    ids=[
+        "two-operands",
+        "two-operands-redirect",
+        "two-operands-discard-apart",
+        "quoted-name",
+        "escaped-name",
+        "unknown",
+        "unknown-discard",
+        "redirect-first",
+        "script",
+    ],
+)
+def test_a_cd_with_a_redirect_still_follows_its_writes(run: Run, store: Path, command: str) -> None:
+    payload = bash(command)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# --- a loop over literal words: its variable is each word in turn ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'for f in a/b.py c/d.py; do cp "$f" ".claude/worktrees/w/$f"; done',
+        'cd /srv/repo && for f in a/b.py c/d.py; do if [ -f "$f" ]; then cp "$f"'
+        ' ".claude/worktrees/w/$f" && echo "copied $f"; fi; done; echo "--- check ---";'
+        " cd .claude/worktrees/w && git status --short | head",
+        'for f in a/b.py; do test -f "$f" && cp "$f" ".claude/worktrees/w/$f"; done',
+    ],
+    ids=["copy", "copy-checked", "copy-tested"],
+)
+def test_a_write_of_a_literal_loop_variable_outside_the_folder_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd="/srv/repo"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# The bypasses a loop's variable could hide, each written into a repo's own `.claude` from inside
+# home, where enough `..` reach the user folder: none is a literal the guard may read.
+LOOP_WRITES: dict[str, tuple[str, str]] = {
+    "climbs": ('for f in ../../.claude/x; do rm -rf "$f"; done', "{H}/a/b"),
+    "home-word": ("for f in ~/.claude; do rm -rf $f/x; done", "{H}/repo"),
+    "substitution": ('for f in $(ls); do rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "rebound": ('for f in a; do f=../../..; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "names-the-folder": ("for f in .claude; do rm -rf ../$f/skills; done", "{H}/repo"),
+    "tested-names-the-folder": (
+        'for f in .claude; do if [ -d "../$f" ]; then rm -rf ../$f/skills; fi; done',
+        "{H}/repo",
+    ),
+    "before-the-loop": ('rm -rf ".claude/w/$f"; for f in a; do :; done', "{H}/repo"),
+    "single-quotes": ("for f in a; do bash -c 'rm -rf \".claude/w/$f\"'; done", "{H}/repo"),
+    "operator": ('for f in a; do rm -rf ".claude/w/${f/a/../../..}"; done', "{H}/repo"),
+    "split": ("IFS=x; for f in ax..xb; do rm -rf .claude/w/$f; done", "{H}/repo"),
+    "blank": ('for f in "a .."; do rm -rf .claude/w/$f; done', "{H}/repo"),
+    "read": ('for f in a; do read f < /tmp/n; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "unset": ('for f in a; do unset f; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "nameref": (
+        'declare -n g=f; for f in a; do g=../../..; rm -rf ".claude/w/$f"; done',
+        "{H}/repo",
+    ),
+    "trap": ("trap 'f=../../..' DEBUG; for f in a; do rm -rf \".claude/w/$f\"; done", "{H}/repo"),
+    "eval": ('for f in a; do eval "f=../../.."; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "zsh-subscript": ('for f in a..b; do rm -rf ".claude/w/$f[2,3]/.."; done', "{H}/repo"),
+    "nested": (
+        'for f in a; do for f in ../../..; do rm -rf ".claude/w/$f"; done; done',
+        "{H}/repo",
+    ),
+    "printf-glued": ('for f in a; do printf -vf ../../..; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "quoted-heredoc": ("for f in a; do bash <<'E'\nrm -rf \".claude/w/$f\"\nE\ndone", "{H}/repo"),
+    "after-a-subshell": ('(for f in a; do :; done); rm -rf ".claude/w/$f"', "{H}/repo"),
+    "second-loop": (
+        'for f in a; do :; done; for f in $(cat /tmp/n); do rm -rf ".claude/w/$f"; done',
+        "{H}/repo",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(LOOP_WRITES))
+def test_a_loop_variable_the_guard_cannot_read_as_a_literal_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in LOOP_WRITES[name])
+    payload = bash(command, cwd=cwd)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
+
+# Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
+# glob after it (`.*`) names nothing there, though the scanner gives up on the text (`<(...)`) or
+# the cd sits in a quoted ssh or `sh -c` string.
+CLEAR_CD_TEXTS = {
+    "ssh-string": "ssh h 'cd /srv/app && sed -n \"s/.*//p\" f'",
+    "sh-c-string": "docker run img sh -c 'cd /srv/c && ls -d .*'",
+    "process-substitution": "diff <(cd /srv/a && git diff) <(sed 's/.*//' /tmp/f)",
+    "pipe-and-substitution": "cd /srv/app && git log --format='%s' | sed 's/.*//' && cat <(echo x)",
+    "dot-glob-read": "cd /srv/app && cat <(echo x) && ls -d .*",
+    "in-place-sed": "cd /srv/app && cat <(echo x) && sed -i 's/.*//' f",
+    "subshell-piped": "(cd /srv/a && git log) | sed 's/.*//'; cat <(echo)",
+    "double-dash": "cd -- /srv/app && cat <(echo x) && ls -d .*",
+    "pushd": "pushd /srv/app && cat <(echo x) && ls -d .*",
+    "quoted-operand": "cd '/srv/app' && cat <(echo x) && ls -d .*",
+    "two-cds": "cd /srv/a; cd /srv/b && cat <(echo x) && ls -d .*",
+    "below-home-sed-script": "cd HOME/proj && sed -i 's/.*//' f",
+    "below-home-glob-in-place": "cd HOME/proj && rm -f *.tmp .*.swp",
+    "below-home-read-dot-glob": "cd HOME/proj && ls -d .*",
+}
+
+
+@pytest.mark.parametrize("name", CLEAR_CD_TEXTS)
+def test_a_cd_clear_of_the_user_folder_keeps_a_relative_glob_out_of_it(
+    run: Run, store: Path, name: str
+) -> None:
+    # The tests' home is under /tmp, so the session starts in /srv, a folder clear of it.
+    command = CLEAR_CD_TEXTS[name].replace("HOME", str(home()))
+    proc = run(bash(command, cwd="/srv"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# Not clear: a cd home or to a folder the guard cannot tell, a cd word it cannot read, a `..`.
+UNCLEAR_CD_TEXTS = {
+    "ssh-string-home": "ssh h 'cd ~ && rm -rf .c*'",
+    "quoted-cd-word": "c''d ~; cat <(echo) ; rm -rf .c*",
+    "variable-folder": "cd /tmp/$X && cat <(echo) && rm -rf .c*",
+    "up-path": "cd /tmp && cat <(echo) && rm -rf ../home/*/.c*",
+    "home-later": "cd /srv && cd ~ && cat <(echo) && rm -rf .c*",
+    "bare-pushd": "cd /srv && pushd && cat <(echo) && rm -rf .c*",
+    "popd": "pushd /srv && popd && cat <(echo) && rm -rf .c*",
+    "quoted-tilde": "cd '~/x' && cat <(echo) && rm -rf .c*",
+    # The shell reads `cd <home's parent>/home`: a quote glued to the operand goes on with it.
+    "glued-quote": "sh -c 'cd PARENT/ho'me' && rm -rf .c*'",
+    "operand-with-space": "cd '/srv/a b' && cat <(echo) && rm -rf .c*",
+    "backslash-operand": "cd /srv\\ a && cat <(echo) && rm -rf .c*",
+    "substitution-operand": "cd /srv/$(echo x) && cat <(echo) && rm -rf .c*",
+    "two-operands": "cd /srv ~ && cat <(echo) && rm -rf .c*",
+    # Bash before 5.2 matches `..` with `.*`: a cd one folder below home names the home folder.
+    "dot-glob-climbs-home": "cd ~/proj && cat <(echo) && rm -rf .*/.claude",
+    "dot-glob-climbs-home-scanned": "cd ~/proj && rm -rf .*/.claude",
+    "two-dot-globs-climb": "cd ~/proj/sub && cat <(echo) && rm -rf .*/.*/.claude",
+    # `/` holds the folder: `chmod -R 000 .*` there may change all of it.
+    "dot-glob-climbs-to-root": "docker run img sh -c 'cd /c && chmod -R 000 .*'",
+    "operand-then-more": "sh -c 'cd /srv ~' && cat <(echo) && rm -rf .c*",
+    # The same climb where the scanner follows the text and the cd names home by its path.
+    "scanned-dot-glob-chmod": "cd HOME/proj && chmod -R 000 .*",
+    "scanned-dot-glob-touch": "cd HOME/proj && touch .*/.claude/x",
+    "scanned-dot-glob-rm": "cd HOME/proj && rm -rf .*/.claude",
+}
+
+
+@pytest.mark.parametrize("name", UNCLEAR_CD_TEXTS)
+def test_a_cd_that_may_lead_near_the_user_folder_keeps_a_relative_glob_strict(
+    store: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """With no other zone, as the settings zone refuses these too."""
+    monkeypatch.setattr(pg, "_zones", lambda _store: (pg._claude_folder_zone(),))
+    command = UNCLEAR_CD_TEXTS[name].replace("PARENT", str(home().parent))
+    command = command.replace("HOME", str(home()))
+    message = decide(bash(command, cwd="/srv"), store, "pm")
+    assert message is not None
+    assert FOLDER_REFUSAL in message
 
 
 # --- a quoted glob is literal: in `~`, `.*` matches `.claude` only when the shell expands it ---

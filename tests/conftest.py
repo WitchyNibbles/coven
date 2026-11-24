@@ -37,6 +37,8 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local" / "state"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     monkeypatch.delenv("COVEN_SESSION_ROLE", raising=False)
+    # Claude Code sets it in a background session: a run from one must not hand it to a hook.
+    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
     for name in ("COVEN_OPENCODE_HOME", "COVEN_OPENCODE_BIN", *os.environ):
         if name.startswith("OPENCODE_") or name.startswith("COVEN_OPENCODE_"):
             monkeypatch.delenv(name, raising=False)

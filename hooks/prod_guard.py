@@ -8,12 +8,13 @@ validates a file with the same rules before it is committed: it prints `ok: N ta
 or prints the reason and exits 1; it never reads stdin.
 
 When it acts. The hook reads coven's config (`~/.config/coven/config.json`, as plain JSON, the way
-memory-context does) for `memory_path` (default `~/coven-memory`, and it must be absolute) and `guard`, whose only valid value
-is `"required"`. It is off, and exits 0 at once with no git call and no subprocess, when there is no
-`"guard": "required"` and either no store folder or no `systems/guard.json` in its working tree. With
-the latch a missing store folder is not off: Bash and MCP tools are refused for every session, since
-the store held a guard.json once. With no config file the store is the default one, so deleting the file does not
-switch off a store that holds a guard.json. It is on otherwise. A config that exists but cannot be read or is invalid
+memory-context does) for `memory_path` (default `~/coven-memory`, and it must be absolute) and
+`guard`, whose only valid value is `"required"`. It is off, and exits 0 at once with no git call and
+no subprocess, when there is no `"guard": "required"` and either no store folder or no
+`systems/guard.json` in its working tree. With the latch a missing store folder is not off: Bash
+and MCP tools are refused for every session, since the store held a guard.json once. With no
+config file the store is the default one, so deleting the file does not switch off a store that
+holds a guard.json. It is on otherwise. A config that exists but cannot be read or is invalid
 refuses Bash and MCP tools in a restricted session (the message points to `coven doctor`) and
 leaves any other session as if the guard were off.
 
@@ -23,19 +24,54 @@ unrestricted. A subagent's call is judged like its session's. A restricted sessi
 in RESTRICTED_RULES first, and no approval lifts one. It may not:
 - write the memory store, coven's config file (`~/.config/coven/config.json`, the one the hook
   reads), Claude Code's settings (`settings.json` and `settings.local.json` in CLAUDE_CONFIG_DIR or
-  `~/.claude`, and in any folder's `.claude/`) or its `plugins/` folder: Write, Edit, MultiEdit and
-  NotebookEdit under any of them, any MCP input that names one, and any Bash command that runs in
-  one or whose text reaches it, by name, by a path that resolves into it (`~`, `$HOME`, symlinks),
-  by a glob that can match it, or, after a `cd`, `env -C`, `git -C` or `find` in its holding folder,
-  by its plain name. A glob character in quotes or after a backslash is literal (`ls '.*'`, `grep
-  -E "[0-9]*"`), but only on a line of plain data commands (GLOB_LITERAL_COMMANDS, `find` without
-  actions, a `sed` whose script, read command by command in each way a sed may, runs and writes
-  nothing) with no unquoted `$`; a heredoc body copied by `cat` or read by python or node (by name
-  or from /usr/bin or /bin) with no glob call is read only for words at a fixed place. In Bash the `plugins/` folder
-  may be read and its scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its
-  operands by a folder variable bound at the start of the line, `bash` or python with a script, a
-  program by its path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS
-  or a sed that only prints); any other use of it counts as a write. Read, Grep and Glob stay
+  `~/.claude`, and in any folder's `.claude/`), its `plugins/` folder, or the rest of its user
+  folder (CLAUDE_CONFIG_DIR or `~/.claude`: skills, agents, commands, memory) and `~/.claude.json`:
+  Write, Edit, MultiEdit and NotebookEdit under any of them, any MCP input that names one, and any
+  Bash command that runs in one or whose text reaches it, by name, by a path that resolves into it
+  (`~`, `$HOME`, symlinks), by a glob that can match it, or, after a `cd`, `env -C`, `git -C` or
+  `find` in its holding folder, by its plain name. A glob character in quotes or after a backslash
+  is literal (`ls '.*'`, `grep -E "[0-9]*"`), but only on a line of plain data commands
+  (GLOB_LITERAL_COMMANDS, `find` without actions, a `sed` whose script, read command by command in
+  each way a sed may, runs and writes nothing) with no unquoted `$`; a heredoc body copied by `cat`
+  or read by python or node (by name or from /usr/bin or /bin) with no glob call is read only for
+  words at a fixed place. The user folder has no token (a `.claude` token would refuse writes in a
+  repo's own `.claude/worktrees/`, where Claude Code keeps its worktrees); it is found by path,
+  glob, a `cd` into it or a holder write (`rm -rf ~`), and it is checked last, so a settings or
+  plugins refusal names its own zone. In Bash the `plugins/` folder and the user folder may be read
+  and their scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its operands by
+  a folder variable bound at the start of the line, `bash` or python with a script, a program by its
+  path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS or a sed that
+  only prints); any other use of it counts as a write. For the user folder only
+  (CLAUDE_FOLDER_READERS, `_Zone.copy_reads`, `_Zone.cd_reads`, `_Zone.loop_reads`,
+  `_Zone.shell_reads`): `rg` without `--pre` or `--hostname-bin`, `jq`, `echo`, `printf`, `sleep`,
+  `sort` (not `-o`), `uniq`, `cut`, `tr`, `column`, `[` and `test` read too; the sources of `cp -a
+  SRC DEST` and `tar -cf ARCHIVE SRC` are reads (the destination and the archive are not), and so is
+  `cp` to a place outside it; and a text where every command only reads writes nothing wherever a
+  `cd` goes (or wherever the session runs), so it is allowed whole (`_only_reads_text`): in it a
+  command may sit behind `env`, `timeout`, `nice`, `command`, an assignment of a plain name or a
+  reader's path in /usr/bin or /bin; a pipe joins readers and filters; a redirection may go to
+  `/dev/null`, a file descriptor or a file outside the zone (`> /var/tmp/x`), or read from a file
+  (`wc -l < f`, `while read f; do ...; done < f`); a `$(...)` of readers may stand in an argument or
+  a plain assignment; a loop, an `if`, a `{ ...; }` group, `break`, `exit` and `sh -c 'STRING'` of
+  such a text read too. The commands that are left when the reads are blanked (`_read_spans`) are
+  checked for a way to the folder, a name bound to a path in the folder by a lone assignment
+  included (`F=~/.claude/x; cat $F`). A heredoc fed to `cat > FILE` or `tee FILE`, FILE outside the
+  zone and the body quoted, is file content. Code that an interpreter (INTERPRETERS, python) runs
+  from a word, standard input or a heredoc is a read of nothing: when it names the folder, or looks
+  up the home folder, the call is refused (`_interpreter_names_zone`); so is an `xargs` that runs
+  more than a reader (`_xargs_prints_only`), a read that writes a file the same text may run, or
+  beside any command that is no reader (`_feeds_code`), and a read in a text that sets what its
+  programs read (`_arms_reads`: `export TAR_OPTIONS=...`). A written word the guard cannot pin to
+  a path fails closed when it may lead to the folder (`_writes_unpinned`: `${HOME%/}/.claude`,
+  `~/$N`, `$X/..`), and so does any write under /proc, /dev/fd or to /dev/stdin, which stand for
+  other files (`_through_alias`); the variable of a `for` loop over literal words is written as
+  each word in turn (`_literal_loops`). After a `cd` every word left is read from its folder
+  (`_names_inside`), and a `cd` the scanner cannot follow is read from the text
+  (`_written_cds_clear`). `~/.claude.json`'s siblings (`.backup`) are in the folder's zone.
+  `cd ~/.claude && ls skills` runs, `cd ~/.claude && rm -rf skills` does not. A restricted session may write in its own scratch folders there
+  (`_with_own`): its job folder, the hook's own CLAUDE_JOB_DIR right under `jobs/`, and its session
+  folder beside the payload's transcript, but not that one's `subagents/`, nor the folders
+  themselves, nor a copy or unpacking into the session folder itself. Read, Grep and Glob stay
   allowed;
 - change COVEN_SESSION_ROLE (the lone `printenv COVEN_SESSION_ROLE` self-check stays allowed);
 - start `claude` (`claude --version` and `claude -v` alone excepted) or run its package;
@@ -76,9 +112,10 @@ a read and stays allowed. The zone variables (`$HOME`, `$CLAUDE_CONFIG_DIR`, `$X
 `$CLAUDE_PLUGIN_ROOT`, plain, quoted or braced) are read with the hook's value and with their
 default, since the command may run under others.
 
-Known limits of the restricted rules: a path built from strings or variables
-(`python3 -c "...'~/cov'+'en-memory'"`, `d=coven-mem; ... ~/${d}ory`, `for d in ~/.claude; do rm
--rf $d; done`, `echo ~/.claude | xargs rm -rf`) is not read.
+Known limits of the restricted rules: a path built in code (`python3 -c "...'~/cov'+'en-memory'"`)
+is not read; in the user folder's zone a written `${...}`, `$X` or `$(...)` that may lead there
+fails closed (`_writes_unpinned`), as do a loop and an `xargs` over it, but a plain `$D/x` stays
+allowed (`D=$(echo ~/.cla)ude; rm -rf $D/skills` gets through).
 
 Limits. The whole check has a deadline of DEADLINE seconds and each git call a timeout; past either,
 the call is refused. The guard is best effort against a session that follows its role: its rules are
@@ -90,14 +127,18 @@ approvals, the restricted refusal and a verdict), so the two cannot disagree.
 """
 
 import fnmatch
+import functools
 import importlib
 import ipaddress
+import itertools
 import logging
+import math
 import os
 import re
 import signal
 import subprocess
 import sys
+import urllib.parse
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -160,6 +201,7 @@ SHELL_SPLIT = re.compile(r"[\s;&|<>()`'\"=,{}]+")
 # Where one simple command ends and the next begins (`$(` included through `(`).
 COMMAND_SPLIT = re.compile(r"[;&|()`{}\n]")
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
+SHELL_STRING_RUNNERS = frozenset({"sh", "bash", "zsh", "dash"})  # `sh -c STRING`, read as a text
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "fish", "ksh"})
 # Words that read a heredoc body as shell commands, or start a shell without naming one: a body
 # fed by a line with one of them is shell text, and its globs are real.
@@ -264,6 +306,15 @@ DIRECTORY_LAUNCHERS = frozenset({"direnv"})  # `direnv exec <dir> <program>`
 REDIRECT = re.compile(r"\d*(?:<|>|&>)")
 REDIRECT_OPERATOR = re.compile(r"\d*(?:[<>]{1,3}[&|]?|&>{1,2})")
 CHANGE_DIR = frozenset({"cd", "pushd"})
+# A `cd` or `pushd` word of a text, quotes and all, bounded as SHELL_SPLIT bounds a word ...
+CD_WORD = re.compile(r"(?<![^\s;&|<>()`'\"=,{}])(?:cd|pushd)(?![^\s;&|<>()`'\"=,{}])")
+# ... and the one operand it may have for `_written_cds_clear`: a literal path from `/` or `~/`
+# (a quoted `~` is literal: not from `~/`), maybe in quotes, that no other text goes on with and
+# no other operand follows (zsh's `cd old new` swaps a part of the folder) before the command ends.
+CD_OPERAND = re.compile(
+    r"[ \t]+(?:--[ \t]+)?(?:(?P<q>['\"])(?P<quoted>/[\w./@+%:,=-]*)(?P=q)"
+    r"|(?P<bare>[/~][\w./@+%:,=-]*))(?=['\"`]?[ \t]*(?:$|[\n;&|)]))"
+)
 # Characters that continue a name: the store's name counts only as a whole token without them.
 NAME_CHARS = "A-Za-z0-9_.-"
 LOOKUP_OPTIONS = frozenset({"-v", "-V"})  # `command -v claude` only looks claude up
@@ -297,6 +348,8 @@ LINE_CONTINUATION = "\\\n"
 # inside a word (\v, \x1c) and on a newline, which makes `--version` a second command.
 LINE_BLANKS = re.compile(r"[ \t]+")
 GLOB_CHARS = frozenset("*?[")
+# One unit of a glob: a `[...]` class, a backslash escape, or any other character.
+GLOB_UNIT = re.compile(r"\[[!^]?\]?[^\]]*\]|\\.|.", re.DOTALL)
 # Remote CLIs whose host a restricted session must write out in the command, and their
 # names as whole words, for a text a shell reads from stdin.
 REMOTE_CLIS = frozenset(
@@ -376,6 +429,7 @@ NAME_SETTERS = frozenset(
     {
         "read",
         "printf",
+        "print",
         "mapfile",
         "readarray",
         "getopts",
@@ -430,9 +484,210 @@ CLAUDE_FOLDER = ".claude"
 SETTINGS_FILES = ("settings.json", "settings.local.json")
 PLUGINS_FOLDER = "plugins"
 PLUGIN_ENTRIES = ("cache", "marketplaces", "data", "installed_plugins.json")
+# Claude Code's user folder as a whole, and its state file in the home folder: what sits at the top
+# of the folder, for a bare `*` before one after a cd.
+CLAUDE_JSON = ".claude.json"
+CLAUDE_FOLDER_ENTRIES = (
+    *("CLAUDE.md", "settings.json", "settings.local.json", "keybindings.json", ".credentials.json"),
+    *("agents", "skills", "commands", "hooks", "output-styles", "plugins", "projects", "todos"),
+    *("history.jsonl", "shell-snapshots", "statsig"),
+)
+# A session's own scratch folders in the user folder: its background job's folder, which Claude
+# Code names in the hook's CLAUDE_JOB_DIR (`<folder>/jobs/<id>`), and the folder beside its
+# transcript (`<folder>/projects/<project>/<session id>.jsonl`), but for its subagents' transcripts.
+JOB_VARIABLE = "CLAUDE_JOB_DIR"
+JOBS_FOLDER = "jobs"
+PROJECTS_FOLDER = "projects"
+TRANSCRIPT_SUFFIX = ".jsonl"
+SUBAGENTS_FOLDER = "subagents"
+SESSION_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+JOB_NAME = re.compile(rf"(?<!\w){JOB_VARIABLE}(?!\w)")
+JOB_REFERENCE = re.compile(rf"\$\{{{JOB_VARIABLE}\}}|\${JOB_VARIABLE}(?!\w)")
+# What may stand right before and right after a `$CLAUDE_JOB_DIR` that starts a word and expands
+# as the hook has it: not zsh's `$CLAUDE_JOB_DIR:h` or `$CLAUDE_JOB_DIR[1]`, nor `x$CLAUDE_JOB_DIR`.
+JOB_WORD_BEFORE = frozenset(' \t\n"=<>(;|&')
+JOB_WORD_AFTER = frozenset("/ \t\n\"';&|)<>")
+# What a written word may hold that the guard does not follow (`_may_name_zone`): a parameter,
+# command or arithmetic expansion, a backtick, or a brace expansion.
+UNPINNED_EXPANSION = re.compile(r"\$|`|\{[^{}]*(?:,|\.\.)[^{}]*\}")
+# The text of those expansions, each read as a glob's `*` to see what a word may spell
+# (`.cl${X}aude` may be `.claude`).
+EXPANSION_TEXT = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$\w+|\$.|[{},]")
+# A written word's leading current folder, which the guard knows where the text's `cd`s go.
+CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
+# Folders whose paths stand for others (`/proc/self/cwd`, `/dev/fd/3`, `/dev/stdin`), and the
+# files of /dev a write may still go to: a stream or the terminal. The rest of /dev names no file
+# a write could reach the zone by: `/dev/shm` is a folder like /tmp, `/dev/tcp/HOST/PORT` a socket.
+ALIAS_FOLDERS = ("/proc", "/dev/fd", "/dev/stdin")
+DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
+# A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words the guard reads one word as
+# (`_brace_members`), a range's text, and a word of a text that holds a brace.
+BRACE_MEMBERS = 64
+BRACE_RANGE = re.compile(r"(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?|(\D)\.\.(\D)(?:\.\.(-?\d+))?")
+# A word that holds a `{`, matched only from its start: a long word is scanned once.
+BRACE_WORD = re.compile(r"(?<![^\s;&|()<>`])[^\s;&|()<>`]*\{[^\s;&|()<>`]*")
+BRACE_OPENER = re.compile(r"(?<!\$)\{")
+# What `_glued_expansions` keeps in an expansion's word: blanks, separators, parentheses, braces
+# and backticks, as private-use characters.
+GLUED = str.maketrans({char: chr(0xE000 + at) for at, char in enumerate(" \t\n;&|(){}`<>")})
+UNGLUED = str.maketrans({chr(0xE000 + at): char for at, char in enumerate(" \t\n;&|(){}`<>")})
+# What the user folder's zone adds to READ_COMMANDS: `rg` (it writes no file), and the commands
+# that only print or do nothing, which a path may follow (`echo $CLAUDE_CONFIG_DIR`). A reader of
+# PROGRAM_READERS has options that run a program (`rg --pre CMD` runs CMD on each file).
+CLAUDE_FOLDER_READERS = frozenset(
+    {
+        *("rg", "jq", "echo", "printf", "true", "false", "pwd", "sleep", ":"),
+        *("break", "continue", "exit"),  # a loop's or a text's end
+        *("sort", "uniq", "cut", "tr", "column"),
+    }
+)
+PROGRAM_READERS = frozenset({"rg"})
+# Readers that read every word as a pattern, a name or text to print, never as a command or a number
+# (not `test`, `printf` or `exit`): a `$(` or a backtick quoted in one of their words runs nothing.
+QUOTED_TEXT_READERS = frozenset(
+    {
+        *("cat", "head", "tail", "wc", "ls", "stat", "grep", "egrep", "fgrep", "diff", "cmp"),
+        *("du", "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "tac", "nl"),
+        *("basename", "dirname", "rg", "jq", "echo", "sort", "uniq", "cut", "tr", "column"),
+        *("find", "sed"),
+    }
+)
+PROGRAM_OPTIONS = ("--pre", "--hostname-bin")
+# The options of `cp` that neither link, name a folder nor take a value, and of `tar` that create
+# an archive of its operands: `cp -a SRC DEST` and `tar -cf ARCHIVE SRC` read their sources.
+COPY_OPTIONS = frozenset("arRpvfniuPHxdT")
+ARCHIVE_OPTIONS = frozenset("czjJvfpPha")
+RUNS_COMMAND = re.compile(r"\$\(|`|[<>]\(")  # a command substitution or a process substitution
+# Commands whose code is a word, a file's body or standard input: the guard cannot tell what that
+# code writes, so a zone with `shell_reads` refuses it when it names the zone (python by
+# PYTHON_NAME).
+INTERPRETERS = frozenset(
+    {*("node", "perl", "ruby", "awk", "gawk", "mawk", "nawk", "sqlite3", "php", "lua", "deno")}
+)
+# Commands that make the paths they are given, outside CHANGES_OPERANDS.
+PATH_CREATORS = frozenset({"touch", "mkdir"})
+# What an `xargs` that only prints may run, for the user folder zone: readers that no option or
+# operand xargs appends makes write or run anything (not sed, sort, find, whose options GNU reads
+# anywhere: an appended `-i`, `-o x` or `-delete`) ...
+XARGS_READERS = frozenset(
+    {*("cat", "head", "tail", "wc", "ls", "stat", "grep", "egrep", "fgrep", "basename")}
+    | {*("dirname", "realpath", "readlink", "du", "md5sum", "sha1sum", "sha256sum", "echo")}
+)
+# ... and the xargs options it may have: flags, and options with a value (glued or the next word).
+# Any other (`-I`, `-i`, `--replace`, `-a`, `-E`, `-p`) stops the reading.
+XARGS_FLAGS = frozenset("0rtx")
+XARGS_VALUED = frozenset("nLPsd")
+XARGS_LONG_FLAGS = frozenset({"null", "no-run-if-empty", "verbose", "exit"})
+XARGS_LONG_VALUED = frozenset({"max-args", "max-lines", "max-procs", "max-chars", "delimiter"})
+# What runs code from a file or standard input, by name: a file a read writes in the same text may
+# be what it runs (`echo 'rm -rf ~/.claude' > /tmp/s; sh /tmp/s`), as may a program by its path.
+CODE_RUNNERS = frozenset(
+    {*SHELL_READERS, *INTERPRETERS, *SCRIPT_RUNNERS, "xargs", "exec", "nohup", "setsid", "env"}
+    | {*("stdbuf", "watch", "flock", "chrt", "ionice", "taskset", "strace", "ltrace")}
+)
+# How code finds a home folder without writing it down: with `.claude` in the same code, it names
+# the zone.
+HOME_LOOKUP = re.compile(r"expanduser|Path\.home|homedir|HOME|getpwuid|getpass")
+# A path with a `..` component, which may lead out of the folder a `cd` went to.
+UP_PATH = re.compile(r"(?:^|/)\.\.(?:/|$)")
+# A redirection target that is a file descriptor.
+DESCRIPTOR_TARGET = re.compile(r"\d+|-")
+# A variable a read may set (a loop's, `read`'s, an assignment's): a plain name that no program
+# or the shell reads for what it does (the search path, the field separator, the home folder, a
+# start-up file, the loader). zsh ties a lower-case array to some of them (`path` is PATH), so
+# those count in both cases.
+PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ZSH_TIED_NAMES = ("PATH", "CDPATH", "FPATH", "MANPATH", "MODULE_PATH", "MAILPATH", "FIGNORE")
+# zsh runs NULLCMD for a redirection with no command (`< f`, a bare heredoc), READNULLCMD for a
+# lone `< f`; it runs a prompt's `$(...)`, the functions its hook arrays name, and reads ZDOTDIR's
+# startup files in a zsh it starts.
+NULL_COMMANDS = ("NULLCMD", "READNULLCMD")
+ZSH_HOOK_NAMES = (
+    *("precmd_functions", "preexec_functions", "chpwd_functions", "periodic_functions"),
+    *("zshaddhistory_functions", "zshexit_functions", "ZDOTDIR"),
+    *("PROMPT", "PROMPT2", "PROMPT3", "PROMPT4", "RPROMPT", "RPROMPT2", "RPS1", "RPS2"),
+)
+BLOCKED_NAMES = frozenset(
+    {*("PATH", "IFS", "HOME", "CDPATH", "ENV", "SHELL", "PWD", "OLDPWD", "TMPDIR", "USER")}
+    | {*("PROMPT_COMMAND", "PS1", "PS2", "PS3", "PS4", "GLOBIGNORE", "FIGNORE", "MAIL", "LOGNAME")}
+    | {*ZSH_TIED_NAMES, *(name.lower() for name in ZSH_TIED_NAMES)}
+    | {*NULL_COMMANDS, *ZSH_HOOK_NAMES}
+)
+BLOCKED_PREFIXES = (
+    "BASH",
+    "LD_",
+    "DYLD_",
+    "GIT_",
+    "CLAUDE",
+    "PYTHON",
+    "NODE_",
+    "XDG_",
+    "SHELLOPTS",
+)
+# What reads a variable's value as a name or a number, and so runs the command substitutions in a
+# subscript of it (`D='a[$(rm x)]'`): an expansion that reads a name (NAME_EXPANSION: `${!D}`, a
+# subscript `${a[D]}` or zsh's `$a[D]`, an offset `${x:D}`) or a number (ARITHMETIC_EXPANSION:
+# `$((D))`, `$[D]`), a test's `-v` or `-R`, one of its number comparisons (zsh's test evaluates
+# both sides), and the commands zsh gives a number (NUMBER_COMMANDS: `break $n`; `printf %d $n` by
+# NUMBER_CONVERSION). What a word holds that is a number: an integer, a special parameter, a
+# variable (VARIABLE_WORD) the text only sets to one, a count (`$(grep -c x f)`: COUNT_OPTIONS).
+NAME_EXPANSION = re.compile(r"\$\{!|\$\{?#?\w+\[(?![@*]\]|\d+\])|\$\{#?\w+:(?![-=+?])")
+ARITHMETIC_EXPANSION = re.compile(r"\$\(\(([^()]*)\)\)|\$\[([^\]]*)\]|\$\(\(|\$\[")
+VARIABLE_WORD = re.compile(r'"?\$(?:\{(\w+)\}|(\w+)|[?#$!])"?')
+SUBSTITUTION_WORD = re.compile(r'"?\$\(.*\)"?', re.DOTALL)
+COUNTERS = frozenset({"grep", "egrep", "fgrep", "wc"})
+COUNT_OPTIONS = frozenset("lcwm")  # wc's, which with no file print numbers alone
+TEST_COMMANDS = frozenset({"test", "["})
+NAME_TESTS = frozenset({"-v", "-R"})
+NUMBER_TESTS = frozenset({"-eq", "-ne", "-lt", "-le", "-gt", "-ge"})
+TEST_WORDS = frozenset({"!", "(", ")", "-a", "-o"})
+NUMBER_COMMANDS = frozenset({"break", "continue", "exit", "return", "shift"})
+NUMBER_CONVERSION = re.compile(r"%[-+ #0'\d.*]*[diouxXeEfFgGaA]")
+INTEGER = re.compile(r"-?\d+")
+# What a read may set or export for the programs it runs: their language, time zone, terminal,
+# output width and colours, nothing a program runs by (`TAR_OPTIONS`, `RIPGREP_CONFIG_PATH`,
+# `LESSOPEN`); and in front of a command, with a plain value (`LC_ALL=C grep`).
+READ_NAME = re.compile(r"LC_[A-Z]+|LANG|LANGUAGE|TZ|COLUMNS|LINES|NO_COLOR|TERM|GREP_COLORS?")
+READ_ENVIRONMENT = re.compile(rf"(?:{READ_NAME.pattern})=[\w.@:+-]*")
+# The options of `sort` that name no file or program, and of `read` that only change how it reads.
+SORT_OPTION = re.compile(r"-(?:[bdfghiMnRrsuVzcCm]+|[kt]\S*|S\S*)|--(?:reverse|unique|stable)")
+READ_OPTIONS = frozenset("rs")
+TIMEOUT_DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?")
+NICE_OPTION = re.compile(r"-\d+")
+# The words that open a command inside a compound one, and those that close it.
+COMMAND_OPENERS = frozenset(
+    {"if", "then", "elif", "else", "do", "while", "until", "!", "{", "time"}
+)
+COMPOUND_CLOSERS = frozenset({"done", "fi", "}", "esac"})
+# A `for` loop over literal words (`_literal_loops`): the names its variable may have (lowercase,
+# none the shell sets itself, as zsh does `reply` or `match`), the words the guard writes in for it
+# (no expansion, glob, quote, blank or `~`, and no `..` component), the loops it counts to find
+# where one ends, and the builtins that may set a variable besides `NAME=` (NAME_SETTERS, zsh's own,
+# and those that change how a value expands).
+LOOP_NAME = re.compile(r"[a-z][a-z0-9_]*")
+SHELL_SET_NAMES = frozenset({"reply", "match", "mbegin", "mend", "status", "pipestatus", "argv"})
+LOOP_VALUE = re.compile(r"[\w./@+:,%=-]+")
+LOOP_OPENERS = frozenset({LOOP, "while", "until", "select"})
+LOOP_END = "done"
+# A lone `[` (test's other name: never a glob, no `]` in its word), which the scanner gives up on
+# unless it is written `\[`, as the shell reads it; `[[` stays unread.
+LONE_BRACKET = re.compile(r"(?<![^\s;&|(])\[(?=\s)")
+LOOP_SETTERS = NAME_SETTERS | {
+    *("select", "trap", "alias", "vared", "zparseopts", "zstat", "sysread", "zformat"),
+    *("zregexparse", "pcre_match", "strftime", "ztcp", "zsocket", "zselect", "integer", "float"),
+    *("private", "emulate", "setopt", "enable", "zmodload", "autoload", "functions"),
+}
 # Variables that can name a zone, and what a session may have set them to instead of the hook's
 # own value: the default of each (the plugin root is a folder under the plugins folder).
 ZONE_VARIABLES = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_PLUGIN_ROOT", "XDG_CONFIG_HOME")
+# Expansions in a written word whose value is a folder the guard cannot pin: the current folder
+# where it does not know it, the last one, the directory stack (`~-`, `~1`), and a zone variable
+# or CLAUDE_JOB_DIR read with an operator (`${HOME%/}`, `${CLAUDE_JOB_DIR:-x}`). A plain zone
+# variable is expanded each way (`_expansions`).
+FOLDER_EXPANSION = re.compile(
+    r"\$\{?(?:PWD|OLDPWD)\b|^~[-+\d]|"
+    rf"\$\{{[#!]?(?:{'|'.join((*ZONE_VARIABLES, JOB_VARIABLE))})[^}}\w]"
+)
 ZONE_VARIABLE = re.compile(
     rf"\$(?:\{{({'|'.join(ZONE_VARIABLES)})(?::?[-=?+]([^}}]*))?\}}|({'|'.join(ZONE_VARIABLES)})(?!\w))"
 )
@@ -442,7 +697,20 @@ CHANGES_OPERANDS = frozenset(
     {"rm", "rmdir", "unlink", "mv", "ln", "chmod", "chown", "chgrp", "truncate", "shred", "tee"}
 )
 CHANGES_DESTINATION = frozenset({"cp", "install", "rsync"})
+# IFS named other than in an expansion (`$IFS`, `${IFS}`), and zsh's ways to split words as sh does.
+IFS_NAMED = re.compile(r"(?<![\w$\{])IFS\b")
+WORD_SPLIT_OPTION = re.compile(r"shwordsplit")
+SPLITTING_EMULATION = re.compile(r"\bemulate\b(?:\s+-\S+)*\s+(?:sh|ksh)\b")
+NULL_DEVICE = "/dev/null"  # input from it is no text
+STANDARD_INPUT = re.compile(r"-|/dev/stdin|/dev/fd/0|/proc/[^/]+/fd/0")
+# A `file://` URL, its host left out: the path is what an MCP tool opens.
+FILE_URL = re.compile(r"file://(?:localhost)?(/[^\s'\"]*)")
+URL_SCHEME = re.compile(r"[A-Za-z][\w+.-]*://")
+BLANK = re.compile(r"\s")
 TARGET_DIRECTORY = re.compile(r"(?:-t|--target-directory=?)(.*)")
+# A redirect in a text's words, its file glued on or in the next word (`2>/dev/null`, `> x`, `2>&1`,
+# `<<<x`): no operand of the command it is on.
+REDIRECT_WORD = re.compile(r"(?:\d+|&)?(?:<<<|<<-?|<>|<&|>&|>>|>\||<|>)(.*)")
 OUTPUT_REDIRECT = re.compile(r"\d*>>?\|?(.*)")
 FIND_ACTIONS = frozenset(
     {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
@@ -534,6 +802,7 @@ class Call:
     bash: Bash | None  # None for every tool but Bash
     tool_input: Mapping[str, object]
     cwd: str  # the session's working directory, or this process's when the payload has none
+    transcript: str | None = None  # the payload's transcript_path, when it is a string
 
 
 @dataclass(frozen=True)
@@ -814,14 +1083,21 @@ def _call(payload: Mapping[str, object]) -> Call:
         raise PayloadError("tool_input is not an object")
     cwd = payload.get("cwd")
     where = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+    found = payload.get("transcript_path")
+    transcript = found if isinstance(found, str) else None
     if tool != "Bash":
-        return Call(tool, None, tool_input, where)
+        return Call(tool, None, tool_input, where, transcript)
     command = tool_input.get("command")
     if not isinstance(command, str):
         raise PayloadError("a Bash call without a command")
-    # The PM's read-only self-check is blanked as a lone command.
+    return Call(tool, _bash_text(command), tool_input, where, transcript)
+
+
+def _bash_text(command: str) -> Bash:
+    """A Bash command and its code text. The PM's read-only self-check is blanked as a lone
+    command."""
     code: str = _shell_words().code_text(command, lone=("printenv", ROLE_VAR))
-    return Call(tool, Bash(command, code), tool_input, where)
+    return Bash(command, code)
 
 
 def _reaches_out(call: Call) -> bool:
@@ -1143,7 +1419,10 @@ class _Written(Protocol):
 
 
 class _ShellWord(_Written, Protocol):
-    """A shell_words.Word, at text[start:end]."""
+    """A shell_words.Word, at text[start:end], with the text of each plain `$(...)` it holds."""
+
+    @property
+    def substitutions(self) -> tuple[str, ...]: ...
 
     @property
     def start(self) -> int: ...
@@ -1152,17 +1431,50 @@ class _ShellWord(_Written, Protocol):
     def end(self) -> int: ...
 
 
+class _Heredoc(Protocol):
+    """A shell_words heredoc: where its body is in the text."""
+
+    @property
+    def body(self) -> tuple[int, int]: ...
+
+
 class _SimpleCommand(Protocol):
-    """A shell_words.Command: its words, and whether a pipe joins it to another command."""
+    """A shell_words.Command: its words, its heredocs, the files it writes and its other
+    redirection targets, whether it writes a file at all, and whether a pipe joins it to another
+    command."""
 
     @property
     def words(self) -> list[_ShellWord]: ...
+
+    @property
+    def heredocs(self) -> list[_Heredoc]: ...
+
+    @property
+    def write_paths(self) -> list[str | None]: ...
+
+    @property
+    def redirect_inputs(self) -> list[str | None]: ...
+
+    @property
+    def input_files(self) -> list[str | None]: ...
+
+    @property
+    def argument_writes(self) -> list[str | None]: ...
+
+    @property
+    def writes(self) -> bool: ...
 
     @property
     def in_pipeline(self) -> bool: ...
 
     @property
     def after_pipe(self) -> bool: ...
+
+    @property
+    def start(self) -> int: ...
+
+    @property
+    def end(self) -> int: ...
 
 
 class _Bodies(Protocol):
@@ -2013,6 +2325,15 @@ def _host_problem(command: str, depth: int = 0) -> _HostProblem | None:
     return _line_problem(command, [command.words for command in commands], depth)
 
 
+class _Own(NamedTuple):
+    """A session's own scratch folder inside a zone (its real path), the names right below it
+    that stay the zone's (a session folder's `subagents`), and whether it is the job folder."""
+
+    folder: str
+    kept: tuple[str, ...] = ()
+    job: bool = False
+
+
 class _Zone(NamedTuple):
     """A place a restricted session may not write: what a Bash or MCP text can name it by."""
 
@@ -2025,6 +2346,16 @@ class _Zone(NamedTuple):
     parents: tuple[str, ...] = ()  # the folders that may hold it: a name counts when one is named
     suffixes: tuple[tuple[str, ...], ...] = ()  # paths in any folder that end in these parts
     writes_only: bool = False  # Bash may read it and run its files: only a write counts
+    readers: frozenset[str] = frozenset()  # commands besides READ_COMMANDS that only read it
+    copy_reads: bool = False  # a copy or an archive only reads the sources it names
+    cd_reads: bool = False  # a `cd` into it is no write when the text only reads
+    loop_reads: bool = False  # a `for` loop over it is no write when the text only reads
+    shell_reads: bool = False  # a read may follow a wrapper, hold a `$(...)`, read a `<` file
+    writes_inside: bool = False  # a changed word inside it counts, not only a root or its holder
+    own_folders: bool = False  # the session may write in its own scratch folders inside it
+    own: tuple[_Own, ...] = ()  # those folders, for one call (`_with_own`)
+    # Files whose siblings `<file>.<anything>` (a backup: `~/.claude.json.backup`) are in it too.
+    siblings: tuple[Path, ...] = ()
 
 
 def _store_zone(store: Path) -> _Zone:
@@ -2092,16 +2423,286 @@ def _plugins_zone() -> _Zone:
     )
 
 
+def _claude_folder_zone() -> _Zone:
+    """All of Claude Code's user folder and its `.claude.json`: skills, agents, commands, memory
+    and the rest. It has no token: a `.claude` token would refuse every write in a repo's own
+    `.claude` folder, where Claude Code keeps its worktrees. Bash may read it (rg too, and a `cd`
+    into it when the text only reads) and run its scripts."""
+    folders = _claude_folders()
+    files = tuple(dict.fromkeys(parent / CLAUDE_JSON for parent in (Path.home(), claude_dir())))
+    return _Zone(
+        (*folders, *files),
+        f"Claude Code's user folder ({folders[0]}) and {files[0]}",
+        "claude-folder",
+        frozenset(),
+        frozenset({CLAUDE_FOLDER, CLAUDE_JSON, *(folder.name for folder in folders)}),
+        CLAUDE_FOLDER_ENTRIES,
+        writes_only=True,
+        readers=CLAUDE_FOLDER_READERS,
+        copy_reads=True,
+        cd_reads=True,
+        loop_reads=True,
+        shell_reads=True,
+        writes_inside=True,
+        own_folders=True,
+        siblings=files,
+    )
+
+
+def _job_folder(folders: Iterable[Path]) -> _Own | None:
+    """The session's job folder: the hook's own CLAUDE_JOB_DIR (a command cannot set it), when it
+    is an absolute path whose real path sits right under a user folder's `jobs/`."""
+    value = os.environ.get(JOB_VARIABLE, "")
+    if not os.path.isabs(value):
+        return None
+    real = Path(os.path.realpath(value))
+    if any(real.parent == Path(os.path.realpath(folder / JOBS_FOLDER)) for folder in folders):
+        return _Own(str(real), job=True)
+    return None
+
+
+def _session_folder(transcript: str | None, folders: Iterable[Path]) -> _Own | None:
+    """The folder beside the session's transcript, its `subagents/` kept: when the payload's
+    transcript_path is an absolute, normal path `<folder>/projects/<project>/<session id>.jsonl`
+    and that folder's real path is where it says."""
+    if transcript is None or not os.path.isabs(transcript):
+        return None
+    path = Path(transcript)
+    if os.path.normpath(transcript) != transcript or path.suffix != TRANSCRIPT_SUFFIX:
+        return None
+    if not SESSION_ID.fullmatch(path.stem):
+        return None
+    real = Path(os.path.realpath(path.with_suffix("")))
+    projects = {Path(os.path.realpath(folder / PROJECTS_FOLDER)) for folder in folders}
+    if real.name != path.stem or real.parent.parent not in projects:
+        return None
+    return _Own(str(real), (SUBAGENTS_FOLDER,))
+
+
+def _live_dollars(text: str) -> set[int]:
+    """Where a `$` of a Bash text starts an expansion: not in single quotes, not after a
+    backslash."""
+    live: set[int] = set()
+    quote = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            index += 1
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "'"
+        elif char == "$":
+            live.add(index)
+        index += 1
+    return live
+
+
+def _job_references(text: str) -> list[tuple[int, int]]:
+    """The spans of the `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` of a Bash text that the shell
+    expands to the hook's value as a word's first part: a live `$` (`_live_dollars`), after what
+    starts a word (JOB_WORD_BEFORE) and before what ends one or its first component
+    (JOB_WORD_AFTER). Not `'$CLAUDE_JOB_DIR'`, `\\$CLAUDE_JOB_DIR`, `x$CLAUDE_JOB_DIR` or zsh's
+    `$CLAUDE_JOB_DIR:h`."""
+    live = _live_dollars(text)
+    return [
+        match.span()
+        for match in JOB_REFERENCE.finditer(text)
+        if match.start() in live
+        and (match.start() == 0 or text[match.start() - 1] in JOB_WORD_BEFORE)
+        and (match.end() == len(text) or text[match.end()] in JOB_WORD_AFTER)
+    ]
+
+
+def _odd_job_mention(text: str) -> bool:
+    """Whether a Bash text names CLAUDE_JOB_DIR otherwise than by `_job_references`, as written or
+    with its quotes dropped (`${CLAUDE_JOB_DIR%/*}`, `'$CLAUDE_JOB_DIR'`, `$CLAUDE_JOB""_DIR`)."""
+    named = len(JOB_NAME.findall(text))
+    return named > len(_job_references(text)) or len(JOB_NAME.findall(_unquoted(text))) != named
+
+
+def _job_variable_kept(command: str) -> bool:
+    """Whether a Bash text leaves CLAUDE_JOB_DIR as the hook has it: it names it only by
+    `_job_references` (`_odd_job_mention`), and when it does no builtin may set a name given as a
+    word (NAME_SETTERS: `read`, `export`, `eval`...)."""
+    if not any(JOB_NAME.search(text) for text in (command, _unquoted(command))):
+        return True
+    if _changes_word_splitting(command):
+        return False
+    return not _odd_job_mention(command) and not NAME_SETTERS.intersection(_words_of(command))
+
+
+def _changes_word_splitting(command: str) -> bool:
+    """Whether a Bash text may change how the shell splits an unquoted expansion: it names IFS
+    other than by expanding it (`IFS=/`, `unset IFS`, `local IFS`), or turns on zsh's
+    SH_WORD_SPLIT (`setopt shwordsplit`, any case, `_` ignored) or a mode that has it
+    (`emulate sh`, `emulate -L ksh`). `$CLAUDE_JOB_DIR` then splits into words that are no job
+    folder (`cd ~; IFS=/; rm -rf $CLAUDE_JOB_DIR/x` removes `.claude`)."""
+    text = _unquoted(command)
+    return bool(
+        IFS_NAMED.search(text)
+        or WORD_SPLIT_OPTION.search(text.replace("_", "").lower())
+        or SPLITTING_EMULATION.search(text)
+    )
+
+
+def _with_own(zone: _Zone, call: Call) -> _Zone:
+    """The zone with this call's own scratch folders (`_job_folder`, `_session_folder`), for a
+    zone with `own_folders` and a Bash or edit call; an MCP tool gets none. A Bash text that may
+    change CLAUDE_JOB_DIR (`_job_variable_kept`) gets no job folder."""
+    if not zone.own_folders or (call.bash is None and call.tool not in EDIT_TOOLS):
+        return zone
+    folders = _claude_folders()
+    job = _job_folder(folders)
+    if call.bash is not None and not _job_variable_kept(call.bash.command):
+        job = None
+    session = _session_folder(call.transcript, folders)
+    return zone._replace(own=tuple(own for own in (job, session) if own is not None))
+
+
+def _job_written_out(call: Call, zone: _Zone) -> Call:
+    """A Bash call with its `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` that the shell expands
+    (`_job_references`) written as the job folder, when the zone has one (`_with_own`): the checks
+    then follow a `cd` there and see what a path leaves it for."""
+    job = next((own for own in zone.own if own.job), None)
+    if call.bash is None or job is None:
+        return call
+    command = call.bash.command
+    for start, end in reversed(_job_references(command)):
+        command = command[:start] + job.folder + command[end:]
+    return replace(call, bash=_bash_text(command))
+
+
+def _in_own(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved path is one of the zone's own scratch folders or inside one, below none
+    of its kept names."""
+    if path is None:
+        return False
+    for own in zone.own:
+        if path == own.folder:
+            return True
+        if _inside(path, own.folder):
+            return Path(path).relative_to(own.folder).parts[0] not in own.kept
+    return False
+
+
+def _is_own_folder(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved path is one of the zone's own scratch folders itself."""
+    return any(path == own.folder for own in zone.own)
+
+
+def _glob_in_own(word: str, base: str, zone: _Zone) -> bool:
+    """Whether a glob, read from `base`, stays in one of the zone's own scratch folders: it has no
+    `..`, and the folders before its first glob component are inside one (`_in_own`), or are one
+    whose kept names (`subagents`) that component cannot match."""
+    if not zone.own or UP_PATH.search(word):
+        return False
+    parts = _glob_parts(word, base)
+    at = next((i for i, part in enumerate(parts) if GLOB_CHARS.intersection(part)), len(parts))
+    if at == len(parts):
+        return False
+    prefix = _resolve(os.path.join(*parts[:at]), os.sep)
+    for own in zone.own:
+        if prefix == own.folder:
+            return not _matches_any(own.kept, parts[at])
+    return _in_own(prefix, zone)
+
+
+def _glob_hits(word: str, base: str, zone: _Zone, roots: Sequence[tuple[str, ...]]) -> bool:
+    """`_glob_reaches`, or one that can match a sibling of a zone file (`_glob_reaches_sibling`);
+    but not for a glob that stays in an own scratch folder (`_glob_in_own`)."""
+    reaches = _glob_reaches(word, base, roots) or _glob_reaches_sibling(word, base, zone)
+    return reaches and not _glob_in_own(word, base, zone)
+
+
+def _climbed(word: str) -> str:
+    """A glob word with each component that can match `..` read as `..`: bash before 5.2 matches
+    it with `.*`, so `.*/.claude` in `~/proj` is `~/.claude`. Only a component that starts with a
+    literal dot can, as only such a glob matches a name that starts with one."""
+    return "/".join(
+        ".." if part.startswith(".") and _climbs(part) else part for part in word.split("/")
+    )
+
+
+def _climbs(part: str) -> bool:
+    return bool(GLOB_CHARS.intersection(part)) and fnmatch.fnmatchcase("..", part)
+
+
+def _climbing_hits(word: str, base: str, zone: _Zone) -> bool:
+    """Whether a glob word that is written, as it climbs (`_climbed`), reaches the zone
+    (`_glob_hits`), for a zone with `writes_inside`."""
+    climbed = _climbed(word)
+    roots = [root.parts for root in zone.roots]
+    return zone.writes_inside and climbed != word and _glob_hits(climbed, base, zone, roots)
+
+
+def _glob_reaches_sibling(word: str, base: str, zone: _Zone) -> bool:
+    """Whether a glob word can match a sibling of a zone file (`~/.claude.json.*`), or a path
+    inside one: its folder parts match the file's folder and the next part can start with the
+    file's name and a dot (`_can_start_with`)."""
+    pattern = _glob_parts(word, base)
+    for file in zone.siblings:
+        folder = Path(os.path.realpath(file.parent)).parts
+        if (
+            len(pattern) > len(folder)
+            and all(
+                fnmatch.fnmatchcase(name, part) for name, part in zip(folder, pattern, strict=False)
+            )
+            and _can_start_with(pattern[len(folder)], f"{file.name}.")
+        ):
+            return True
+    return False
+
+
+def _can_start_with(pattern: str, prefix: str) -> bool:
+    """Whether some name that starts with `prefix` matches the glob `pattern` (read as fnmatch
+    reads it: a leading `*` can match a dot)."""
+    units = GLOB_UNIT.findall(pattern)
+
+    @functools.cache
+    def extends(at: int, done: int) -> bool:
+        if done == len(prefix):
+            return True
+        if at == len(units):
+            return False
+        unit = units[at]
+        if unit == "*":
+            return extends(at + 1, done) or extends(at, done + 1)
+        char = prefix[done]
+        if len(unit) == 2 and unit[0] == "\\":  # an escaped character is itself
+            matched = char == unit[1]
+        else:
+            matched = unit == "?" or fnmatch.fnmatchcase(char, unit)
+        return matched and extends(at + 1, done + 1)
+
+    return extends(0, 0)
+
+
 def _zones(store: Path) -> tuple[_Zone, ...]:
-    """The places a restricted session may not write, in the order a refusal names them."""
-    return (_store_zone(store), _config_zone(), _settings_zone(), _plugins_zone())
+    """The places a restricted session may not write, in the order a refusal names them: the
+    user folder last, so a settings or plugins refusal names its own zone."""
+    return (
+        _store_zone(store),
+        _config_zone(),
+        _settings_zone(),
+        _plugins_zone(),
+        _claude_folder_zone(),
+    )
+
+
+def _glob_parts(word: str, base: str) -> tuple[str, ...]:
+    """The components of a glob word read from `base`, `~` and variables expanded."""
+    return Path(
+        os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(word))))
+    ).parts
 
 
 def _glob_reaches(word: str, cwd: str, roots: Sequence[tuple[str, ...]]) -> bool:
     """Whether a glob word can match a root, one of its parents, or a path inside it."""
-    pattern = Path(
-        os.path.normpath(os.path.join(cwd, os.path.expandvars(os.path.expanduser(word))))
-    ).parts
+    pattern = _glob_parts(word, cwd)
     for root in roots:
         depth = min(len(pattern), len(root))
         if all(fnmatch.fnmatchcase(root[i], pattern[i]) for i in range(depth)):
@@ -2595,25 +3196,50 @@ def _expanded(text: str, *, default: bool) -> str:
 
 
 def _expansions(text: str, glob_text: str) -> list[tuple[str, str]]:
-    """The text as written, and with its zone variables expanded each way, each with its glob text
-    expanded the same way: the check reads them all, since the command may run under other values
-    than the hook sees."""
-    pairs = (
-        (text, glob_text),
-        (_expanded(text, default=False), _expanded(glob_text, default=False)),
-        (_expanded(text, default=True), _expanded(glob_text, default=True)),
-    )
+    """The text as written and with its brace expansions written out (`_brace_expanded`), each
+    as it is and with its zone variables expanded each way, each with its glob text expanded the
+    same way: the check reads them all, since the command may run under other values than the
+    hook sees."""
+    sources = [(text, glob_text)]
+    braced, braced_glob = _brace_expanded(text), _brace_expanded(glob_text)
+    if braced is not None and braced_glob is not None:
+        sources.append((braced, braced_glob))
+    pairs = [
+        pair
+        for plain, globbing in sources
+        for pair in (
+            (plain, globbing),
+            (_expanded(plain, default=False), _expanded(globbing, default=False)),
+            (_expanded(plain, default=True), _expanded(globbing, default=True)),
+        )
+    ]
     return list(dict.fromkeys(pairs))
 
 
 def _operands(args: Sequence[str]) -> list[str]:
-    """The words that are not options (everything after `--` is an operand)."""
+    """The words that are not options: everything after `--`, and a lone `-` (standard input or
+    output, an operand to every command)."""
     found: list[str] = []
     options = True
     for word in args:
         if options and word == "--":
             options = False
-        elif not options or not word.startswith("-"):
+        elif not options or not word.startswith("-") or word == "-":
+            found.append(word)
+    return found
+
+
+def _without_redirects(words: Sequence[str]) -> list[str]:
+    """A command's words but its redirects (REDIRECT_WORD), and the file of one whose operator
+    stands alone (`2> /dev/null`)."""
+    found: list[str] = []
+    redirected = False
+    for word in words:
+        if redirected:
+            redirected = False
+        elif match := REDIRECT_WORD.fullmatch(word):
+            redirected = not match[1]
+        else:
             found.append(word)
     return found
 
@@ -2663,19 +3289,29 @@ def _find_targets(args: Sequence[str]) -> list[str]:
     return list(args[:start])
 
 
-def _command_targets(words: Sequence[str], index: int) -> list[str]:
-    """The words a command at `index` changes or replaces: what it deletes, moves, links or
-    changes the mode of, the destination of a copy, the folder an archive unpacks into."""
+def _replaced_operands(words: Sequence[str], index: int) -> list[str]:
+    """The words a command at `index` changes in themselves: what it deletes, moves, links or
+    changes the mode of, and where a `find` that acts starts."""
     name, args = _basename(words[index]), words[index + 1 :]
     if name in CHANGES_OPERANDS:
         return [*_operands(args), *_target_directory(args)]
+    return _find_targets(args) if name == "find" else []
+
+
+def _command_targets(words: Sequence[str], index: int) -> list[str]:
+    """The words a command at `index` changes or replaces: what it deletes, moves, links or
+    changes the mode of (`_replaced_operands`), the destination of a copy, the folder an archive
+    unpacks into."""
+    name, args = _basename(words[index]), words[index + 1 :]
+    if name in CHANGES_OPERANDS or name == "find":
+        return _replaced_operands(words, index)
     if name in CHANGES_DESTINATION:
         return _target_directory(args) or _operands(args)[-1:]
     if name == "tar":
         return _option_folders(args, "C", "--directory") or _unpacks_here(args, "x", "--extract")
     if name == "unzip":
         return _option_folders(args, "d") or _unpacks_here(args, "", "")
-    return _find_targets(args) if name == "find" else []
+    return []
 
 
 def _redirect_targets(words: Sequence[str]) -> list[str]:
@@ -2692,24 +3328,39 @@ def _redirect_targets(words: Sequence[str]) -> list[str]:
 
 
 class _Step(NamedTuple):
-    """One simple command of a text: the words it changes or replaces, and whether it moves the
-    session to another folder (`folder` is where, None when that cannot be told)."""
+    """One simple command of a text: the words it changes or replaces, those it changes in
+    themselves (`replaced`), the links it makes (`links`), all its words, and whether it moves the
+    session to another folder (`folder` is where, None when that cannot be told). `bare` is
+    whether its text held no quote or backslash, so that a word that reads as a redirect is one
+    (`'>x'` is a name)."""
 
     targets: list[str]
     moves: bool = False
     folder: str | None = None
+    replaced: tuple[str, ...] = ()
+    links: tuple[str, ...] = ()
+    words: tuple[str, ...] = ()
+    bare: bool = True
 
 
-def _step(words: Sequence[str]) -> _Step:
+def _step(words: Sequence[str], *, bare: bool = True) -> _Step:
     targets = _redirect_targets(words)
+    replaced: list[str] = []
+    links: list[str] = []
     for index in _runnable(words):
         targets += _command_targets(words, index)
+        replaced += _replaced_operands(words, index)
+        if _basename(words[index]) == "ln":
+            links += _operands(words[index + 1 :])
+    found = _Step(
+        targets, replaced=tuple(replaced), links=tuple(links), words=tuple(words), bare=bare
+    )
     first = _basename(words[0]) if words else ""
     if first in CHANGE_DIR:
-        operands = _operands(words[1:])
-        return _Step(targets, True, operands[0] if operands else "~")
+        operands = _cd_operands(found)
+        return found._replace(moves=True, folder=operands[0] if operands else "~")
     # `popd`, or a `cd` further in (`(cd x; ...)`, `env -C`): the folder is not followed.
-    return _Step(targets, first == "popd" or bool(CHANGE_DIR.intersection(words)))
+    return found._replace(moves=first == "popd" or bool(CHANGE_DIR.intersection(words)))
 
 
 def _write_targets(text: str) -> list[_Step]:
@@ -2717,7 +3368,10 @@ def _write_targets(text: str) -> list[_Step]:
     of rm, mv, ln, chmod and the like, the destination of cp, install and rsync, the folder tar
     and unzip unpack into, a redirect's file, and what tee writes. A copy's source is only read."""
     return [
-        _step(_split_env_strings(_unquoted(segment).split()))
+        _step(
+            _split_env_strings(_unquoted(segment).split()),
+            bare=not QUOTE_MARKS.intersection(segment),
+        )
         for segment in COMMAND_SPLIT.split(text)
     ]
 
@@ -2740,6 +3394,8 @@ def _holder_names(zone: _Zone) -> set[str]:
     operand can name after a `cd` that moved the session somewhere unknown."""
     home = Path.home().parts
     names: set[str] = {suffix[0] for suffix in zone.suffixes}
+    if zone.writes_inside:
+        names.update(root.name for root in zone.roots)
     for root in zone.roots:
         parts = root.parts[:-1]
         names.update(parts[len(home) :] if parts[: len(home)] == home else parts[1:])
@@ -2754,20 +3410,442 @@ def _may_hold_zone(target: str, zone: _Zone) -> bool:
     if not parts:
         return True
     names = _holder_names(zone)
-    return not _has_no_literal(parts[0]) and _matches_any(names, parts[0])
+    if _has_no_literal(parts[0]):
+        return False
+    return _matches_any(names, parts[0]) or _names_sibling(parts[0], zone)
+
+
+def _names_sibling(part: str, zone: _Zone) -> bool:
+    """Whether a relative component that starts with a literal dot, as a sibling's name does,
+    can name a sibling of a zone file (`.claude.json.*`, `.claude.json.bak`)."""
+    return part.startswith(".") and any(
+        _can_start_with(part, f"{file.name}.") for file in zone.siblings
+    )
 
 
 def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether something in the text changes or replaces a root of the zone or a folder holding
-    one. The folder a relative operand is read from follows the `cd`s of the text; after one that
-    cannot be followed (`cd "$X"`, `cd -`), a relative operand counts when it can name a holder."""
+    one, or for a zone with `writes_inside` names a path inside it (`_names_inside`) or writes a
+    word the guard cannot pin that may name it (`_writes_unpinned`). The folder a relative word
+    is read from follows the `cd`s of the text; after one that cannot be followed (`cd "$X"`,
+    `cd -`), a relative operand counts when it can name a holder."""
     current: str | None = cwd
     for step in _write_targets(text):
         if any(_changes_holder(target, current, zone) for target in step.targets):
             return True
+        if zone.own and _changes_own(step, current, zone):
+            return True
+        if zone.writes_inside and any(_names_inside(word, current, zone) for word in step.words):
+            return True
+        if zone.writes_inside and current and _creates_climbing(step, current, zone):
+            return True
+        if zone.writes_inside and any(_through_alias(word, current) for word in _step_writes(step)):
+            return True
         if step.moves:
-            current = _after_cd(current, step.folder)
+            current = (_after_pinned_cd if zone.writes_inside else _after_cd)(current, step.folder)
+    return zone.writes_inside and _writes_unpinned(text, cwd, zone)
+
+
+def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
+    """Whether a text writes a word the guard does not follow that may name the zone
+    (`_may_name_zone`), or one whose leading current folder, written out (`_pinned`), is a holder
+    of the zone or in it, or goes by such a `cd` to a write of a file (`_writes_files`), or writes a relative word after a
+    `cd old new` (`_swaps_folder`). Its command substitutions and brace expansions stay in their
+    words (`_glued_expansions`), and its heredoc bodies read as text or code are no commands of it
+    (`_without_text_bodies`)."""
+    current: str | None = cwd
+    shell = _without_text_bodies(text, zone)
+    steps = [_restored(step) for step in _write_targets(_glued_expansions(shell))]
+    for index, step in enumerate(steps):
+        if any(_unpinned_word(word, current, zone) for word in _step_writes(step)):
+            return True
+        if step.moves:
+            folder = _pinned(step.folder, current) if step.folder is not None else None
+            later = _writes_files(steps[index + 1 :])
+            if folder and not _followed(folder) and later and _may_name_zone(folder, current, zone):
+                return True
+            if _swaps_folder(step) and _writes_relative(steps[index + 1 :]):
+                return True
+            current = _after_pinned_cd(current, step.folder)
     return False
+
+
+def _swaps_folder(step: _Step) -> bool:
+    """Whether a step is a `cd` or `pushd` with two operands, its redirects none
+    (`_cd_operands`: `cd x 2>/dev/null` has one): zsh's `cd old new` goes to the current
+    folder with `old` replaced by `new`, an older bash to the first."""
+    words = step.words
+    return bool(words) and _basename(words[0]) in CHANGE_DIR and len(_cd_operands(step)) == 2
+
+
+def _cd_operands(step: _Step) -> list[str]:
+    """A `cd` step's operands, but its redirects (`_without_redirects`) when its text is `bare`:
+    in a quoted text a word that reads as a redirect may be a quoted name."""
+    words = step.words[1:]
+    return _operands(_without_redirects(words) if step.bare else words)
+
+
+def _writes_files(steps: Sequence[_Step]) -> bool:
+    """Whether a step writes a file: a word it writes is no stream or terminal (DEV_WRITABLE)."""
+    return any(word not in DEV_WRITABLE for step in steps for word in _step_writes(step))
+
+
+def _writes_relative(steps: Sequence[_Step]) -> bool:
+    """Whether a step writes a word relative to the folder it runs in (not from `/` or `~`)."""
+    return any(not word.startswith(("/", "~")) for step in steps for word in _step_writes(step))
+
+
+def _through_alias(word: str, current: str | None) -> bool:
+    """Whether a written word, as written or as a real path, is in a folder of ALIAS_FOLDERS but
+    for a stream or a terminal (DEV_WRITABLE): `/proc/self/cwd/x` is where the shell is."""
+    base = current or os.sep
+    path = os.path.normpath(os.path.join(base, os.path.expanduser(word)))
+    if path in DEV_WRITABLE:
+        return False
+    places = (path, _resolve(word, base))
+    return any(_inside(place, folder) for place in places for folder in ALIAS_FOLDERS)
+
+
+def _scanned_commands(text: str) -> list[_SimpleCommand] | None:
+    """The simple commands of a text with its plain `$(...)` kept in their words
+    (shell_words.simple_commands with `substitutions`); None when the scanner cannot follow it."""
+    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(text, substitutions=True)
+    return commands
+
+
+def _without_text_bodies(text: str, zone: _Zone) -> str:
+    """`text` with the heredoc bodies blanked that a command in no pipe reads as text or code
+    (`_reads_body_as_text`: python's, `cat`'s); as it is when the scanner cannot follow it. A
+    piped one stays: `cat <<E | sh` runs its body."""
+    commands = _scanned_commands(text)
+    if commands is None:
+        return text
+    spans = [
+        heredoc.body
+        for each in commands
+        if each.words and not each.in_pipeline
+        if _reads_body_as_text(_program_name(each.words[0], zone))
+        for heredoc in each.heredocs
+    ]
+    return _blank(text, spans)
+
+
+def _step_writes(step: _Step) -> tuple[str, ...]:
+    """The words a step changes, replaces or links."""
+    return (*step.targets, *step.replaced, *step.links)
+
+
+def _unpinned_word(word: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a written word the guard does not follow may name the zone (`_may_name_zone`),
+    or its leading current folder, written out (`_pinned`), makes it a holder or a path in it."""
+    pinned = _pinned(word, current)
+    if not _followed(pinned):
+        return _may_name_zone(pinned, current, zone)
+    return pinned != word and _changes_holder(pinned, current, zone)
+
+
+def _glued_expansions(text: str) -> str:
+    """`text` with its `$(...)`, backtick and `${...}` expansions and its brace expansions glued
+    (GLUED): their blanks, separators, parentheses and braces as private characters, so that
+    COMMAND_SPLIT and a split at blanks keep each in its word (`"$(dirname ~/x)/.claude"`)."""
+    found: list[str] = []
+    index = 0
+    while index < len(text):
+        end = _expansion_end(text, index)
+        found.append(text[index:end].translate(GLUED) if end > index else text[index])
+        index = max(end, index + 1)
+    return "".join(found)
+
+
+def _expansion_end(text: str, index: int) -> int:
+    """Where an expansion of `_glued_expansions` that starts at `index` ends; `index` when none
+    starts there."""
+    pairs = {"$(": ("(", ")"), "${": ("{", "}")}
+    opener = text[index : index + 2]
+    if opener in pairs:
+        start, close = pairs[opener]
+        depth = 0
+        for at in range(index + 1, len(text)):
+            depth += (text[at] == start) - (text[at] == close)
+            if depth == 0:
+                return at + 1
+        return len(text)
+    if text[index] == "`":
+        close_at = text.find("`", index + 1)
+        return len(text) if close_at < 0 else close_at + 1
+    if text[index] != "{":
+        return index
+    group = text[index : _closing_brace(text, index) + 1]
+    return index + len(group) if "," in group or ".." in group else index
+
+
+def _closing_brace(word: str, start: int) -> int:
+    """Where the brace that closes the `{` at `start` stands, nested braces counted; -1 when a
+    blank or the end of the text comes first."""
+    depth = 0
+    for at in range(start, len(word)):
+        char = word[at]
+        if char.isspace():
+            return -1
+        depth += (char == "{") - (char == "}")
+        if depth == 0:
+            return at
+    return -1
+
+
+class _Braces(NamedTuple):
+    """The first brace expansion of a word: where it starts, where it ends (past its `}`), and the
+    words it stands for, None when the guard cannot tell them (`_brace_group`)."""
+
+    start: int
+    end: int
+    alternatives: tuple[str, ...] | None
+
+
+def _brace_group(word: str) -> _Braces | None:
+    """The first brace expansion of a word: a `{...}` with a comma outside the braces in it
+    (`{a,{b,c}}`), or a range (`_range_members`); None when it has none. Not a `${`, nor a brace
+    that closes no list or range (`{}`, `{a}`). A range the guard cannot tell has no
+    alternatives: zsh expands `{1..$N}` after `$N`."""
+    index = 0
+    while (start := word.find("{", index)) >= 0:
+        index = start + 1
+        close = _closing_brace(word, start)
+        if close < 0 or word[start - 1 : start] == "$":
+            continue
+        content = word[start + 1 : close]
+        alternatives = _alternatives(content)
+        if len(alternatives) > 1:
+            return _Braces(start, close + 1, tuple(alternatives))
+        if ".." in content and UNPINNED_EXPANSION.search(content):
+            return _Braces(start, close + 1, None)
+        match = BRACE_RANGE.fullmatch(content)
+        if match:
+            return _Braces(start, close + 1, _range_members(match))
+    return None
+
+
+def _alternatives(content: str) -> list[str]:
+    """A brace list's words: its text cut at each comma outside the braces in it."""
+    found = [""]
+    depth = 0
+    for char in content:
+        depth += (char == "{") - (char == "}")
+        if char == "," and depth == 0:
+            found.append("")
+        else:
+            found[-1] += char
+    return found
+
+
+def _range_members(match: re.Match[str]) -> tuple[str, ...] | None:
+    """The words a brace range makes (BRACE_RANGE: `1..3`, `a..e`, `01..10..2`), zero-padded
+    when an end is; None past BRACE_MEMBERS."""
+    numbers = match[1] is not None
+    first, last, every = (match[1], match[2], match[3]) if numbers else match.group(4, 5, 6)
+    step = abs(int(every or 1)) or 1
+    low, high = (int(first), int(last)) if numbers else (ord(first), ord(last))
+    if abs(high - low) // step + 1 > BRACE_MEMBERS:
+        return None
+    values = range(low, high + (1 if high >= low else -1), step if high >= low else -step)
+    if not numbers:
+        return tuple(map(chr, values))
+    padded = any(len(end.lstrip("-")) > 1 and end.lstrip("-")[0] == "0" for end in (first, last))
+    width = max(len(first), len(last)) if padded else 0
+    return tuple(f"{value:0{width}d}" for value in values)
+
+
+def _brace_members(word: str) -> list[str] | None:
+    """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
+    `abd acd`, `{1..3}` is `1 2 3`, nested lists too); `[word]` when it has none. None when they
+    are more than BRACE_MEMBERS, or one cannot be told (`_brace_group`), or the word holds more
+    braces than BRACE_MEMBERS words could (minified JSON): each list or range is one `{`."""
+    if len(BRACE_OPENER.findall(word)) > BRACE_MEMBERS:
+        return None
+    group = _brace_group(word)
+    if group is None:
+        return [word]
+    if group.alternatives is None:
+        return None
+    heads: list[str] = []
+    for alternative in group.alternatives:
+        made = _brace_members(alternative)
+        if made is None:
+            return None
+        heads += made
+    tails = _brace_members(word[group.end :])
+    if tails is None or len(heads) * len(tails) > BRACE_MEMBERS:
+        return None
+    return [word[: group.start] + head + tail for head in heads for tail in tails]
+
+
+def _brace_expanded(text: str) -> str | None:
+    """`text` with each word that holds a brace expansion (BRACE_WORD) written as the words it
+    makes (`_brace_members`), as the shell runs it; None when a word makes words the guard cannot
+    tell or more than BRACE_MEMBERS."""
+    found: list[str] = []
+    last = 0
+    for match in BRACE_WORD.finditer(text):
+        members = _brace_members(match[0])
+        if members is None:
+            return None
+        found += [text[last : match.start()], " ".join(members)]
+        last = match.end()
+    return "".join(found) + text[last:]
+
+
+def _restored(step: _Step) -> _Step:
+    """A step of a glued text (`_glued_expansions`) with its words as written."""
+
+    def back(word: str) -> str:
+        return word.translate(UNGLUED)
+
+    return step._replace(
+        targets=[back(word) for word in step.targets],
+        folder=None if step.folder is None else back(step.folder),
+        replaced=tuple(map(back, step.replaced)),
+        links=tuple(map(back, step.links)),
+        words=tuple(map(back, step.words)),
+    )
+
+
+def _pinned(word: str, current: str | None) -> str:
+    """A word with its leading `$PWD`, `${PWD}` or `~+` written as the folder `current`, when the
+    guard knows it (CURRENT_FOLDER)."""
+    if current is None:
+        return word
+    return CURRENT_FOLDER.sub(lambda _match: current, word)
+
+
+def _followed(word: str) -> bool:
+    """Whether the guard reads a word as the shell does: it has no expansion of UNPINNED_EXPANSION or
+    FOLDER_EXPANSION, and no brace expansion (`_brace_members`)."""
+    if UNPINNED_EXPANSION.search(word) or FOLDER_EXPANSION.search(word):
+        return False
+    return _brace_members(word) == [word]
+
+
+def _after_pinned_cd(current: str | None, folder: str | None) -> str | None:
+    """Where the session is after `cd folder` (`_after_cd`) with its leading current folder
+    written out (`_pinned`); None when the guard does not follow the folder (`_followed`)."""
+    if folder is None:
+        return None
+    pinned = _pinned(folder, current)
+    return _after_cd(current, pinned) if _followed(pinned) else None
+
+
+def _may_name_zone(word: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a word the guard does not follow may name the zone or a folder that holds it: a
+    word its brace expansion makes may (`_member_may_name_zone`), or makes more than the guard
+    reads (`_brace_members`), or it has a folder expansion the guard cannot pin
+    (FOLDER_EXPANSION) or a root's name (`.claude`), or a component of it may
+    (`_part_may_name_zone`)."""
+    members = _brace_members(word)
+    if members is None:
+        return True
+    if members != [word]:
+        return any(_member_may_name_zone(member, current, zone) for member in members)
+    if FOLDER_EXPANSION.search(word) or any(root.name in word for root in zone.roots):
+        return True
+    parts = word.split("/")
+    unknown = False  # whether an expansion names a folder before this component
+    for index, part in enumerate(parts):
+        followed = not UNPINNED_EXPANSION.search(part)
+        if unknown and part == "..":
+            return True
+        if not followed and _part_may_name_zone(parts[:index], part, current, zone, unknown):
+            return True
+        unknown = unknown or not followed
+    return False
+
+
+def _member_may_name_zone(member: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a word a brace expansion makes may name the zone (`_may_name_zone`), or, when the
+    guard follows it, changes a holder of the zone or a path in it, or may alias a folder."""
+    if not _followed(member):
+        return _may_name_zone(member, current, zone)
+    return _changes_holder(member, current, zone) or _through_alias(member, current)
+
+
+def _part_may_name_zone(
+    before: Sequence[str], part: str, current: str | None, zone: _Zone, unknown: bool
+) -> bool:
+    """Whether a component with an expansion, its expansions read as `*` (EXPANSION_TEXT), may
+    be `..`, or be a holder's name or a sibling's (`.cl${X}aude`) where the folder before it is
+    unknown, or whether the folder before it holds the zone or is in it (`~/$N`, `/$X`)."""
+    unknown = unknown or (not before and part.startswith(("$", "`")))  # `$D/x`: D is anywhere
+    glob = EXPANSION_TEXT.sub("*", part)
+    if not _has_no_literal(glob):
+        if fnmatch.fnmatchcase("..", glob):
+            return True
+        named = _matches_any(_holder_names(zone), glob) or _names_sibling(glob, zone)
+        if named and (unknown or current is None):
+            return True
+    if unknown:
+        return False
+    prefix = "/".join(before) if before else "."
+    if current is None and not prefix.startswith(("/", "~")):
+        return False
+    resolved = _resolve(prefix or os.sep, current or os.sep)
+    return resolved is not None and (_is_root_or_parent(resolved, zone) or _in_zone(resolved, zone))
+
+
+def _creates_climbing(step: _Step, current: str, zone: _Zone) -> bool:
+    """Whether a `touch` or `mkdir` (PATH_CREATORS) makes a path through a glob that, as it climbs
+    (`_climbing_hits`), reaches the zone: `touch .*/.claude/x` one folder below home."""
+    words = step.words
+    return (
+        bool(words)
+        and _basename(words[0]) in PATH_CREATORS
+        and any(_climbing_hits(word, current, zone) for word in _operands(words[1:]))
+    )
+
+
+def _word_paths(word: str) -> list[str]:
+    """The paths a word may name: itself, what follows its `=` (`of=x`, `--output=x`) and what
+    follows a short option's letter (`-ox`); never an option."""
+    found = [word, word.partition("=")[2]]
+    if word.startswith("-") and not word.startswith("--"):
+        found.append(word[2:])
+    return [path for path in found if path and not path.startswith("-")]
+
+
+def _names_inside(word: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a word that is no glob names a path in the zone (`_word_paths`, `_in_zone`), read
+    from the folder `current`. After a `cd` that cannot be followed (None), a relative path counts
+    when a part of it can name the zone or a folder that holds it (`_may_hold_zone`), not a bare
+    `.` or `..`. Globs are the glob checks' to judge."""
+    for path in _word_paths(word):
+        if GLOB_CHARS.intersection(path):
+            continue
+        if current is None and not path.startswith(("/", "~", "$")):
+            named = any(part not in ("", ".", "..") for part in path.split("/"))
+            if named and _may_hold_zone(path, zone):
+                return True
+        elif _in_zone(_resolve(path, current or os.sep), zone):
+            return True
+    return False
+
+
+def _changes_own(step: _Step, current: str | None, zone: _Zone) -> bool:
+    """Whether a step changes one of the session's own scratch folders in itself (`rm -rf`, `mv`,
+    `chmod` of it), makes a link inside one, which a later write could go through, or copies,
+    moves or unpacks into one with kept names (`_fills_kept`)."""
+    base = current or os.sep
+    known = [word for word in (*step.replaced, *step.links) if current or word.startswith("/")]
+    into = [word for word in step.targets if current or word.startswith("/")]
+    return (
+        any(_is_own_folder(_resolve(word, base), zone) for word in known)
+        or any(_in_own(_resolve(word, base), zone) for word in step.links if word in known)
+        or any(_fills_kept(_resolve(word, base), zone) for word in into)
+    )
+
+
+def _fills_kept(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved destination is an own scratch folder with kept names itself (the
+    session's, whose `subagents/` is kept): what a copy, a sync or an archive puts there has
+    names the guard does not see (`cp -r /tmp/subagents <folder>`)."""
+    return any(path == own.folder and own.kept for own in zone.own)
 
 
 def _after_cd(current: str | None, folder: str | None) -> str | None:
@@ -2785,33 +3863,42 @@ def _changes_holder(target: str, current: str | None, zone: _Zone) -> bool:
     base = current or os.sep
     if GLOB_CHARS.intersection(target):
         roots = [root.parts for root in zone.roots]
-        return _glob_reaches(target, base, roots)
+        return _glob_hits(target, base, zone, roots) or _climbing_hits(target, base, zone)
     resolved = _resolve(target, base)
-    return resolved is not None and _is_root_or_parent(resolved, zone)
+    return resolved is not None and (
+        _is_root_or_parent(resolved, zone) or (zone.writes_inside and _in_zone(resolved, zone))
+    )
 
 
-def _text_reaches(
-    text: str, cwd: str, zone: _Zone, *, cwd_known: bool, glob_text: str | None = None
-) -> bool:
+class _Where(NamedTuple):
+    """Where a text runs: its folder, whether that is known (False when it may run elsewhere than
+    `cwd`: an MCP tool's own working directory), and whether every `cd` of the text goes to a
+    folder that cannot lead to the zone (`_cds_clear`), so a relative glob after it does not
+    count."""
+
+    cwd: str
+    known: bool = True
+    cds_clear: bool = False
+
+
+def _text_reaches(text: str, where: _Where, zone: _Zone, *, glob_text: str | None = None) -> bool:
     """Whether a command-like text reaches the zone as written or with its variables expanded
     each way (`${CLAUDE_CONFIG_DIR}`, `$XDG_CONFIG_HOME`, `$HOME`, `$CLAUDE_PLUGIN_ROOT`).
     `glob_text` is the same text as its glob checks read it (`_globbing_code`); by default the
     text itself."""
     return any(
-        _expanded_text_reaches(variant, cwd, zone, cwd_known=cwd_known, glob_text=globbing)
+        _expanded_text_reaches(variant, where, zone, glob_text=globbing)
         for variant, globbing in _expansions(text, text if glob_text is None else glob_text)
     )
 
 
-def _expanded_text_reaches(
-    text: str, cwd: str, zone: _Zone, *, cwd_known: bool, glob_text: str
-) -> bool:
+def _expanded_text_reaches(text: str, where: _Where, zone: _Zone, *, glob_text: str) -> bool:
     """Whether a command-like text names the zone, has a word that resolves into it (~, $VARS,
     symlinks), or has a glob that can match it, a parent of it or a path inside it, or changes
     or replaces the zone or a folder that holds it.
 
-    `cwd_known` is False when the text may run elsewhere than `cwd` (an MCP tool's own working
-    directory): a relative glob that can name the zone's directory then counts without a `cd`.
+    `where.known` is False when the text may run elsewhere than `where.cwd`: a relative glob that
+    can name the zone's directory then counts without a `cd`.
 
     The store's directory name counts wherever it is a whole token (`'coven-memory'`,
     `/coven-memory/`, `env -C ~ rm -rf coven-memory`, a Python path built from parts), but not
@@ -2821,6 +3908,7 @@ def _expanded_text_reaches(
     A Bash command's globs are read from its glob text (`_globbing_code`: a quoted glob character
     is literal) and, in a heredoc body read as text, only from words at a fixed place
     (`_shell_glob_words`). Names, paths and writes are read from the text as written."""
+    cwd, cwd_known = where.cwd, where.known
     if _names_token(text, zone.tokens) or _names_token(_unquoted(text), zone.tokens):
         return True
     reals = [os.path.realpath(root) for root in zone.roots]
@@ -2828,7 +3916,7 @@ def _expanded_text_reaches(
     words = _words_of(text)
     cwd_moves = (
         not cwd_known
-        or bool(CHANGE_DIR.intersection(words))
+        or (bool(CHANGE_DIR.intersection(words)) and not where.cds_clear)
         or bool(zone.parents and _names_parent(_words_of(glob_text), zone))
     )
     if cwd_moves and (
@@ -2838,7 +3926,7 @@ def _expanded_text_reaches(
     ):
         return True
     globs = _shell_glob_words(glob_text) if cwd_known else words
-    if any(GLOB_CHARS.intersection(word) and _glob_reaches(word, cwd, roots) for word in globs):
+    if any(GLOB_CHARS.intersection(word) and _glob_hits(word, cwd, zone, roots) for word in globs):
         return True
     if any(_in_zone(_resolve(word, cwd), zone) for word in words):
         return True
@@ -2846,10 +3934,14 @@ def _expanded_text_reaches(
 
 
 def _in_zone(path: str | None, zone: _Zone) -> bool:
-    """Whether a resolved path is one of the zone's roots, inside one, or ends in its suffixes."""
-    if path is None:
+    """Whether a resolved path is one of the zone's roots, inside one, a sibling of a zone file
+    (`<file>.<anything>`), or ends in its suffixes; not when it is one of the session's own
+    scratch folders or inside one (`_in_own`)."""
+    if path is None or _in_own(path, zone):
         return False
     if any(_inside(path, os.path.realpath(root)) for root in zone.roots):
+        return True
+    if any(path.startswith(f"{os.path.realpath(file)}.") for file in zone.siblings):
         return True
     parts = Path(path).parts
     return any(parts[-len(suffix) :] == suffix for suffix in zone.suffixes)
@@ -2944,25 +4036,114 @@ def _sed_files(args: Sequence[_ShellWord], folders: Iterable[str] = ()) -> list[
     return files
 
 
-def _find_reads(args: Sequence[_ShellWord]) -> list[_ShellWord]:
-    """Every word of a `find` that has no action (FIND_ACTION_PREFIXES: `-delete`, `-exec`,
-    `-fprint` and the like) and no word that may expand to one (`_may_expand`)."""
-    if _may_expand(args) or any(
+def _find_acts(args: Sequence[_ShellWord]) -> bool:
+    """Whether a `find` has an action (FIND_ACTION_PREFIXES: `-delete`, `-exec`, `-fprint` and
+    the like) or a word that may expand to one (`_may_expand`)."""
+    return _may_expand(args) or any(
         _unquoted(word.raw).startswith(FIND_ACTION_PREFIXES) for word in args
+    )
+
+
+def _find_reads(args: Sequence[_ShellWord]) -> list[_ShellWord]:
+    """Every word of a `find` that has no action (`_find_acts`)."""
+    return [] if _find_acts(args) else list(args)
+
+
+def _reader_acts(name: str, args: Sequence[_ShellWord]) -> bool:
+    """Whether a reader of a zone's `readers` may write a file or run a program given these
+    arguments: `sort` with an option that names a file or a program (`-o`, `--compress-program`),
+    `uniq` with two operands (the second is its output), `printf -v NAME` or `-vNAME` (it sets a
+    variable: `_printed_names`), or `_runs_program`."""
+    if name == "sort":
+        return not _sort_reads(args)
+    if name == "uniq":
+        return not _uniq_reads(args)
+    if name in VARIABLE_PRINTERS:
+        return bool(_printed_names(args))
+    return _runs_program(name, args)
+
+
+def _expands_to_option(words: Sequence[_ShellWord]) -> bool:
+    """Whether a word may expand to something that starts with `-`: it may expand (`_may_expand`)
+    and does not start with `/` or `~`, which expand to a path."""
+    return _may_expand([word for word in words if not word.raw.startswith(("/", "~"))])
+
+
+def _sort_reads(args: Sequence[_ShellWord]) -> bool:
+    """Whether the options of `sort` only change how it sorts (SORT_OPTION: not `-o`, `-T`,
+    `--output` or `--compress-program`, nor an abbreviation of one), and no word may be one."""
+    if _expands_to_option(args):
+        return False
+    return all(
+        SORT_OPTION.fullmatch(_unquoted(word.raw))
+        for word in args
+        if _unquoted(word.raw).startswith("-")
+    )
+
+
+def _uniq_reads(args: Sequence[_ShellWord]) -> bool:
+    """Whether `uniq` has at most one operand (the second one is where it writes), every word
+    after a `--` and a lone `-` one (`uniq a -- -out`, `uniq - out`)."""
+    operands = _operands([_unquoted(word.raw) for word in args])
+    return len(operands) <= 1 and not _expands_to_option(args)
+
+
+def _runs_program(name: str, args: Sequence[_ShellWord]) -> bool:
+    """Whether a reader of a zone's `readers` may run a program: an option of PROGRAM_OPTIONS
+    (`rg --pre`), or a word that may expand to one (`_expands_to_option`). Only a PROGRAM_READERS
+    command has such options."""
+    return name in PROGRAM_READERS and (
+        any(_unquoted(word.raw).startswith(PROGRAM_OPTIONS) for word in args)
+        or _expands_to_option(args)
+    )
+
+
+def _copy_operands(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The operands of `cp`, when its options are only COPY_OPTIONS letters; None otherwise."""
+    options = [word for word in args if _unquoted(word.raw).startswith("-")]
+    if any(
+        letters is None or not set(letters) <= COPY_OPTIONS
+        for letters in map(_option_letters, options)
     ):
+        return None
+    return [word for word in args if word not in options]
+
+
+def _copy_sources(name: str, args: Sequence[_ShellWord]) -> list[_ShellWord]:
+    """The sources of `cp` (every operand but the last, which is where it writes) and of `tar`
+    creating an archive (`tar -cf ARCHIVE SRC...`: every operand after the archive), when its
+    options are only COPY_OPTIONS or ARCHIVE_OPTIONS letters and no word may expand to an option
+    or to another destination (`_may_expand`; a word that starts with `~` is a path). Nothing
+    otherwise: `cp -t DIR`, `cp -l`, `tar -x`, `--remove-files` write or link."""
+    if _may_expand([word for word in args if not word.raw.startswith("~")]):
         return []
-    return list(args)
+    if name == "cp":
+        operands = _copy_operands(args)
+        return [] if operands is None else operands[:-1]
+    cluster = (args[0].value or "").removeprefix("-") if args else ""
+    operands = list(args[1:])
+    if "c" not in cluster or not set(cluster) <= ARCHIVE_OPTIONS:
+        return []
+    if any(_unquoted(word.raw).startswith("-") for word in operands):
+        return []
+    return operands[1:] if "f" in cluster else operands
 
 
-def _command_reads(words: Sequence[_ShellWord], folders: Iterable[str] = ()) -> list[_ShellWord]:
+def _command_reads(
+    words: Sequence[_ShellWord], zone: _Zone, folders: Iterable[str] = ()
+) -> list[_ShellWord]:
     """The words of one simple command that only read or run a file: a program run by its path
-    (`./x`, `"/abs/x"`, `~/x`), every argument of READ_COMMANDS, of `find` without actions and
-    the files of a printing `sed` (`_sed_files`, given `folders`), and the script a shell, python
-    or node runs (`_script_word`). The arguments of a program that is run are never among them,
-    nor an assignment (`X+=/a/b`)."""
+    (`./x`, `"/abs/x"`, `~/x`), every argument of READ_COMMANDS and of the zone's `readers` that
+    write and run no program (`_reader_acts`), of `find` without actions and the files of a
+    printing `sed` (`_sed_files`, given `folders`; for a zone with `shell_reads`, `_sed_reads`),
+    the script a shell, python or node runs (`_script_word`), and for a zone with `copy_reads` the
+    sources of a copy or an archive (`_copy_sources`). A zone with `shell_reads` reads past the
+    wrappers in front of the command (`_unwrap`). The arguments of a program that is run are never
+    among them, nor an assignment (`X+=/a/b`)."""
+    words = _unwrap(words, zone)
     if not words or BINDING.match(words[0].raw):
         return []
-    name: str | None = _shell_words().program_name(words[0])
+    name = _program_name(words[0], zone)
     args = words[1:]
     if name is None:
         return []
@@ -2970,10 +4151,14 @@ def _command_reads(words: Sequence[_ShellWord], folders: Iterable[str] = ()) -> 
         return [words[0]]
     if name in READ_COMMANDS:
         return list(args)
+    if name in zone.readers:
+        return [] if _reader_acts(name, args) else list(args)
+    if zone.copy_reads and name in ("cp", "tar"):
+        return _copy_sources(name, args)
     if name == "find":
         return _find_reads(args)
     if name == "sed":
-        return _sed_files(args, folders)
+        return (_sed_reads(args) or []) if zone.shell_reads else _sed_files(args, folders)
     script = _script_word(name, args)
     return [script] if script else []
 
@@ -2990,30 +4175,80 @@ def _pipelines(commands: Sequence[_SimpleCommand]) -> Iterator[list[_SimpleComma
         yield run
 
 
-def _filters(run: Sequence[_SimpleCommand], reader: _SimpleCommand) -> bool:
+def _filters(run: Sequence[_SimpleCommand], reader: _SimpleCommand, zone: _Zone) -> bool:
     """Whether every other command of a pipeline only prints what it reads (`_prints_only`), so
     no path the reader prints is acted on (`| xargs rm`, `| sh`, `| sed 's/^/rm /e'`)."""
-    return all(command is reader or _prints_only(command.words) for command in run)
+    return all(command is reader or _prints_only(command.words, zone) for command in run)
 
 
-def _prints_only(words: Sequence[_ShellWord]) -> bool:
+def _prints_only(words: Sequence[_ShellWord], zone: _Zone) -> bool:
     """A PIPE_FILTERS command, or a sed whose scripts run nothing and write no file
-    (`_sed_prints_only`). A sed `-i` edits only its own operands, which are never blanked as
-    reads."""
+    (`_sed_prints_only`), and for a zone with `shell_reads` one of its `readers` that writes and
+    runs nothing (`_reader_acts`). A sed `-i` edits only its own operands, which are never blanked
+    as reads."""
     if not words:
         return False
     if words[0].value in PIPE_FILTERS:
         return True
+    if zone.shell_reads:
+        name = _program_name(words[0], zone)
+        if name in PIPE_FILTERS or (name in zone.readers and not _reader_acts(name, words[1:])):
+            return True
+        if name == "xargs" and _xargs_prints_only(words[1:], zone):
+            return True
     return words[0].value == "sed" and _sed_prints_only(words[1:])
+
+
+def _xargs_prints_only(args: Sequence[_ShellWord], zone: _Zone) -> bool:
+    """Whether an `xargs`, by its arguments, only prints: options it knows (XARGS_FLAGS and the
+    like), then a reader in XARGS_READERS by name or in TRUSTED_READER_FOLDERS. xargs appends the
+    words it reads to that reader's own, so no word of them can make it write or run."""
+    command = _xargs_command(args)
+    return bool(command) and _program_name(command[0], zone) in XARGS_READERS
+
+
+def _xargs_command(args: Sequence[_ShellWord]) -> Sequence[_ShellWord]:
+    """The command an xargs runs, after the options `_xargs_option_length` reads; none when an
+    option is not one of them."""
+    at = 0
+    while at < len(args):
+        value = args[at].value
+        if value is None:
+            return []
+        if value == "--":
+            return args[at + 1 :]
+        if not value.startswith("-"):
+            return args[at:]
+        length = _xargs_option_length(value)
+        if length == 0:
+            return []
+        at += length
+    return []
+
+
+def _xargs_option_length(option: str) -> int:
+    """How many words an xargs option takes, its value included; 0 for one it does not know."""
+    if option.startswith("--"):
+        name, equals, _ = option[2:].partition("=")
+        if name in XARGS_LONG_FLAGS and not equals:
+            return 1
+        return (1 if equals else 2) if name in XARGS_LONG_VALUED else 0
+    for at, letter in enumerate(option[1:], 1):
+        if letter in XARGS_VALUED:
+            return 1 if option[at + 1 :] else 2
+        if letter not in XARGS_FLAGS:
+            return 0
+    return 1 if len(option) > 1 else 0
 
 
 def _only_read(word: _ShellWord, command: str, spans: Sequence[tuple[int, int]]) -> bool:
     """Whether a lone assignment (`S=~/.claude/plugins/x`) binds a name whose every other mention
     in `command`, as a whole token in any form (`$S`, `${S}`, `export S`, a heredoc body), lies
-    in `spans`, and whose value is one word that is not an option."""
+    in `spans`, and whose value is one word that is not an option (or a `$(...)` that the
+    caller found only reads: its text is no value)."""
     name, _, raw_value = word.raw.partition("=")
     value = _unquoted(raw_value)
-    if value.startswith("-") or COMMAND_BLANKS.intersection(value):
+    if not word.substitutions and (value.startswith("-") or COMMAND_BLANKS.intersection(value)):
         return False
     for match in re.finditer(rf"(?<!\w){re.escape(name)}(?!\w)", command):
         at = match.start()
@@ -3022,44 +4257,805 @@ def _only_read(word: _ShellWord, command: str, spans: Sequence[tuple[int, int]])
     return True
 
 
-def _read_spans(command: str) -> list[tuple[int, int]]:
-    """The spans of a Bash command, as written, that only read or run a file (`_command_reads`),
-    for a zone a session may read: blanked, they leave what writes. A read in a pipeline counts
-    only when the rest of it only prints (`_filters`). Then a lone assignment whose name is only
-    used in those spans (`S=<dir>; bash $S/scripts/x`).
+def _program_name(word: _ShellWord, zone: _Zone) -> str | None:
+    """What a command word names: its value, and for a zone with `shell_reads` the name of a
+    program in one of TRUSTED_READER_FOLDERS (`/usr/bin/grep` is `grep`)."""
+    name: str | None = _shell_words().program_name(word)
+    if name is not None and zone.shell_reads:
+        for folder in TRUSTED_READER_FOLDERS:
+            rest = name.removeprefix(folder)
+            if rest != name and rest and "/" not in rest:
+                return rest
+    return name
+
+
+def _wrapper_end(words: Sequence[_ShellWord]) -> int:
+    """Where the command a wrapper runs starts: after `timeout DURATION`, `nice [-n N]` or `env
+    [-i] [-u NAME] [NAME=VALUE]` (READ_ENVIRONMENT), or `command` and the program it runs. 0 when
+    the first word is none of them, or has an option or a value this does not read (`env -C`,
+    `timeout --signal`, `command -v`)."""
+    name = words[0].value
+    at = 1
+    if name == "timeout":
+        while at + 1 < len(words) and words[at].value in ("-k", "-s"):
+            at += 2
+        valid = at < len(words) and TIMEOUT_DURATION.fullmatch(words[at].raw)
+        return at + 1 if valid else 0
+    if name == "nice":
+        if words[1:2] and words[1].value == "-n" and words[2:3] and words[2].raw.isdigit():
+            return 3
+        return 2 if words[1:2] and NICE_OPTION.fullmatch(words[1].raw) else 1
+    if name == "command":
+        return 0 if _unquoted(words[1].raw).startswith("-") else 1
+    if name != "env":
+        return 0
+    while at < len(words):
+        word = words[at]
+        if word.value == "-i" or READ_ENVIRONMENT.fullmatch(word.raw):
+            at += 1
+        elif word.value == "-u" and at + 1 < len(words) and _plain_name(words[at + 1].raw):
+            at += 2
+        else:
+            break
+    return at if at > 1 and not _unquoted(words[min(at, len(words) - 1)].raw).startswith("-") else 0
+
+
+def _unwrap(words: Sequence[_ShellWord], zone: _Zone) -> Sequence[_ShellWord]:
+    """The words of the command that follows what only sets its environment or limits it
+    (READ_ENVIRONMENT assignments, `timeout`, `nice`, `env`: `_wrapper_end`), for a zone with
+    `shell_reads`; the words as they are for any other, and where nothing follows."""
+    while zone.shell_reads and len(words) > 1:
+        head = words[0]
+        if BINDING.match(head.raw):
+            follows = 1 if READ_ENVIRONMENT.fullmatch(head.raw) else 0
+        else:
+            follows = _wrapper_end(words)
+        if not 0 < follows < len(words):
+            break
+        words = words[follows:]
+    return words
+
+
+def _plain_name(name: str) -> bool:
+    """Whether a read may set the variable `name` (PLAIN_NAME, not in BLOCKED_NAMES or starting
+    with one of BLOCKED_PREFIXES)."""
+    return (
+        PLAIN_NAME.fullmatch(name) is not None
+        and name not in BLOCKED_NAMES
+        and not name.startswith(BLOCKED_PREFIXES)
+    )
+
+
+def _outside_zone(target: str | None, zone: _Zone, cwd: str) -> bool:
+    """Whether a file a command writes is `/dev/null` or a path from `/` or `~/`, as written and
+    as each word its brace expansion makes (`_brace_members`), that is not in the zone: a path
+    from a variable or relative to a `cd` is not read."""
+    discard: str = _shell_words().DISCARD
+    if target == discard:
+        return True
+    if target is None or (zone.writes_inside and _written_near_zone(target, cwd, zone)):
+        return False
+    members = _brace_members(target)
+    return members is not None and all(
+        word.startswith(("/", "~/")) and not _is_zone_path(word, cwd, zone)
+        for word in (target, *members)
+    )
+
+
+def _written_near_zone(target: str, cwd: str, zone: _Zone) -> bool:
+    """Whether a file a command writes may alias a folder (`_through_alias`), is a word the guard
+    does not follow that may name the zone (`_unpinned_word`), or is an own scratch folder with
+    kept names (`_fills_kept`)."""
+    current = os.path.realpath(cwd)
+    return (
+        _through_alias(target, current)
+        or _unpinned_word(target, current, zone)
+        or _fills_kept(_resolve(target, current), zone)
+    )
+
+
+def _writes_nothing(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
+    """Whether a simple command writes no file but `/dev/null` and one outside the zone
+    (`_outside_zone`), and its other redirections only read a file or name a file descriptor
+    (`2>&1`, `>&2`). A heredoc is data."""
+    discard = _shell_words().DISCARD
+    return (
+        all(_outside_zone(target, zone, cwd) for target in each.write_paths)
+        and all(target is not None for target in each.input_files)
+        and all(
+            target is not None and (target == discard or DESCRIPTOR_TARGET.fullmatch(target))
+            for target in each.redirect_inputs
+        )
+    )
+
+
+def _text_reads(text: str, zone: _Zone, cwd: str) -> bool:
+    """Whether a command text only reads (`_reads_only`); not when the scanner cannot follow it
+    (shell_words.simple_commands, with the plain `$(...)` of `Word.substitutions` read)."""
+    commands = _scanned_commands(text)
+    return (
+        commands is not None
+        and not _evaluates_unknown(commands, zone)
+        and _reads_only(_bound_view(commands, _bound_paths(text, commands), zone), zone, cwd)
+    )
+
+
+def _substitutions_read(
+    word: _ShellWord, zone: _Zone, cwd: str, *, quoted_text: bool = False
+) -> bool:
+    """Whether a word runs no command (RUNS_COMMAND) but plain `$(...)` that the scanner read
+    whole, whose texts only read (`_text_reads`). With `quoted_text`, a word the scanner reads as
+    a literal (`'a$(b)'`, `"x\\`y"`: a value, no substitution) runs nothing either."""
+    if not RUNS_COMMAND.search(word.raw):
+        return True
+    if quoted_text and word.value is not None and not word.substitutions:
+        return True
+    whole = word.raw.count("$(") == len(word.substitutions) and not re.search(r"`|[<>]\(", word.raw)
+    return whole and all(_text_reads(inner, zone, cwd) for inner in word.substitutions)
+
+
+def _runs_no_quoted_text(words: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
+    """Whether a command, for a zone with `shell_reads`, runs no command text its quoted words
+    hold: after its wrappers (`_unwrap`, which re-read no word: not `eval` or `watch`) it is a
+    reader of QUOTED_TEXT_READERS, or a shell whose `-c` text only reads (`_shell_string_reads`
+    reads that text's own commands)."""
+    if not zone.shell_reads:
+        return False
+    words = _unwrap(words, zone)
+    name = _program_name(words[0], zone)
+    if name in SHELL_STRING_RUNNERS:
+        return _shell_string_reads(words[1:], zone, cwd)
+    return name in QUOTED_TEXT_READERS
+
+
+def _loop_header(words: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
+    """Whether `for NAME in WORDS` lists words that only name files: NAME is a variable a read
+    may set (`_plain_name`) and no word runs a command but reads (`_substitutions_read`)."""
+    return (
+        len(words) >= 3
+        and words[2].value == "in"
+        and _plain_name(words[1].raw)
+        and all(_substitutions_read(word, zone, cwd) for word in words[3:])
+    )
+
+
+def _sed_reads(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The files a `sed` reads, when it only prints: its options are only SED_PRINT_OPTIONS and
+    `-e SCRIPT`, and its scripts print only (`_sed_runs_nothing`: a regex address, `s`, a range
+    ending in `$`) and write no file. None otherwise: `-i`, `-f`, an `s` with the `w` or `e`
+    flag, a file that starts with `-` or may expand to one (`_expands_to_option`)."""
+    scripts: list[str] = []
+    operands: list[_ShellWord] = []
+    words = iter(args)
+    for word in words:
+        letters = _option_letters(word)
+        if word.value == "-e":
+            script = next(words, None)
+            if script is None or script.value is None:
+                return None
+            scripts.append(script.value)
+        elif letters is not None:
+            if not set(letters) <= SED_PRINT_OPTIONS:
+                return None
+        else:
+            operands.append(word)
+            operands += words
+    if not scripts and operands:
+        first = operands.pop(0)
+        if first.value is None:
+            return None
+        scripts.append(first.value)
+    if not scripts or not _sed_runs_nothing("\n".join(scripts)):
+        return None
+    if _expands_to_option(operands) or any(
+        _unquoted(word.raw).startswith("-") for word in operands
+    ):
+        return None
+    return operands
+
+
+def _copies_out(args: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
+    """Whether `cp` only copies to a place outside the zone: its options are only COPY_OPTIONS,
+    its last operand is the destination (`_outside_zone`), and no source may expand to an option."""
+    operands = _copy_operands(args)
+    return (
+        operands is not None
+        and len(operands) >= 2
+        and not _expands_to_option(operands)
+        and _outside_zone(operands[-1].value, zone, cwd)
+    )
+
+
+def _proper_words(words: Sequence[_ShellWord]) -> Sequence[_ShellWord]:
+    """The words of a simple command after those that open a command in a compound one
+    (COMMAND_OPENERS: `do`, `then`, `!`, `{`)."""
+    while words and words[0].value in COMMAND_OPENERS:
+        words = words[1:]
+    return words
+
+
+def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
+    """Whether a simple command writes and runs nothing, whatever its operands: after the words
+    that open a command in a compound one (COMMAND_OPENERS), a closer of one, a `for` header
+    (`_loop_header`), a lone assignment, maybe after `export`, of a plain name (`_plain_name`)
+    that keeps no command text (`_keeps_command_text`), or a program that only reads
+    (`_program_only_reads`). No word may run a command but a plain `$(...)` that only reads
+    (`_substitutions_read`)."""
+    words = _proper_words(each.words)
+    if not words:  # zsh runs NULLCMD or READNULLCMD for a bare redirection
+        return not (zone.shell_reads and any(name in os.environ for name in NULL_COMMANDS))
+    quoted_text = _runs_no_quoted_text(words, zone, cwd)
+    if not all(_substitutions_read(word, zone, cwd, quoted_text=quoted_text) for word in words):
+        return False
+    if zone.shell_reads and _sets_for_programs(words, exported=False):
+        return False
+    head = words[0].value
+    if head in COMPOUND_CLOSERS:
+        return len(words) == 1
+    if head == "for":
+        return _loop_header(words, zone, cwd)
+    if head == "export":
+        words = words[1:]
+    if all(BINDING.match(word.raw) for word in words):
+        kept = zone.shell_reads and any(map(_keeps_command_text, words))
+        return not kept and all(map(_plain_assignment, words))
+    return _program_only_reads(each, _unwrap(words, zone), zone, cwd)
+
+
+def _program_only_reads(
+    each: _SimpleCommand, words: Sequence[_ShellWord], zone: _Zone, cwd: str
+) -> bool:
+    """Whether a command, after its wrappers (`_unwrap`), is a program that only reads: a `cd`, a
+    reader of READ_COMMANDS or of the zone's `readers` that writes and runs nothing
+    (`_reader_acts`), a `find` without actions, a printing `sed` (`_sed_reads`: a `-i` is no
+    print), a `read` of plain names, a `tee` or a `cp` to a place outside the zone, or for a zone
+    with `shell_reads` an `xargs` that only prints (`_xargs_prints_only`). No command writes a file
+    by an argument (`sort -o`) but `tee`."""
+    name = _program_name(words[0], zone)
+    if BINDING.match(words[0].raw) or name is None or "/" in name:
+        return False
+    args = words[1:]
+    if name == "tee":
+        return all(_outside_zone(file, zone, cwd) for file in each.argument_writes) and all(
+            word.value in ("-a", None) or not word.value.startswith("-") for word in args
+        )
+    if each.argument_writes:
+        return False
+    if name == "read":
+        return all(
+            (_option_letters(word) or "x") in READ_OPTIONS or _plain_name(word.raw) for word in args
+        )
+    if name == "cp":
+        return _copies_out(args, zone, cwd)
+    if name in READ_COMMANDS or name in CHANGE_DIR:
+        return True
+    if name in SHELL_STRING_RUNNERS:
+        return _shell_string_reads(args, zone, cwd)
+    return _acting_reader_reads(name, args, zone)
+
+
+def _acting_reader_reads(name: str, args: Sequence[_ShellWord], zone: _Zone) -> bool:
+    """Whether a reader that can also act, by its arguments, only reads: one of the zone's
+    `readers` (`_reader_acts`), `find` (`_find_acts`), a printing `sed` (`_sed_reads`) or, for a
+    zone with `shell_reads`, `xargs` (`_xargs_prints_only`)."""
+    if name in zone.readers:
+        return not _reader_acts(name, args)
+    if name == "find":
+        return not _find_acts(args)
+    if name == "xargs":
+        return zone.shell_reads and _xargs_prints_only(args, zone)
+    return name == "sed" and _sed_reads(args) is not None
+
+
+def _shell_string_reads(args: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
+    """Whether `sh -c STRING` runs a text that only reads (`_text_reads`): the string a literal, and
+    nothing else on the command, no option or argument that sets `$0`, `$1`, ..."""
+    return (
+        len(args) == 2
+        and args[0].value == "-c"
+        and args[1].value is not None
+        and _text_reads(args[1].value, zone, cwd)
+    )
+
+
+def _reads_only(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bool:
+    """Whether every command writes and runs nothing (`_command_only_reads`, `_writes_nothing`),
+    so the text changes no file wherever a `cd` goes. A loop or an `if` is a few commands, each
+    one judged on its own: its keywords run nothing."""
+    return all(
+        _writes_nothing(each, zone, cwd) and _command_only_reads(each, zone, cwd)
+        for each in commands
+    )
+
+
+def _only_reads_text(command: str, zone: _Zone, cwd: str) -> bool:
+    """Whether a Bash command, for a zone with `cd_reads` or `loop_reads`, only reads
+    (`_reads_only`): it writes nothing wherever it goes, so it reaches the zone by no write. Not
+    when a read writes a file that code of the text may run (`_feeds_code`), nor when the text
+    sets what its programs read (`_arms_reads`)."""
+    if not (zone.cd_reads or zone.loop_reads):
+        return False
+    commands = _scanned_commands(command)
+    return (
+        commands is not None
+        and not _feeds_code(commands, zone, cwd)
+        and not _arms_reads(commands, zone)
+        and _text_reads(command, zone, cwd)
+    )
+
+
+def _arms_reads(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
+    """Whether a text, for a zone with `shell_reads`, sets a variable its programs may read
+    (`_sets_for_programs`), every lone assignment exported after `set -a` or `set -o allexport`:
+    `export TAR_OPTIONS=--remove-files` makes `tar -c` delete what it reads."""
+    if not zone.shell_reads:
+        return False
+    every = any(_exports_all(_proper_words(each.words)) for each in commands)
+    return any(_sets_for_programs(_proper_words(each.words), exported=every) for each in commands)
+
+
+def _evaluates_unknown(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
+    """Whether a text, for a zone with `shell_reads`, may read a value it does not know to be a
+    number (`_number_word`) as a variable's name or a number (`_evaluated_words`), which runs the
+    command substitutions in its subscript: `D='a[$(rm x)]'; test -v "$D"` runs `rm x`. Its reads
+    are then no reads."""
+    if not zone.shell_reads:
+        return False
+    numbers = _number_names(commands)
+    for each in commands:
+        evaluated = _evaluated_words(_proper_words(each.words))
+        if evaluated is None or not all(_number_word(word, numbers) for word in evaluated):
+            return True
+    return False
+
+
+def _evaluated_words(words: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The words a command reads as numbers: those with an arithmetic expansion, a test's number
+    comparison's operands (`_test_operands`), a NUMBER_COMMANDS one's arguments and the
+    arguments of a printf with a number conversion (`_printf_operands`). None when it reads a
+    word as a variable's name (NAME_EXPANSION, a test's `-v`) or may read any word as one."""
+    if any(NAME_EXPANSION.search(word.raw) for word in words):
+        return None
+    found = [word for word in words if ARITHMETIC_EXPANSION.search(word.raw)]
+    name, args = (words[0].value if words else None), words[1:]
+    operands: list[_ShellWord] | None = []
+    if name in TEST_COMMANDS:
+        operands = _test_operands(args)
+    elif name in NUMBER_COMMANDS:
+        operands = list(args)
+    elif name == "printf":
+        operands = _printf_operands(args)
+    return None if operands is None else [*found, *operands]
+
+
+def _test_operands(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The words a `test` or `[` reads as numbers: with a number comparison (NUMBER_TESTS) every
+    word but its operators. None when it names a variable (`-v`, `-R`: NAME_TESTS) or a word
+    the guard cannot read stands where an operator does (`test "$O" "$D"`)."""
+    words = list(args)
+    if words[-1:] and words[-1].value == "]":
+        words = words[:-1]
+    while words[:1] and words[0].value == "!":
+        words = words[1:]
+    values = [word.value for word in words]
+    operator = {2: values[:1], 3: values[1:2]}.get(len(values), [])
+    if NAME_TESTS.intersection(values) or None in operator:
+        return None
+    if not NUMBER_TESTS.intersection(values):
+        return []
+    return [word for word in words if word.value not in {*NUMBER_TESTS, *TEST_WORDS}]
+
+
+def _printf_operands(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The words a printf may read as numbers, which zsh evaluates: those after a format with a
+    number conversion (NUMBER_CONVERSION); None after a format the guard cannot read."""
+    if args[:1] and args[0].value == "--":
+        args = args[1:]
+    if len(args) < 2:
+        return []
+    format_text = args[0].value
+    if format_text is None:
+        return None
+    return list(args[1:]) if NUMBER_CONVERSION.search(format_text) else []
+
+
+def _number_word(word: _ShellWord, numbers: frozenset[str]) -> bool:
+    """Whether a word holds a number: an integer, a special parameter (`$?`, `$#`), a variable of
+    `numbers`, a count (`_counts`), or arithmetic of these alone (`_number_arithmetic`)."""
+    return _holds_number(word.raw, word.value, word.substitutions, numbers)
+
+
+def _holds_number(
+    raw: str, value: str | None, substitutions: Sequence[str], numbers: frozenset[str]
+) -> bool:
+    """`_number_word` of a word given as its text, its value and its substitutions' texts."""
+    if value is not None:
+        return INTEGER.fullmatch(value) is not None
+    variable = VARIABLE_WORD.fullmatch(raw)
+    if variable:
+        name = variable[1] or variable[2]
+        return name is None or name in numbers
+    if SUBSTITUTION_WORD.fullmatch(raw) and len(substitutions) == 1:
+        return _counts(substitutions[0])
+    return _number_arithmetic(raw, numbers)
+
+
+def _number_arithmetic(raw: str, numbers: frozenset[str]) -> bool:
+    """Whether every arithmetic expansion of a word (ARITHMETIC_EXPANSION) has no expansion of
+    its own and names only variables of `numbers`, and nothing else of the word expands."""
+    rest = raw
+    for match in ARITHMETIC_EXPANSION.finditer(raw):
+        expression = match[1] if match[1] is not None else match[2]
+        if expression is None or RUNS_COMMAND.search(expression) or "[" in expression:
+            return False
+        if not set(re.findall(r"[A-Za-z_]\w*", expression)) <= numbers:
+            return False
+        rest = rest.replace(match[0], "")
+    return "$" not in rest and "`" not in rest
+
+
+def _counts(text: str) -> bool:
+    """Whether a substitution's text prints only numbers: every pipeline of it (`a || echo 0`)
+    ends in a command that prints a count or an integer, or a test that prints nothing
+    (`_prints_number`), maybe through filters that keep a number one (`_keeps_number`:
+    `wc -l < f | tr -d ' '`)."""
+    commands = _scanned_commands(text)
+    if not commands:
+        return False
+    pipelines: list[list[Sequence[_ShellWord]]] = []
+    for each in commands:
+        words = _proper_words(each.words)
+        if each.after_pipe and pipelines:
+            pipelines[-1].append(words)
+        else:
+            pipelines.append([words])
+    for pipeline in pipelines:
+        while len(pipeline) > 1 and _keeps_number(pipeline[-1]):
+            pipeline.pop()
+        if not _prints_number(pipeline[-1]):
+            return False
+    return True
+
+
+def _keeps_number(words: Sequence[_ShellWord]) -> bool:
+    """Whether a command prints a number it is given as one or as nothing: a `tr -d` of one set
+    (it only drops characters)."""
+    values = [word.value for word in words]
+    return len(values) == 3 and values[:2] == ["tr", "-d"] and values[2] is not None
+
+
+def _prints_number(words: Sequence[_ShellWord]) -> bool:
+    """Whether a command prints only a number or nothing: a `grep -c` of one file or of its
+    input, a `wc` of its input with COUNT_OPTIONS alone, an `echo` of integers, a bare `true` or
+    `:`, or a test that reads no word as a number or name (`[ -f x ]`)."""
+    if not words:
+        return False
+    name, args = words[0].value, words[1:]
+    if name == "echo":
+        return all(INTEGER.fullmatch(word.value or "x") for word in args)
+    if name in ("true", ":"):
+        return not args
+    if name in TEST_COMMANDS:
+        return _evaluated_words(words) == []
+    if name not in COUNTERS:
+        return False
+    letters = [_option_letters(word) for word in args if (word.value or "").startswith("-")]
+    operands = [word for word in args if not (word.value or "x").startswith("-")]
+    if any(letter is None for letter in letters):
+        return False
+    flags = set("".join(letter or "" for letter in letters))
+    if name == "wc":
+        return not operands and flags <= COUNT_OPTIONS
+    return "c" in flags and len(operands) <= (1 if flags & {"e", "f"} else 2)
+
+
+def _number_names(commands: Sequence[_SimpleCommand]) -> frozenset[str]:
+    """The variables a text only sets to numbers (`_number_value` of each assignment, a copy of
+    one of them too: `m=$n`), and by no other word: no command is given the name (`read n`,
+    `for n`) or `-vNAME` (`printf -vn`)."""
+    assigned: dict[str, list[_ShellWord]] = {}
+    given: set[str] = set()
+    for each in commands:
+        for word in each.words:
+            if match := BINDING.match(word.raw):
+                assigned.setdefault(match[1], []).append(word)
+            elif word.value is not None:
+                given |= {word.value, word.value.removeprefix(PRINTF_VARIABLE)}
+    candidates = {name: words for name, words in assigned.items() if name not in given}
+    numbers: frozenset[str] = frozenset()
+    while True:  # each round adds a name or ends: a name is never its own proof (`n=$n`)
+        found = frozenset(
+            name
+            for name, words in candidates.items()
+            if all(_number_value(word, numbers) for word in words)
+        )
+        if found == numbers:
+            return numbers
+        numbers = found
+
+
+def _number_value(word: _ShellWord, numbers: frozenset[str]) -> bool:
+    """Whether an assignment's value holds a number (`_holds_number`), knowing these variables
+    hold numbers."""
+    value = None if word.value is None else word.value.partition("=")[2]
+    return _holds_number(word.raw.partition("=")[2], value, word.substitutions, numbers)
+
+
+def _exports_all(words: Sequence[_ShellWord]) -> bool:
+    """Whether a command is `set` with `-a` or `-o allexport`: each later assignment is exported."""
+    if not words or words[0].value != "set":
+        return False
+    values = [word.value or "" for word in words[1:]]
+    return "allexport" in values or any("a" in (_option_letters(word) or "") for word in words[1:])
+
+
+def _sets_for_programs(words: Sequence[_ShellWord], *, exported: bool) -> bool:
+    """Whether a command sets a name a program may read (`_arms_programs`): by an assignment
+    alone, maybe after `export`, or by `printf -v NAME` (`-vNAME` too)."""
+    if not words:
+        return False
+    head = words[0].value
+    if head == "export":
+        exported, words = True, words[1:]
+    if words and all(BINDING.match(word.raw) for word in words):
+        names = [match[1] for word in words if (match := BINDING.match(word.raw))]
+    elif head in VARIABLE_PRINTERS:
+        names = _printed_names(words[1:])
+    else:
+        return False
+    return any(_arms_programs(name, exported=exported) for name in names)
+
+
+def _printed_names(args: Sequence[_ShellWord]) -> list[str]:
+    """The names `printf -v NAME` and `printf -vNAME` set."""
+    found: list[str] = []
+    for index, word in enumerate(args):
+        value = word.value or ""
+        if value == PRINTF_VARIABLE:
+            found += [next_word.value or "" for next_word in args[index + 1 : index + 2]]
+        elif value.startswith(PRINTF_VARIABLE):
+            found.append(value.removeprefix(PRINTF_VARIABLE))
+    return found
+
+
+def _arms_programs(name: str, *, exported: bool) -> bool:
+    """Whether setting `name` may change what a program does, not only how it prints (READ_NAME):
+    when it is exported, set in the hook's environment (the shell then hands on the new value),
+    or no name a read may set (`_plain_name`)."""
+    if READ_NAME.fullmatch(name):
+        return False
+    return exported or name in os.environ or not _plain_name(name)
+
+
+def _runs_code_from_file(each: _SimpleCommand, zone: _Zone) -> bool:
+    """Whether a simple command may run code from a file or standard input: after its leading
+    assignments and wrappers, a program by its path (but a reader in TRUSTED_READER_FOLDERS) or
+    one the guard cannot name (`$RUN`), a CODE_RUNNERS or python program, or a `find` that runs a
+    command. Not the closer of a compound command (`}`, `done`)."""
+    words = _proper_words(each.words)
+    while words and ASSIGNMENT.match(words[0].raw):
+        words = words[1:]
+    words = _unwrap(words, zone)
+    if not words or words[0].raw in GROUP_CLOSERS:
+        return False
+    name = _program_name(words[0], zone)
+    if name is None:
+        return True
+    base = _basename(name)
+    if base == "xargs" and "/" not in name:
+        return not _xargs_prints_only(words[1:], zone)
+    if "/" in name or base in CODE_RUNNERS or PYTHON_NAME.fullmatch(base):
+        return True
+    return base == "find" and any(
+        (word.value or "").startswith(("-exec", "-ok")) for word in words[1:]
+    )
+
+
+def _writes_text(each: _SimpleCommand, zone: _Zone) -> bool:
+    """Whether a simple command writes a file (not /dev/null) with text it was given or read: any
+    writer but code that runs (`_runs_code_from_file`: its output is its own), and a copy of
+    what the text feeds it (`_copies_input`)."""
+    if _copies_input(each):
+        return True
+    return each.writes and (_writes_for_many(each) or not _runs_code_from_file(each, zone))
+
+
+def _copies_input(each: _SimpleCommand) -> bool:
+    """Whether a copy (CHANGES_DESTINATION: `cp`, `install`, `rsync`) may write what the text
+    gives it: it is fed a heredoc, a here-string, a file or a pipe, or copies standard input
+    (STANDARD_INPUT: `/dev/stdin`, `/proc/self/fd/0`, `-`)."""
+    words = _proper_words(each.words)
+    if not words or _basename(words[0].value or "") not in CHANGES_DESTINATION:
+        return False
+    fed = (
+        bool(each.heredocs)
+        or each.after_pipe
+        or any(path != NULL_DEVICE for path in each.input_files)
+        or any(not DESCRIPTOR_TARGET.fullmatch(target or "") for target in each.redirect_inputs)
+    )
+    return fed or any(STANDARD_INPUT.fullmatch(word.value or "") for word in words[1:])
+
+
+def _writes_for_many(each: _SimpleCommand) -> bool:
+    """Whether a simple command's redirection takes the output of other commands: the closer of a
+    compound command (`} > f`, `done > f`, a subshell's `) > f`), or a bare `exec > f`."""
+    words = [word.raw for word in _proper_words(each.words)]
+    return each.writes and (not words or words[0] in GROUP_CLOSERS or words == ["exec"])
+
+
+def _feeds_code(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bool:
+    """Whether a text, for a zone with `shell_reads`, writes a file with text (`_writes_text`) and
+    runs a command that may run that file: code (`_runs_code_from_file`), or any command that
+    does not only read (`_command_only_reads`: `git commit` runs a hook, `crontab`, `at` and
+    `npm run` a file's lines), but a compound command's closer (`} > f`: `_writes_for_many`),
+    whose commands are judged on their own. What a read prints there, or a text names, may become
+    a script (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
+    return (
+        zone.shell_reads
+        and any(_writes_text(each, zone) for each in commands)
+        and any(
+            _runs_code_from_file(each, zone)
+            or not (_writes_for_many(each) or _command_only_reads(each, zone, cwd))
+            for each in commands
+        )
+    )
+
+
+def _read_runs(
+    commands: Sequence[_SimpleCommand], zone: _Zone, *, feeding: bool
+) -> Iterator[list[_SimpleCommand]]:
+    """The runs of a text (`_pipelines`) whose reads may be blanked: in a text that feeds code
+    (`feeding`, `_feeds_code`), not a run that writes a file with text (`_writes_text`), whose
+    reads are what the file holds."""
+    for run in _pipelines(commands):
+        if not (feeding and any(_writes_text(each, zone) for each in run)):
+            yield run
+
+
+def _read_value(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
+    """Whether a lone assignment may be blanked as a read: its value runs nothing but `$(...)` that
+    only read, of a plain name (`_only_reads_value`), and keeps no command text for later (a
+    quoted or escaped `$(` or backtick, an ANSI-C `$'...'`), which a subscript of it would run."""
+    if _keeps_command_text(word) or not _substitutions_read(word, zone, cwd):
+        return False
+    return not word.substitutions or _plain_assignment(word)
+
+
+def _keeps_command_text(word: _ShellWord) -> bool:
+    """Whether an assignment keeps command text for later, which a subscript of its name would
+    run: a quoted or escaped `$(` (more than the word's own substitutions) or an ANSI-C `$'...'`,
+    whose escapes may spell one."""
+    return "$'" in word.raw or _unquoted(word.raw).count("$(") > len(word.substitutions)
+
+
+def _only_reads_value(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
+    """Whether an assignment of a plain name (`_plain_assignment`) has only `$(...)` that read
+    (`_substitutions_read`) in its value."""
+    return _plain_assignment(word) and _substitutions_read(word, zone, cwd)
+
+
+def _plain_assignment(word: _ShellWord) -> bool:
+    """Whether an assignment (`X=...`, `X+=...`) sets a name a read may set (`_plain_name`)."""
+    return _plain_name(word.raw.partition("=")[0].rstrip("+"))
+
+
+def _binds_or_moves(each: _SimpleCommand) -> bool:
+    """Whether a simple command sets a variable or changes the folder (`cd`, `pushd`, `for`,
+    `read`, `printf -v`, an assignment), after the words that open a command in a compound one.
+    Reading what such a command names does not make the rest of the text free of it: a name bound
+    there is used later, and a `cd` moves where the relative words point."""
+    words = _proper_words(each.words)
+    return not words or (
+        words[0].value in {*CHANGE_DIR, "for", "read"}
+        or (words[0].value in VARIABLE_PRINTERS and bool(_printed_names(words[1:])))
+        or all(BINDING.match(word.raw) for word in words)
+    )
+
+
+def _blankable(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
+    """Whether a whole simple command, redirections and heredoc included, only reads
+    (`_command_only_reads`, `_writes_nothing`) and binds no name and moves nowhere
+    (`_binds_or_moves`), and no compound command closes on a redirection (`done < ~/x` feeds the
+    loop): its text may be blanked, since nothing it names is acted on later."""
+    return (
+        bool(each.words)
+        and each.words[0].value not in COMPOUND_CLOSERS
+        and not _binds_or_moves(each)
+        and _writes_nothing(each, zone, cwd)
+        and _command_only_reads(each, zone, cwd)
+    )
+
+
+def _command_spans(
+    commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str, *, feeding: bool
+) -> list[tuple[int, int]]:
+    """The spans of the commands of a text that only read (`_blankable`), for a zone with
+    `shell_reads`, each in a pipeline only when the rest of it only prints (`_filters`), in a run
+    whose reads may be blanked (`_read_runs`)."""
+    return [
+        (each.start, each.end)
+        for run in _read_runs(commands, zone, feeding=feeding)
+        for each in run
+        if zone.shell_reads
+        and (len(run) == 1 or _filters(run, each, zone))
+        and _blankable(each, zone, cwd)
+    ]
+
+
+def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
+    """The spans of a Bash command, as written, that only read or run a file (`_command_reads`,
+    given the zone's `readers`), for a zone a session may read: blanked, they leave what writes.
+    A read in a pipeline counts only when the rest of it only prints (`_filters`). Then a lone
+    assignment whose name is only used in those spans (`S=<dir>; bash $S/scripts/x`).
 
     None when the scanner cannot follow the command (shell_words.simple_commands), when the shell
     may hand a read's words to a later command (WORDS_HANDED_ON: `$_`, a trap's
     `$BASH_COMMAND`), or when a group, subshell, loop or `if` is piped, since its own commands
-    are not marked as in the pipeline (`(find x) | xargs rm`): it is then read whole."""
+    are not marked as in the pipeline (`(find x) | xargs rm`): it is then read whole. So is a
+    text that feeds code (`_feeds_code`) with a redirection that takes many commands' output
+    (`_writes_for_many`); in one without, a run that writes such a file is not blanked
+    (`_read_runs`)."""
     if WORDS_HANDED_ON.search(command):
         return []
-    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(command)
+    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
+        command, substitutions=zone.shell_reads
+    )
     if commands is None or any(
         each.in_pipeline and (not each.words or each.words[0].raw in GROUP_CLOSERS)
         for each in commands
     ):
         return []
-    lone = [
-        word
-        for each in commands
-        if each.words and all(ASSIGNMENT.match(word.raw) for word in each.words)
-        for word in each.words
-    ]
-    folders = _bound_folders(command, commands)
+    feeding = _feeds_code(commands, zone, cwd)
+    if feeding and any(_writes_for_many(each) for each in commands):
+        return []
+    if _arms_reads(commands, zone) or _evaluates_unknown(commands, zone):
+        return []  # a read may then write: `export TAR_OPTIONS=--remove-files; tar -c ~/x`
+    lone = [word for word in _lone_assignments(commands) if _read_value(word, zone, cwd)]
+    folders = (
+        _bound_paths(command, commands) if zone.shell_reads else _bound_folders(command, commands)
+    )
     while True:  # a folder name whose every mention is not in a read is no folder: read again
+        view = _bound_view(commands, folders, zone)
         spans = [
             (word.start, word.end)
-            for run in _pipelines(commands)
+            for run in _read_runs(view, zone, feeding=feeding)
             for reader in run
-            if len(run) == 1 or _filters(run, reader)
-            for word in _command_reads(reader.words, folders)
-        ]
+            if len(run) == 1 or _filters(run, reader, zone)
+            if not zone.shell_reads or all(_substitutions_read(w, zone, cwd) for w in reader.words)
+            for word in _command_reads(reader.words, zone, folders)
+        ] + _command_spans(view, zone, cwd, feeding=feeding)
         kept = {name: word for name, word in folders.items() if _only_read(word, command, spans)}
         if kept == folders:
             break
         folders = kept
-    return spans + [(word.start, word.end) for word in lone if _only_read(word, command, spans)]
+    return spans + _read_assignments(lone, command, spans)
+
+
+def _read_assignments(
+    lone: Sequence[_ShellWord], command: str, spans: Sequence[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """The spans of the lone assignments whose name only reads use (`_only_read`), given the spans
+    that read and, as it grows, these: `J=<file>; n=$(grep -c x $J)` has the second's value in a
+    read only once the second is one. A name assigned more than once (`n=$(grep ...)` in a loop
+    and again after it) counts its other assignments as reads: they all go or none does."""
+    found: list[tuple[int, int]] = []
+    pending = list(lone)
+    while True:
+        more = [
+            word
+            for word in pending
+            if _only_read(word, command, [*spans, *found, *_assignments_of(word, pending)])
+        ]
+        if not more:
+            return found
+        found += [(word.start, word.end) for word in more]
+        pending = [word for word in pending if word not in more]
+
+
+def _assignments_of(word: _ShellWord, words: Sequence[_ShellWord]) -> list[tuple[int, int]]:
+    """The spans of the assignment words among `words` that set the name `word` sets."""
+    name = word.raw.partition("=")[0]
+    return [(each.start, each.end) for each in words if each.raw.partition("=")[0] == name]
 
 
 def _in_folder(word: _ShellWord, names: frozenset[str]) -> bool:
@@ -3100,19 +5096,325 @@ def _bound_folders(command: str, commands: Sequence[_SimpleCommand]) -> dict[str
     return folders
 
 
+def _lone_assignments(commands: Sequence[_SimpleCommand]) -> list[_ShellWord]:
+    """The assignment words of the commands that are assignments only (`do n=$(ls)` too)."""
+    return [
+        word
+        for each in commands
+        if (words := _proper_words(each.words)) and all(ASSIGNMENT.match(w.raw) for w in words)
+        for word in words
+    ]
+
+
+def _bound_paths(command: str, commands: Sequence[_SimpleCommand]) -> dict[str, _ShellWord]:
+    """The names a text binds once, in a lone assignment of a plain path (FOLDER_VALUE) wherever
+    it stands (`F=~/x; sed -n 1p $F`), by the assignment word: `$F` then expands to a word that
+    starts with `/` or `~`, never an option, or to nothing. Each such name has no other mention
+    than `$NAME` (`_references`: not `for NAME`, `read NAME`), and the text sets neither IFS nor
+    HOME and runs no NAME_SETTERS. The caller keeps the names a reader alone uses (`_only_read`)."""
+    if SPLIT_VARIABLE.search(command) or any(
+        word.value in NAME_SETTERS for each in commands for word in each.words
+    ):
+        return {}
+    assigned = Counter(
+        match[1] for each in commands for word in each.words if (match := BINDING.match(word.raw))
+    )
+    paths: dict[str, _ShellWord] = {}
+    for word in _lone_assignments(commands):
+        name, _, value = word.raw.partition("=")
+        if FOLDER_VALUE.fullmatch(value) and assigned[name] == 1 and _references(name, command):
+            paths[name] = word
+    return paths
+
+
+def _references(name: str, command: str) -> bool:
+    """Whether every mention of a name in a command, as a whole token, is `$NAME` or `${NAME`, but
+    for its one assignment."""
+    mentions = len(re.findall(rf"(?<!\w){re.escape(name)}(?!\w)", command))
+    return mentions == 1 + len(re.findall(rf"\$\{{?{re.escape(name)}(?!\w)", command))
+
+
+def _bound_view(
+    commands: Sequence[_SimpleCommand], names: Mapping[str, _ShellWord], zone: _Zone
+) -> list[_SimpleCommand]:
+    """The commands with each word of a bound name (`_bound_paths`) read as its path, for a zone
+    with `shell_reads`: no word is then an option. The others as they are."""
+    if not zone.shell_reads or not names:
+        return list(commands)
+    paths = {name: word.raw.partition("=")[2] for name, word in names.items()}
+    bound: list[_SimpleCommand] = _shell_words().bind_names(commands, paths)
+    return bound
+
+
+def _clear_folder(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved folder is neither in the zone nor one that holds it (or is it)."""
+    return (
+        path is not None
+        and not _in_zone(path, zone)
+        and not any(_inside(os.path.realpath(root), path) for root in zone.roots)
+    )
+
+
+def _clear_cd(each: _SimpleCommand, cwd: str, zone: _Zone) -> bool:
+    """Whether a `cd` or `pushd` has one literal operand from `/` or `~` (after a `--`) that is a
+    folder clear of the zone (`_clear_folder`)."""
+    operands = [word for word in _proper_words(each.words)[1:] if word.value != "--"]
+    if len(operands) != 1 or operands[0].value is None:
+        return False
+    return operands[0].value.startswith(("/", "~")) and _clear_folder(
+        _resolve(operands[0].value, cwd), zone
+    )
+
+
+def _cds_clear(command: str, cwd: str, zone: _Zone, climb: int) -> bool:
+    """Whether the folder a Bash command starts in and each `cd` of its text lead nowhere near the
+    zone, so a relative word after one names no part of it: by the scanned commands
+    (`_scanned_cds_clear`), or, where the scanner cannot follow the text or a `cd` sits in a
+    quoted string (`ssh h 'cd /x && ...'`), by the text itself with the `climb` folders above
+    each cd's (`_written_cds_clear`, `_glob_climb`)."""
+    if not _clear_folder(os.path.realpath(cwd), zone):
+        return False
+    return _scanned_cds_clear(command, cwd, zone) or _written_cds_clear(command, cwd, zone, climb)
+
+
+def _scanned_cds_clear(command: str, cwd: str, zone: _Zone) -> bool:
+    """Whether each `cd` of a text is clear (`_clear_cd`): every `cd` word of the text
+    (`_words_of`: one in a quote or a heredoc counts) is the command word of a `cd` of the scanned
+    text, and no word has a `..` component."""
+    commands = _scanned_commands(command)
+    if commands is None:
+        return False
+    if any(UP_PATH.search(_unquoted(word.raw)) for each in commands for word in each.words):
+        return False
+    moves = [
+        each
+        for each in commands
+        if (words := _proper_words(each.words)) and words[0].value in CHANGE_DIR
+    ]
+    named = [word for word in _words_of(command) if word in CHANGE_DIR]
+    return len(named) == len(moves) and all(_clear_cd(each, cwd, zone) for each in moves)
+
+
+def _written_cds_clear(command: str, cwd: str, zone: _Zone, climb: int) -> bool:
+    """Whether each `cd` of a text, read from the text as written, is clear: every `cd` or `pushd`
+    word (CD_WORD, as many as `_words_of` finds, so `c''d` is none of them) has one literal
+    operand from `/` or `~/` (CD_OPERAND) whose folder and the ones a glob may climb to
+    (`_glob_climb`) are clear of the zone, there is no `popd`, and no word has a `..` component."""
+    words = _words_of(command)
+    if "popd" in words or any(UP_PATH.search(word) for word in words):
+        return False
+    found = list(CD_WORD.finditer(command))
+    if len(found) != sum(word in CHANGE_DIR for word in words):
+        return False
+    for each in found:
+        operand = CD_OPERAND.match(command, each.end())
+        path = operand and (operand.group("quoted") or operand.group("bare"))
+        if not path or path == "~" or not _clear_up(_resolve(path, cwd), climb, zone):
+            return False
+    return True
+
+
+def _glob_climb(glob_text: str) -> int:
+    """How many folders up a glob of a Bash call's glob text (reads blanked) may climb: bash
+    before 5.2 matches `..` with `.*`, so `.*/.claude` after `cd ~/proj` is `~/.claude`. The most
+    components in one word the shell may expand (`_shell_glob_words`) that climb (`_climbed`)."""
+    return max(
+        (_climbed(word).split("/").count("..") for word in _shell_glob_words(glob_text)),
+        default=0,
+    )
+
+
+def _clear_up(folder: str | None, climb: int, zone: _Zone) -> bool:
+    """Whether a folder and the `climb` folders above it are clear of the zone (`_clear_folder`)."""
+    if folder is None:
+        return False
+    path = Path(folder)
+    return all(_clear_folder(str(above), zone) for above in [path, *path.parents][: climb + 1])
+
+
+def _runs_code(each: _SimpleCommand, zone: _Zone) -> bool:
+    """Whether a simple command, after its wrappers, is an interpreter (INTERPRETERS, python by
+    PYTHON_NAME) that takes its code from a word, standard input or a heredoc: not one that runs
+    a script file (`_script_word`), which stays a read of that file."""
+    words = _unwrap(_proper_words(each.words), zone)
+    name = _program_name(words[0], zone) if words else None
+    if name is None:
+        return False
+    name = _basename(name)
+    known = name in INTERPRETERS or PYTHON_NAME.fullmatch(name) is not None
+    return known and _script_word(name, words[1:]) is None
+
+
+def _spellings(zone: _Zone) -> list[str]:
+    """The ways a text may write the roots of the zone: as paths, from `~` and from `$HOME`."""
+    home = Path.home()
+    found: list[str] = []
+    for root in zone.roots:
+        found += [str(root), os.path.realpath(root)]
+        if root.is_relative_to(home):
+            rest = root.relative_to(home).as_posix()
+            found += [f"~/{rest}", f"$HOME/{rest}", f"${{HOME}}/{rest}"]
+    return found
+
+
+def _code_names_zone(text: str, zone: _Zone) -> bool:
+    """Whether code names the zone: a root written out (`_spellings`), `CLAUDE_CONFIG_DIR`, or
+    `.claude` with a way to find the home folder (HOME_LOOKUP) in the same code."""
+    return (
+        any(spelling in text for spelling in _spellings(zone))
+        or "CLAUDE_CONFIG_DIR" in text
+        or (CLAUDE_FOLDER in text and HOME_LOOKUP.search(text) is not None)
+    )
+
+
+def _interpreter_names_zone(command: str, zone: _Zone) -> bool:
+    """Whether a Bash command runs interpreter code that names the zone (`_runs_code`,
+    `_code_names_zone`). The code is the text of the command and of the commands piped into or
+    out of it, heredocs included (`cat <<'E' | python3 -`). Not a script file it runs, nor one
+    written by `cat > FILE <<'E'` to run later. False when the scanner cannot follow the text:
+    the other checks read it whole."""
+    commands = _scanned_commands(command)
+    if commands is None:
+        return False
+    return any(
+        _code_names_zone(
+            "\n".join(command[each.start : each.end] for each in run if each.words), zone
+        )
+        for run in _pipelines(commands)
+        if any(_runs_code(each, zone) for each in run)
+    )
+
+
 def _bash_touches(call: Call, zone: _Zone) -> bool:
     """A command run in the zone, or whose text reaches it. For a zone a session may read
     (`writes_only`), every word that only reads or runs a file is blanked first
     (`_read_spans`): what is left reaches it only by a write."""
     cwd = os.path.realpath(call.cwd)
-    if any(_inside(cwd, os.path.realpath(root)) for root in zone.roots):
-        return True
     bash = _bash(call)
+    if zone.writes_only and _only_reads_text(bash.command, zone, call.cwd):
+        return False  # it writes nothing, in the zone or out of it
+    if any(_inside(cwd, os.path.realpath(root)) for root in zone.roots) and not _in_own(cwd, zone):
+        return True
     code, glob_code = bash.code, _globbing_code(bash)
     if zone.writes_only:
-        spans = _read_spans(bash.command)
+        if zone.shell_reads and _interpreter_names_zone(bash.command, zone):
+            return True
+        spans = _read_spans(bash.command, zone, call.cwd)
         code, glob_code = _blank(code, spans), _blank(glob_code, spans)
-    return _text_reaches(code, call.cwd, zone, cwd_known=True, glob_text=glob_code)
+    if zone.writes_inside and _odd_job_mention(code):
+        return True  # CLAUDE_JOB_DIR used otherwise than as written out: where it goes is unknown
+    clear = zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
+    where = _Where(call.cwd, cds_clear=clear)
+    variants = _loop_variants(bash.command, code, glob_code) if zone.writes_inside else []
+    return any(
+        _text_reaches(text, where, zone, glob_text=globbing)
+        for text, globbing in variants or [(code, glob_code)]
+    )
+
+
+def _loop_variants(command: str, code: str, glob_code: str) -> list[tuple[str, str]]:
+    """The code and glob texts with the variable of each loop over literal words
+    (`_literal_loops`) written as each of its words in turn; none when there is no such loop or
+    more than BRACE_MEMBERS ways to write them."""
+    loops = _literal_loops(command)
+    if not loops or math.prod(map(len, loops.values())) > BRACE_MEMBERS:
+        return []
+    variants: list[tuple[str, str]] = []
+    for values in itertools.product(*loops.values()):
+        texts = (code, glob_code)
+        for name, value in zip(loops, values, strict=True):
+            reference = _loop_reference(name)
+            texts = (reference.sub(value, texts[0]), reference.sub(value, texts[1]))
+        variants.append(texts)
+    return variants
+
+
+def _literal_loops(command: str) -> dict[str, list[str]]:
+    """The variables of a Bash text's `for NAME in WORDS` loops whose every value the guard can
+    write in, with those words: each word is literal (LOOP_VALUE), NAME is a LOOP_NAME the text
+    names in no other word and sets no other way (`NAME=`, LOOP_SETTERS), and every mention of it
+    is a plain `$NAME` the shell expands inside the loop's body (`_mentions_in_body`). None in a
+    text with a heredoc, whose quoting `_live_dollars` does not read, or one that may change how a
+    value splits (`_changes_word_splitting`). The scanner reads no `${...}`; a LONE_BRACKET is
+    read as `\\[`."""
+    command = LONE_BRACKET.sub(r"\\[", command)
+    commands = _shell_words().simple_commands(command)
+    if (
+        commands is None
+        or "<<" in command
+        or LOOP_SETTERS.intersection(_words_of(command))
+        or _changes_word_splitting(command)
+    ):
+        return {}
+    named = Counter(word.value for each in commands for word in each.words)
+    loops: dict[str, list[str]] = {}
+    for at, each in enumerate(commands):
+        words = each.words
+        if len(words) < 4 or words[0].value != LOOP or words[2].value != "in":
+            continue
+        name, end = words[1].raw, _loop_end(commands, at)
+        values = [_loop_value(word) for word in words[3:]]
+        literal = [value for value in values if value is not None]
+        if len(literal) < len(values) or end is None or named[name] != 1:
+            continue
+        if _loop_name_kept(command, name) and _mentions_in_body(
+            command, name, (words[-1].end, end)
+        ):
+            loops[name] = literal
+    return loops
+
+
+def _loop_name_kept(command: str, name: str) -> bool:
+    """Whether a loop variable's name is a LOOP_NAME the shell sets no value of itself, which a
+    Bash text assigns nowhere (`NAME=`, `NAME+=`, `NAME[1]=`)."""
+    if not LOOP_NAME.fullmatch(name) or name in SHELL_SET_NAMES:
+        return False
+    return not re.search(rf"(?<![\w$]){name}(?:\[[^\]]*\])?\+?=", command)
+
+
+def _loop_value(word: _ShellWord) -> str | None:
+    """A loop word the guard can write in for its variable: a literal LOOP_VALUE with no `..`
+    component."""
+    value = word.value
+    if value is None or word.substitutions or not LOOP_VALUE.fullmatch(value):
+        return None
+    return None if ".." in value.split("/") else value
+
+
+def _loop_end(commands: Sequence[_SimpleCommand], header: int) -> int | None:
+    """Where the `done` that closes the loop of the command at `header` starts, counting the loops
+    opened in its body (LOOP_OPENERS, after any COMMAND_OPENERS but those); None when the text
+    does not close it."""
+    depth = 0
+    for each in commands[header + 1 :]:
+        words = [word.value for word in each.words]
+        if words[:1] == [LOOP_END]:
+            if depth == 0:
+                return each.words[0].start
+            depth -= 1
+        lead = next((word for word in words if word not in COMMAND_OPENERS - LOOP_OPENERS), None)
+        depth += lead in LOOP_OPENERS
+    return None
+
+
+def _loop_reference(name: str) -> re.Pattern[str]:
+    """`$NAME`, not glued to a word character, nor zsh's `$NAME[1]` or `$NAME:h`."""
+    return re.compile(rf"\${name}(?![\w\[:])")
+
+
+def _mentions_in_body(command: str, name: str, body: tuple[int, int]) -> bool:
+    """Whether every `$NAME` of a Bash text is a `_loop_reference` (not zsh's `$NAME[1]`) the shell
+    expands (`_live_dollars`) between the `body` offsets. Any other form (`$=NAME`, `$#NAME`) is
+    left as an expansion the guard does not follow."""
+    live = _live_dollars(command)
+    mentions = re.finditer(rf"\${name}(?!\w)", command)
+    plain = _loop_reference(name)
+    return all(
+        plain.match(command, mention.start())
+        and mention.start() in live
+        and body[0] <= mention.start() < body[1]
+        for mention in mentions
+    )
 
 
 def _is_zone_path(text: str, cwd: str, zone: _Zone) -> bool:
@@ -3122,8 +5424,24 @@ def _is_zone_path(text: str, cwd: str, zone: _Zone) -> bool:
 
 def _string_reaches(text: str, cwd: str, zone: _Zone) -> bool:
     """An MCP input string that is a path in the zone, or whose words reach it as a Bash
-    command's would: an MCP tool may run a command or a query, in a directory of its own."""
-    return _is_zone_path(text, cwd, zone) or _text_reaches(text, cwd, zone, cwd_known=False)
+    command's would: an MCP tool may run a command or a query, in a directory of its own. For
+    the user folder a `file://` URL is read as its path, and a string that is a relative path
+    (no blank, no other URL scheme) with a component that may be the folder or `.claude.json`
+    (`.claude/x`, `../.claude.json`) counts: the tool's own folder may be home."""
+    if zone.writes_inside:
+        text = FILE_URL.sub(lambda url: urllib.parse.unquote(url[1]), text)
+        if _relative_names_holder(text.strip(), zone):
+            return True
+    return _is_zone_path(text, cwd, zone) or _text_reaches(text, _Where(cwd, known=False), zone)
+
+
+def _relative_names_holder(path: str, zone: _Zone) -> bool:
+    """Whether a relative path has a component that names a root of the zone (`zone.globs`) or a
+    sibling of one of its files (`.claude.json.bak`), as written: an MCP tool expands no glob."""
+    if path.startswith(("/", "~", "$")) or URL_SCHEME.match(path) or BLANK.search(path):
+        return False
+    siblings = tuple(f"{file.name}." for file in zone.siblings)
+    return any(part in zone.globs or part.startswith(siblings) for part in path.split("/"))
 
 
 def _tool_writes(call: Call, zone: _Zone) -> bool:
@@ -3376,8 +5694,9 @@ def _store_writer_rule(call: Call, _store: Path, role: str, _now: datetime) -> R
 def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> Refused | None:
     """A Bash command that runs in, or whose text reaches, a place a restricted session may not
     write."""
-    for zone in _zones(store):
-        if _bash_touches(call, zone):
+    for each in _zones(store):
+        zone = _with_own(each, call)
+        if _bash_touches(_job_written_out(call, zone), zone):
             return _zone_refusal(zone, role)
     return None
 
@@ -3409,7 +5728,8 @@ def _tool_refusal(call: Call, store: Path, role: str, _now: datetime) -> Refused
     store, coven's config, or Claude Code's settings and plugins."""
     if call.bash is not None:
         return None
-    for zone in _zones(store):
+    for each in _zones(store):
+        zone = _with_own(each, call)
         if _tool_writes(call, zone):
             return _zone_refusal(zone, role)
     return None
