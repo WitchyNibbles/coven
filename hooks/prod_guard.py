@@ -582,10 +582,20 @@ DESCRIPTOR_TARGET = re.compile(r"\d+|-")
 # those count in both cases.
 PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 ZSH_TIED_NAMES = ("PATH", "CDPATH", "FPATH", "MANPATH", "MODULE_PATH", "MAILPATH", "FIGNORE")
+# zsh runs NULLCMD for a redirection with no command (`< f`, a bare heredoc), READNULLCMD for a
+# lone `< f`; it runs a prompt's `$(...)`, the functions its hook arrays name, and reads ZDOTDIR's
+# startup files in a zsh it starts.
+NULL_COMMANDS = ("NULLCMD", "READNULLCMD")
+ZSH_HOOK_NAMES = (
+    *("precmd_functions", "preexec_functions", "chpwd_functions", "periodic_functions"),
+    *("zshaddhistory_functions", "zshexit_functions", "ZDOTDIR"),
+    *("PROMPT", "PROMPT2", "PROMPT3", "PROMPT4", "RPROMPT", "RPROMPT2", "RPS1", "RPS2"),
+)
 BLOCKED_NAMES = frozenset(
     {*("PATH", "IFS", "HOME", "CDPATH", "ENV", "SHELL", "PWD", "OLDPWD", "TMPDIR", "USER")}
     | {*("PROMPT_COMMAND", "PS1", "PS2", "PS3", "PS4", "GLOBIGNORE", "FIGNORE", "MAIL", "LOGNAME")}
     | {*ZSH_TIED_NAMES, *(name.lower() for name in ZSH_TIED_NAMES)}
+    | {*NULL_COMMANDS, *ZSH_HOOK_NAMES}
 )
 BLOCKED_PREFIXES = (
     "BASH",
@@ -4334,8 +4344,8 @@ def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
     (`_program_only_reads`). No word may run a command but a plain `$(...)` that only reads
     (`_substitutions_read`)."""
     words = _proper_words(each.words)
-    if not words:
-        return True
+    if not words:  # zsh runs NULLCMD or READNULLCMD for a bare redirection
+        return not (zone.shell_reads and any(name in os.environ for name in NULL_COMMANDS))
     if not all(_substitutions_read(word, zone, cwd) for word in words):
         return False
     if zone.shell_reads and _sets_for_programs(words, exported=False):

@@ -5518,6 +5518,35 @@ def test_a_uniq_of_one_file_in_the_user_folder_reads(run: Run, store: Path, comm
     assert proc.returncode == 0, proc.stderr
 
 
+# --- zsh's NULLCMD and READNULLCMD: a redirection with no command runs them ---
+
+NULL_COMMAND_RUNS: dict[str, str] = {
+    "nullcmd-heredoc": "NULLCMD=sh\n<<'E'\nrm -rf ~/.cl''aude/skills\nE",
+    "nullcmd-file": "echo 'rm -rf ~/.claude/skills' > /tmp/s; NULLCMD=sh; < /tmp/s",
+    "readnullcmd-file": "echo 'rm -rf ~/.claude/skills' > /tmp/s; READNULLCMD=sh; < /tmp/s",
+    "precmd-array": "precmd_functions+=(x); ls ~/.claude",
+    "rprompt": "RPROMPT='$(x)'; ls ~/.claude",
+}
+NULL_COMMAND_IDS = list(NULL_COMMAND_RUNS)
+
+
+@pytest.mark.parametrize("name", NULL_COMMAND_IDS)
+def test_a_text_that_sets_what_the_shell_runs_on_its_own_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(NULL_COMMAND_RUNS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+def test_a_bare_redirection_is_no_read_when_the_hook_environment_sets_nullcmd(
+    run: Run, store: Path
+) -> None:
+    payload = bash("< ~/.claude/CLAUDE.md")
+    assert run(payload, role="pm", env={"READNULLCMD": "sh"}).returncode == 2
+    assert run(payload, role="pm").returncode == 0
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
