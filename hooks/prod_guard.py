@@ -507,6 +507,19 @@ RUNS_COMMAND = re.compile(r"\$\(|`|[<>]\(")  # a command substitution or a proce
 INTERPRETERS = frozenset(
     {*("node", "perl", "ruby", "awk", "gawk", "mawk", "nawk", "sqlite3", "php", "lua", "deno")}
 )
+# What an `xargs` that only prints may run, for the user folder zone: readers that no option or
+# operand xargs appends makes write or run anything (not sed, sort, find, whose options GNU reads
+# anywhere: an appended `-i`, `-o x` or `-delete`) ...
+XARGS_READERS = frozenset(
+    {*("cat", "head", "tail", "wc", "ls", "stat", "grep", "egrep", "fgrep", "basename")}
+    | {*("dirname", "realpath", "readlink", "du", "md5sum", "sha1sum", "sha256sum", "echo")}
+)
+# ... and the xargs options it may have: flags, and options with a value (glued or the next word).
+# Any other (`-I`, `-i`, `--replace`, `-a`, `-E`, `-p`) stops the reading.
+XARGS_FLAGS = frozenset("0rtx")
+XARGS_VALUED = frozenset("nLPsd")
+XARGS_LONG_FLAGS = frozenset({"null", "no-run-if-empty", "verbose", "exit"})
+XARGS_LONG_VALUED = frozenset({"max-args", "max-lines", "max-procs", "max-chars", "delimiter"})
 # What runs code from a file or standard input, by name: a file a read writes in the same text may
 # be what it runs (`echo 'rm -rf ~/.claude' > /tmp/s; sh /tmp/s`), as may a program by its path.
 CODE_RUNNERS = frozenset(
@@ -3551,7 +3564,51 @@ def _prints_only(words: Sequence[_ShellWord], zone: _Zone) -> bool:
         name = _program_name(words[0], zone)
         if name in PIPE_FILTERS or (name in zone.readers and not _reader_acts(name, words[1:])):
             return True
+        if name == "xargs" and _xargs_prints_only(words[1:], zone):
+            return True
     return words[0].value == "sed" and _sed_prints_only(words[1:])
+
+
+def _xargs_prints_only(args: Sequence[_ShellWord], zone: _Zone) -> bool:
+    """Whether an `xargs`, by its arguments, only prints: options it knows (XARGS_FLAGS and the
+    like), then a reader in XARGS_READERS by name or in TRUSTED_READER_FOLDERS. xargs appends the
+    words it reads to that reader's own, so no word of them can make it write or run."""
+    command = _xargs_command(args)
+    return bool(command) and _program_name(command[0], zone) in XARGS_READERS
+
+
+def _xargs_command(args: Sequence[_ShellWord]) -> Sequence[_ShellWord]:
+    """The command an xargs runs, after the options `_xargs_option_length` reads; none when an
+    option is not one of them."""
+    at = 0
+    while at < len(args):
+        value = args[at].value
+        if value is None:
+            return []
+        if value == "--":
+            return args[at + 1 :]
+        if not value.startswith("-"):
+            return args[at:]
+        length = _xargs_option_length(value)
+        if length == 0:
+            return []
+        at += length
+    return []
+
+
+def _xargs_option_length(option: str) -> int:
+    """How many words an xargs option takes, its value included; 0 for one it does not know."""
+    if option.startswith("--"):
+        name, equals, _ = option[2:].partition("=")
+        if name in XARGS_LONG_FLAGS and not equals:
+            return 1
+        return (1 if equals else 2) if name in XARGS_LONG_VALUED else 0
+    for at, letter in enumerate(option[1:], 1):
+        if letter in XARGS_VALUED:
+            return 1 if option[at + 1 :] else 2
+        if letter not in XARGS_FLAGS:
+            return 0
+    return 1 if len(option) > 1 else 0
 
 
 def _only_read(word: _ShellWord, command: str, spans: Sequence[tuple[int, int]]) -> bool:
@@ -3864,6 +3921,8 @@ def _runs_code_from_file(each: _SimpleCommand, zone: _Zone) -> bool:
     if name is None:
         return True
     base = _basename(name)
+    if base == "xargs" and "/" not in name:
+        return not _xargs_prints_only(words[1:], zone)
     if "/" in name or base in CODE_RUNNERS or PYTHON_NAME.fullmatch(base):
         return True
     return base == "find" and any(
