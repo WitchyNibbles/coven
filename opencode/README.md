@@ -58,7 +58,7 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   and a role with no model uses the lead's. `--limit ID=CONTEXT[:OUTPUT]` (litellm only, repeat it
   per model) writes the model's context and output size in tokens into the config; without one
   OpenCode assumes 200000 tokens of context and 32000 of output, so a model with a smaller window
-  overflows before OpenCode compacts. Setup prints a warning for each litellm model with no limit.
+  overflows before OpenCode compacts. Setup prints one warning naming the litellm models with no limit.
   With no flags it regenerates from `profile.json` and keeps its limits.
   What setup puts in `P/config/opencode/`:
   - `skills/coven-*`, `agents/` and `commands/`, copied from `opencode/content/`;
@@ -99,13 +99,13 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   does not. `doctor` prints one line per check: `ok`, `warn` or
   `fail`, with the fix after a failure. It exits 1 when a check failed. The checks are:
   `runtime` (the binary reports the pinned version), `paths` (`opencode debug paths` stays under
-  `P`), `config` (the config, limits included, matches `profile.json`), `key` (the variable is set), `plugin`
-  (a server started for the check lists `coven` as active; it polls up to 10 s, because 2.3.2 lists
-  no plugin until they have loaded), `skills` (the same server lists only built-in skills and the
-  profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and
-  `project config` (a warning for a repo config that is ignored here), `superpowers` (check 9, a
-  warning when a `superpowers-<x>` skill is missing from the profile) and `limits` (check 10, a
-  warning naming the litellm models that have no `--limit`).
+  `P`), `config` (the config, limits included, matches `profile.json`), `key` (the variable is
+  set), `plugin` (a server started for the check lists `coven` as active; it polls up to 10 s,
+  because 2.3.2 lists no plugin until they have loaded), `skills` (the same server lists only
+  built-in skills and the profile's), `coven root` (the plugin's root still holds
+  `hooks/deny_secrets.py`) and `project config` (a warning for a repo config that is ignored here),
+  `superpowers` (check 9, a warning when a `superpowers-<x>` skill is missing from the profile) and
+  `limits` (check 10, a warning naming the litellm models that have no `--limit`).
 
 ## The tool_choice hook
 
