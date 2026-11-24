@@ -12,6 +12,8 @@
   into the config. The plugin refuses a `read`, `grep`, `glob`, `shell`, `write`, `edit` or `patch`
   that `deny_secrets.py` refuses, and fails closed. `coven opencode doctor` adds a `superpowers`
   check.
+- `coven opencode setup` makes `shell` and `webfetch` ask before they run, for every agent. A
+  headless `opencode run` rejects the ask, so shell is for the TUI.
 - A production guard: name your live systems in the memory store (`systems/guard.json`), and a
   PreToolUse hook refuses any tool call that reaches one unless a live approval names the exact
   command. It also holds project manager sessions off the store, coven's config, Claude Code's

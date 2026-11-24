@@ -28,6 +28,10 @@ SECRET_RULES: Final = (
     ("edit", "*.env", "deny"),
     ("edit", "*.env.*", "deny"),
 )
+# Last in the list, so it beats the built-in agents' `shell allow` and `* allow`. No MCP rule:
+# the profile loads no MCP server, and a glob like `*_*` would also hit `external_directory`,
+# `coven_ping` and `await_agents`.
+ASK_RULES: Final = (("shell", "*", "ask"), ("webfetch", "*", "ask"))
 
 
 def plugin_source() -> Path:
@@ -58,13 +62,15 @@ def _rule(action: str, resource: str, effect: str) -> dict[str, str]:
 
 
 def permissions(layout: Layout, store: Path | None) -> list[dict[str, str]]:
-    """The secret rules, the allows for the files the prompts and the routing point at, then a
-    deny of edits to the installed skills (the allow on that folder covers writes too)."""
+    """The secret rules, the allows for the files the prompts and the routing point at, a deny of
+    edits to the installed skills (the allow on that folder covers writes too), then the asks for
+    shell and webfetch, last so no agent's own rule re-allows them."""
     rules = [_rule(*rule) for rule in SECRET_RULES]
     skills = layout.config_dir / "skills"
     outside = [skills, *([store] if store else [])]
     allows = [_rule("external_directory", f"{folder}/*", "allow") for folder in outside]
-    return rules + allows + [_rule("edit", f"{skills}/*", "deny")]
+    skills_deny = [_rule("edit", f"{skills}/*", "deny")]
+    return rules + allows + skills_deny + [_rule(*rule) for rule in ASK_RULES]
 
 
 def config_data(

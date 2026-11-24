@@ -71,15 +71,27 @@ def test_permissions_hold_the_secret_rules_then_the_skill_and_store_allows(tmp_p
         },
         {"action": "external_directory", "resource": f"{store}/*", "effect": "allow"},
         {"action": "edit", "resource": f"{layout.config_dir}/skills/*", "effect": "deny"},
+        {"action": "shell", "resource": "*", "effect": "ask"},
+        {"action": "webfetch", "resource": "*", "effect": "ask"},
     ]
+
+
+@pytest.mark.parametrize("profile", [LITELLM, OPENCODE], ids=["litellm", "opencode"])
+@pytest.mark.parametrize("action", ["shell", "webfetch"])
+def test_shell_and_webfetch_ask_last_so_no_agent_rule_re_allows_them(
+    profile, action: str, tmp_path: Path
+):
+    data = generate.config_data(profile, Layout(tmp_path / "profile"), tmp_path / "coven")
+    last = [rule for rule in data["permissions"] if rule["action"] == action][-1]
+    assert last == {"action": action, "resource": "*", "effect": "ask"}
 
 
 def test_without_a_store_there_is_no_store_allow(tmp_path: Path):
     data = generate.config_data(OPENCODE, Layout(tmp_path / "profile"), tmp_path / "coven")
     rules = data["permissions"]
-    assert len(rules) == 7
-    assert [rule["action"] for rule in rules[5:]] == ["external_directory", "edit"]
-    assert all(rule["resource"].endswith("/config/opencode/skills/*") for rule in rules[5:])
+    assert len(rules) == 9
+    assert [rule["action"] for rule in rules[5:7]] == ["external_directory", "edit"]
+    assert all(rule["resource"].endswith("/config/opencode/skills/*") for rule in rules[5:7])
 
 
 def test_plugin_options(tmp_path: Path):

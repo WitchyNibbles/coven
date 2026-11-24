@@ -66,6 +66,16 @@
       "action": "edit",
       "resource": "<P>/config/opencode/skills/*",
       "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "webfetch",
+      "resource": "*",
+      "effect": "ask"
     }
   ]
 }
