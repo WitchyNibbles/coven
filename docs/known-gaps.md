@@ -150,9 +150,12 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   .claude/worktrees/x/*`: write the path out), a read with a command outside the read list, `rg`
   by an unquoted `$VAR` path (write `~/...`), `git -C ~/.claude log`, a copy with an option that
   links or names a folder (`cp -l`, `cp -t`, `tar --remove-files`) or whose source is a glob or a
-  variable, a `cd` into the folder beside a command that is not a plain reader or that has a
-  redirection (`cd ~/.claude && ls 2>/dev/null`), and any MCP call that names a path in it, a
-  read included.
+  variable, a `cd` or a `for` loop in the folder beside a command that is not a plain reader or
+  that redirects into a file (`2>/dev/null` and `2>&1` are fine), a loop inside a loop, a loop
+  over a variable named in capitals, a loop word with a `$(...)` that is quoted, holds a `;` or
+  `&&`, or runs anything but readers, `python3`, `node`, `perl`, `awk` and `sqlite3` reading the
+  folder (their code could write there too), and any MCP call that names a path in it, a read
+  included.
 - Also a false positive, kept on purpose: glob-like text in a heredoc body (markdown `**x**`, a
   regex `[a-z]+x`) on a line that also names `.claude` or `.config`, even when python or `cat`
   reads the body. Python can hand such a word to a shell (`os.system`), and a copied script can

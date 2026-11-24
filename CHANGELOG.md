@@ -19,8 +19,9 @@
 - The guard now holds project manager sessions off all of Claude Code's user folder
   (`~/.claude` or CLAUDE_CONFIG_DIR, and `~/.claude.json`), not only `settings*.json` and
   `plugins/`: a `rm -rf ~/.claude` through broken quoting no longer gets through. Reads stay
-  allowed (`cat`, `ls`, `grep`, `rg`, `find` without actions, the Read, Grep and Glob tools, and
-  `cd ~/.claude && ls skills`), and so do writes in a repo's own `.claude/worktrees/`.
+  allowed (`cat`, `ls`, `grep`, `rg`, `find` without actions, the Read, Grep and Glob tools,
+  `jq`, `cd ~/.claude && ls skills 2>/dev/null`, and a `for` loop whose body only reads), and so
+  do writes in a repo's own `.claude/worktrees/`.
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).
