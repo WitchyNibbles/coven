@@ -4182,6 +4182,32 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-back-touch": bash("cd - && touch .claude/x"),
         "cd-unknown-sed": bash('cd "$X" && sed -i s/a/b/ .claude/x'),
         "cd-unknown-touch-up": bash('cd "$X" && touch ../.claude/x'),
+        "echo-script-then-sh": bash("echo 'rm -rf ~/.claude/skills' > /tmp/s.sh; sh /tmp/s.sh"),
+        "printf-script-then-bash": bash(
+            "printf 'rm -rf %s\\n' ~/.claude/skills > /tmp/s.sh && bash /tmp/s.sh"
+        ),
+        "echo-script-then-source": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; . /tmp/s"),
+        "echo-script-run-by-path": bash("echo 'rm -rf ~/.claude/x' >> /tmp/s.sh; /tmp/s.sh"),
+        "echo-script-nohup": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; nohup /tmp/s"),
+        "echo-script-to-python": bash(
+            "echo \"import shutil; shutil.rmtree('$HOME/.claude')\" > /tmp/s.py; python3 /tmp/s.py"
+        ),
+        "tee-script-then-sh": bash("echo 'rm -rf ~/.claude/x' | tee /tmp/s; sh /tmp/s"),
+        "listing-made-script": bash(
+            "ls -d ~/.claude/skills/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s"
+        ),
+        "group-made-script": bash("{ echo 'rm -rf ~/.claude/x'; } > /tmp/s; sh /tmp/s"),
+        "loop-made-script": bash(
+            'for f in ~/.claude/skills/*; do echo "rm -rf $f"; done > /tmp/s; bash /tmp/s'
+        ),
+        "exec-made-script": bash("exec > /tmp/s; echo 'rm -rf ~/.claude/x'; sh /tmp/s"),
+        "subshell-made-script": bash("(echo 'rm -rf ~/.claude/x') > /tmp/s; sh /tmp/s"),
+        "if-made-script": bash("if true; then echo 'rm -rf ~/.claude/x'; fi > /tmp/s; sh /tmp/s"),
+        "env-runs-made-script": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; env sh /tmp/s"),
+        "find-runs-made-script": bash(
+            "echo 'rm -rf ~/.claude/x' > /tmp/s; find /tmp -name s -exec sh {} \\;"
+        ),
+        "variable-runs-made-script": bash("echo 'rm -rf ~/.claude/x' > /tmp/s; $RUN /tmp/s"),
         "cwd-in-folder": bash("rm -rf skills", cwd=str(folder)),
         "cwd-in-folder-redirect": bash("echo x > CLAUDE.md", cwd=str(folder / "skills")),
         "cwd-in-folder-read-then-rm": bash("ls skills; rm -rf skills", cwd=str(folder)),
@@ -4419,6 +4445,15 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         ),
         "filter-sed-jq": bash("cat ~/.claude/a.jsonl | sed -n 2p | jq .type | tail -1"),
         "read-to-file-outside": bash("grep x ~/.claude/a > /tmp/out"),
+        "read-to-file-then-count": bash("grep x ~/.claude/a > /tmp/out; wc -l /tmp/out"),
+        "read-word-naming-a-shell": bash("grep -c bash ~/.claude/a > /tmp/n"),
+        "script-output-to-file": bash("bash ~/.claude/skills/x/run.sh > /tmp/log"),
+        "echo-to-file-then-git": bash("echo see ~/.claude/a > /tmp/n.md; git status"),
+        "read-to-file-then-assign": bash("tr -d x < ~/.claude/a > /tmp/b; F=/tmp/b; wc -l $F"),
+        "read-to-file-then-dot-pattern": bash("cut -c1-9 ~/.claude/a > /tmp/b; grep -c . /tmp/b"),
+        "note-written-then-script-reads-elsewhere": bash(
+            "echo done > /tmp/n; sh ~/proj/x.sh; J=~/.claude/a; grep -c x $J"
+        ),
         "read-appended-outside": bash("grep x ~/.claude/a >> /tmp/out"),
         "read-sorted-to-file-outside": bash("ls ~/.claude/p | sort > /tmp/x"),
         "input-redirect-wc": bash("wc -l < ~/.claude/a.jsonl"),

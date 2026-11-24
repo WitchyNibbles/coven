@@ -495,6 +495,12 @@ RUNS_COMMAND = re.compile(r"\$\(|`|[<>]\(")  # a command substitution or a proce
 INTERPRETERS = frozenset(
     {*("node", "perl", "ruby", "awk", "gawk", "mawk", "nawk", "sqlite3", "php", "lua", "deno")}
 )
+# What runs code from a file or standard input, by name: a file a read writes in the same text may
+# be what it runs (`echo 'rm -rf ~/.claude' > /tmp/s; sh /tmp/s`), as may a program by its path.
+CODE_RUNNERS = frozenset(
+    {*SHELL_READERS, *INTERPRETERS, *SCRIPT_RUNNERS, "xargs", "exec", "nohup", "setsid", "env"}
+    | {*("stdbuf", "watch", "flock", "chrt", "ionice", "taskset", "strace", "ltrace")}
+)
 # How code finds a home folder without writing it down: with `.claude` in the same code, it names
 # the zone.
 HOME_LOOKUP = re.compile(r"expanduser|Path\.home|homedir|HOME|getpwuid|getpass")
@@ -1271,7 +1277,8 @@ class _ShellWord(_Written, Protocol):
 
 class _SimpleCommand(Protocol):
     """A shell_words.Command: its words, its heredocs, the files it writes and its other
-    redirection targets, and whether a pipe joins it to another command."""
+    redirection targets, whether it writes a file at all, and whether a pipe joins it to another
+    command."""
 
     @property
     def words(self) -> list[_ShellWord]: ...
@@ -1293,6 +1300,9 @@ class _SimpleCommand(Protocol):
 
     @property
     def argument_writes(self) -> list[str | None]: ...
+
+    @property
+    def writes(self) -> bool: ...
 
     @property
     def in_pipeline(self) -> bool: ...
@@ -3753,8 +3763,73 @@ def _reads_only(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bo
 
 def _only_reads_text(command: str, zone: _Zone, cwd: str) -> bool:
     """Whether a Bash command, for a zone with `cd_reads` or `loop_reads`, only reads
-    (`_reads_only`): it writes nothing wherever it goes, so it reaches the zone by no write."""
-    return (zone.cd_reads or zone.loop_reads) and _text_reads(command, zone, cwd)
+    (`_reads_only`): it writes nothing wherever it goes, so it reaches the zone by no write. Not
+    when a read writes a file that code of the text may run (`_feeds_code`)."""
+    if not (zone.cd_reads or zone.loop_reads):
+        return False
+    commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
+        command, substitutions=True
+    )
+    return (
+        commands is not None and not _feeds_code(commands, zone) and _text_reads(command, zone, cwd)
+    )
+
+
+def _runs_code_from_file(each: _SimpleCommand, zone: _Zone) -> bool:
+    """Whether a simple command may run code from a file or standard input: after its leading
+    assignments and wrappers, a program by its path (but a reader in TRUSTED_READER_FOLDERS) or
+    one the guard cannot name (`$RUN`), a CODE_RUNNERS or python program, or a `find` that runs a
+    command. Not the closer of a compound command (`}`, `done`)."""
+    words = _proper_words(each.words)
+    while words and ASSIGNMENT.match(words[0].raw):
+        words = words[1:]
+    words = _unwrap(words, zone)
+    if not words or words[0].raw in GROUP_CLOSERS:
+        return False
+    name = _program_name(words[0], zone)
+    if name is None:
+        return True
+    base = _basename(name)
+    if "/" in name or base in CODE_RUNNERS or PYTHON_NAME.fullmatch(base):
+        return True
+    return base == "find" and any(
+        (word.value or "").startswith(("-exec", "-ok")) for word in words[1:]
+    )
+
+
+def _writes_text(each: _SimpleCommand, zone: _Zone) -> bool:
+    """Whether a simple command writes a file (not /dev/null) with text it was given or read: any
+    writer but code that runs (`_runs_code_from_file`: its output is its own)."""
+    return each.writes and (_writes_for_many(each) or not _runs_code_from_file(each, zone))
+
+
+def _writes_for_many(each: _SimpleCommand) -> bool:
+    """Whether a simple command's redirection takes the output of other commands: the closer of a
+    compound command (`} > f`, `done > f`, a subshell's `) > f`), or a bare `exec > f`."""
+    words = [word.raw for word in _proper_words(each.words)]
+    return each.writes and (not words or words[0] in GROUP_CLOSERS or words == ["exec"])
+
+
+def _feeds_code(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
+    """Whether a text, for a zone with `shell_reads`, writes a file with text (`_writes_text`) and
+    runs code that may run that file (`_runs_code_from_file`): what a read prints there may become
+    a script (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
+    return (
+        zone.shell_reads
+        and any(_writes_text(each, zone) for each in commands)
+        and any(_runs_code_from_file(each, zone) for each in commands)
+    )
+
+
+def _read_runs(
+    commands: Sequence[_SimpleCommand], zone: _Zone, *, feeding: bool
+) -> Iterator[list[_SimpleCommand]]:
+    """The runs of a text (`_pipelines`) whose reads may be blanked: in a text that feeds code
+    (`feeding`, `_feeds_code`), not a run that writes a file with text (`_writes_text`), whose
+    reads are what the file holds."""
+    for run in _pipelines(commands):
+        if not (feeding and any(_writes_text(each, zone) for each in run)):
+            yield run
 
 
 def _only_reads_value(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
@@ -3792,13 +3867,14 @@ def _blankable(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
 
 
 def _command_spans(
-    commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str
+    commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str, *, feeding: bool
 ) -> list[tuple[int, int]]:
     """The spans of the commands of a text that only read (`_blankable`), for a zone with
-    `shell_reads`, each in a pipeline only when the rest of it only prints (`_filters`)."""
+    `shell_reads`, each in a pipeline only when the rest of it only prints (`_filters`), in a run
+    whose reads may be blanked (`_read_runs`)."""
     return [
         (each.start, each.end)
-        for run in _pipelines(commands)
+        for run in _read_runs(commands, zone, feeding=feeding)
         for each in run
         if zone.shell_reads
         and (len(run) == 1 or _filters(run, each, zone))
@@ -3815,7 +3891,10 @@ def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
     None when the scanner cannot follow the command (shell_words.simple_commands), when the shell
     may hand a read's words to a later command (WORDS_HANDED_ON: `$_`, a trap's
     `$BASH_COMMAND`), or when a group, subshell, loop or `if` is piped, since its own commands
-    are not marked as in the pipeline (`(find x) | xargs rm`): it is then read whole."""
+    are not marked as in the pipeline (`(find x) | xargs rm`): it is then read whole. So is a
+    text that feeds code (`_feeds_code`) with a redirection that takes many commands' output
+    (`_writes_for_many`); in one without, a run that writes such a file is not blanked
+    (`_read_runs`)."""
     if WORDS_HANDED_ON.search(command):
         return []
     commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
@@ -3825,6 +3904,9 @@ def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
         each.in_pipeline and (not each.words or each.words[0].raw in GROUP_CLOSERS)
         for each in commands
     ):
+        return []
+    feeding = _feeds_code(commands, zone)
+    if feeding and any(_writes_for_many(each) for each in commands):
         return []
     lone = [
         word
@@ -3838,12 +3920,12 @@ def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
         view = _bound_view(commands, folders, zone)
         spans = [
             (word.start, word.end)
-            for run in _pipelines(view)
+            for run in _read_runs(view, zone, feeding=feeding)
             for reader in run
             if len(run) == 1 or _filters(run, reader, zone)
             if not zone.shell_reads or all(_substitutions_read(w, zone, cwd) for w in reader.words)
             for word in _command_reads(reader.words, zone, folders)
-        ] + _command_spans(view, zone, cwd)
+        ] + _command_spans(view, zone, cwd, feeding=feeding)
         kept = {name: word for name, word in folders.items() if _only_read(word, command, spans)}
         if kept == folders:
             break
