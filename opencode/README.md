@@ -84,7 +84,7 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   the search pattern as the resource, never `read` on the files they search, so the `read` rules
   above do not apply to them (`grep` returns line previews; `glob` returns paths only). The guard
   fails closed: an error or a timeout (`guardTimeoutMs`, 5 s) refuses the call. Other tools (MCP,
-  `webfetch`, `subagent`, `skill`) pass, as on Claude Code.
+  `webfetch`, `subagent`, `skill`) pass the guard, as on Claude Code.
 
 - `run` checks that the runtime reports the pinned version, warns by name when the key variable is
   unset, and replaces itself with OpenCode in the profile's environment. Arguments for OpenCode
