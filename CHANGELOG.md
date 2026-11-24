@@ -45,7 +45,7 @@
   run in the same call, an MCP tool's relative path or `file://` URL into the folder, and a job
   folder write in a text that changes word splitting (`IFS=/`, zsh's `setopt shwordsplit`). A
   long word or one with many braces (minified JSON) is decided in linear time, and a word with
-  more braces than 64 words could need counts as one the guard cannot expand (#PR).
+  more braces than 64 words could need counts as one the guard cannot expand (#28).
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).
