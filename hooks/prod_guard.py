@@ -3079,16 +3079,45 @@ def _may_hold_zone(target: str, zone: _Zone) -> bool:
 
 def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether something in the text changes or replaces a root of the zone or a folder holding
-    one. The folder a relative operand is read from follows the `cd`s of the text; after one that
-    cannot be followed (`cd "$X"`, `cd -`), a relative operand counts when it can name a holder."""
+    one, or for a zone with `writes_inside` names a path inside it (`_names_inside`). The folder a
+    relative word is read from follows the `cd`s of the text; after one that cannot be followed
+    (`cd "$X"`, `cd -`), a relative operand counts when it can name a holder."""
     current: str | None = cwd
     for step in _write_targets(text):
         if any(_changes_holder(target, current, zone) for target in step.targets):
             return True
         if zone.own and _changes_own(step, current, zone):
             return True
+        if zone.writes_inside and any(_names_inside(word, current, zone) for word in step.words):
+            return True
         if step.moves:
             current = _after_cd(current, step.folder)
+    return False
+
+
+def _word_paths(word: str) -> list[str]:
+    """The paths a word may name: itself, what follows its `=` (`of=x`, `--output=x`) and what
+    follows a short option's letter (`-ox`); never an option."""
+    found = [word, word.partition("=")[2]]
+    if word.startswith("-") and not word.startswith("--"):
+        found.append(word[2:])
+    return [path for path in found if path and not path.startswith("-")]
+
+
+def _names_inside(word: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a word that is no glob names a path in the zone (`_word_paths`, `_in_zone`), read
+    from the folder `current`. After a `cd` that cannot be followed (None), a relative path counts
+    when a part of it can name the zone or a folder that holds it (`_may_hold_zone`), not a bare
+    `.` or `..`. Globs are the glob checks' to judge."""
+    for path in _word_paths(word):
+        if GLOB_CHARS.intersection(path):
+            continue
+        if current is None and not path.startswith(("/", "~", "$")):
+            named = any(part not in ("", ".", "..") for part in path.split("/"))
+            if named and _may_hold_zone(path, zone):
+                return True
+        elif _in_zone(_resolve(path, current or os.sep), zone):
+            return True
     return False
 
 

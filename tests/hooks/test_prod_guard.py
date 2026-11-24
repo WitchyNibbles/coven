@@ -4165,6 +4165,23 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-home-variable-rm-inside": bash("cd $HOME && rm -rf .claude/skills"),
         "cd-unknown-rm-inside": bash('cd "$X" && rm -rf .claude/skills'),
         "cd-unknown-rm-json": bash('cd "$X" && rm .claude.json'),
+        "cd-home-sed-in-place": bash("cd ~ && sed -i s/a/b/ .claude/CLAUDE.md"),
+        "cd-home-touch": bash("cd ~ && touch .claude/x"),
+        "cd-home-mkdir": bash("cd ~ && mkdir -p .claude/x"),
+        "cd-home-dd": bash("cd ~ && dd if=/tmp/x of=.claude/x"),
+        "cd-home-curl": bash("cd ~ && curl -o .claude/x https://example.com/x"),
+        "cd-home-curl-glued": bash("cd ~ && curl -o.claude/x https://example.com/x"),
+        "cd-home-sort-output": bash("cd ~ && sort --output=.claude/x /tmp/a"),
+        "cd-home-patch": bash("cd ~ && patch .claude/x /tmp/p"),
+        "cd-home-touch-json": bash("cd ~ && touch .claude.json"),
+        "cd-home-then-folder-touch": bash("cd ~ && cd .claude && touch x"),
+        "cd-project-touch-up": bash("cd ~/proj && touch ../.claude/x"),
+        "cd-home-variable-sed": bash("cd $HOME && sed -i s/a/b/ .claude/CLAUDE.md"),
+        "cd-braced-home-variable-touch": bash('cd "${HOME}" && touch .claude/x'),
+        "bare-cd-touch": bash("cd && touch .claude/x"),
+        "cd-back-touch": bash("cd - && touch .claude/x"),
+        "cd-unknown-sed": bash('cd "$X" && sed -i s/a/b/ .claude/x'),
+        "cd-unknown-touch-up": bash('cd "$X" && touch ../.claude/x'),
         "cwd-in-folder": bash("rm -rf skills", cwd=str(folder)),
         "cwd-in-folder-redirect": bash("echo x > CLAUDE.md", cwd=str(folder / "skills")),
         "cwd-in-folder-read-then-rm": bash("ls skills; rm -rf skills", cwd=str(folder)),
@@ -4306,6 +4323,17 @@ def test_a_custom_claude_config_dir_is_a_zone_where_it_is(
         assert run(payload, env=env).returncode == 0
     assert run(bash(f"cd {folder} && ls skills"), role="pm", env=env).returncode == 0
     assert run(bash(f"cat {folder}/CLAUDE.md"), role="pm", env=env).returncode == 0
+
+
+def test_a_custom_claude_config_dir_is_followed_after_a_cd(run: Run, store: Path) -> None:
+    folder = home() / "cfgdir"
+    env = {"CLAUDE_CONFIG_DIR": str(folder)}
+    for command in ("cd ~ && touch cfgdir/x", "cd ~ && sed -i s/a/b/ cfgdir/CLAUDE.md"):
+        proc = run(bash(command), role="pm", env=env)
+        assert proc.returncode == 2, command
+        assert FOLDER_REFUSAL in proc.stderr
+        assert run(bash(command), env=env).returncode == 0
+    assert run(bash("cd ~ && cat cfgdir/CLAUDE.md"), role="pm", env=env).returncode == 0
 
 
 def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
@@ -4479,6 +4507,17 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-repo-git-worktree-remove": bash("cd ~/proj && git worktree remove .claude/worktrees/x"),
         "ln-lookalike": bash("ln -s a ~/.claude-x"),
         "cwd-repo-relative-worktree-rm": bash("rm -rf .claude/worktrees/x", cwd=str(user / "proj")),
+        "cd-home-cat-relative": bash("cd ~ && cat .claude/CLAUDE.md"),
+        "cd-home-grep-relative": bash("cd ~ && grep -r x .claude/agents | head"),
+        "cd-home-list-then-git": bash("cd ~ && ls -la .claude; git status"),
+        "cd-project-touch": bash("cd ~/proj && touch notes.md"),
+        "cd-home-touch-lookalike": bash("cd ~ && touch .claude-notes"),
+        "cd-unknown-touch": bash('cd "$X" && touch notes.md'),
+        "cd-project-edit-own-claude": bash("cd ~/proj && sed -i s/a/b/ .claude/worktrees/x/f.py"),
+        "cd-home-heredoc-naming-it": bash(
+            "cd ~ && cat > /tmp/n.md <<'EOF'\nsee .claude/CLAUDE.md\nEOF"
+        ),
+        "cd-home-commit-message": bash("cd ~/proj && git commit -m 'edit ../.claude/CLAUDE.md'"),
     }
 
 
