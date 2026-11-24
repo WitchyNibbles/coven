@@ -117,7 +117,8 @@ applies only the ones you pick. The changes:
 - `crossSessionInbound: accept` in the same file, needed only for the GM and PMs to message each
   other;
 - a `coven` shim in `~/.local/bin`, so the command works in your own terminal (inside Claude Code
-  you can always run `!coven ...`);
+  you can always run `!coven ...`). It runs the installed plugin's CLI, or the clone it was written
+  from when the plugin is not installed;
 - the PM cap (below) and the memory store's path and remote, written to
   `~/.config/coven/config.json`;
 - the memory store itself (below).

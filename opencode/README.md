@@ -46,14 +46,20 @@ OpenCode's own models instead of a gateway, pass `--preset opencode` to `setup` 
 
 **Run coven from a git checkout.** A wheel install (`pip install`, or `uv tool install` without
 `-e`) ships only `src/` (`only-include = ["src"]` in `pyproject.toml`), so setup cannot find
-`opencode/` and `hooks/`. Do not use `coven setup --shim` here: the shim it writes looks up Claude
-Code's coven plugin and exits with "plugin coven@coven is not installed".
+`opencode/` and `hooks/`. Every `coven opencode` command then stops at once, saying it needs a full
+copy of the coven repo (a git clone).
+
+**The `coven` command.** The `ln -s` line above is enough. Or run `~/coven/bin/coven setup --yes
+--shim` from the clone: it writes `~/.local/bin/coven` (and, as `setup` always does, coven's config
+and the memory store). The shim runs Claude Code's coven plugin when that is installed. Without
+Claude Code it falls back to the clone it was written from.
 
 **Moving the clone.** Setup writes the checkout's path into `opencode.jsonc` as the plugin option
 `covenRoot`. If you move or delete the clone, `doctor`'s `coven root` check fails, and the
 plugin's deny-secrets guard cannot start `hooks/deny_secrets.py`. The guard fails closed, so the
 tools it covers are refused. Run `coven opencode setup` from the new place; with no flags it
-regenerates from `profile.json`.
+regenerates from `profile.json`. A shim written from the clone breaks the same way (its
+fallback names the old path); run `coven setup --yes --shim` from the new place to rewrite it.
 
 **The base URL.** `--base-url` is the URL the gateway serves the OpenAI-compatible API under; for a
 LiteLLM proxy that usually ends in `/v1`. Coven drops one trailing `/` and hands the rest to

@@ -7,6 +7,9 @@
   `tool_choice` hook for LiteLLM and vLLM gateways) and an offline end-to-end run.
 - The README and `opencode/README.md` say how to install and run coven on OpenCode without Claude
   Code, and `docs/known-gaps.md` lists the OpenCode gaps.
+- The shim from `coven setup --shim` now falls back to the clone that wrote it when Claude Code's
+  coven plugin is not installed, so `coven` works without Claude Code. `coven opencode` in a wheel
+  install stops with a message asking for a git clone, instead of failing inside setup.
 - `coven opencode setup` now ships coven's skills (`coven-*`), role agents, the `/coven-grill-me`
   and `/coven-handoff` commands and the routing, rendered from the Claude Code content by
   `python -m coven.opencode.content`; it copies eight superpowers skills from your Claude Code

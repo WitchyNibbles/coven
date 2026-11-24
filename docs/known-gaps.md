@@ -366,7 +366,8 @@ What `coven opencode` does not do, or does not know. The install steps are in
 - Superpowers skills come only from Claude Code's superpowers plugin. Without it, a step that loads
   one is skipped.
 - Coven runs from a full copy of the repo (a git clone), not an installed wheel: `opencode/` and
-  `hooks/` must sit beside `src/`. Moving it breaks `covenRoot` and the deny-secrets guard until
-  `coven opencode setup` runs again.
+  `hooks/` must sit beside `src/`, and `coven opencode` refuses to start without them. Moving the
+  clone breaks `covenRoot` and the deny-secrets guard until `coven opencode setup` runs again, and
+  breaks the shim's fallback until `coven setup --shim` runs again.
 - Tested on Linux and WSL 2 with Node 24 only. No CI job installs the real OpenCode: the
   end-to-end run needs `unshare` and a 2.3.2 binary.

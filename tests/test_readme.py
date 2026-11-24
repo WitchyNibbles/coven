@@ -346,7 +346,7 @@ def test_the_opencode_install_section_has_each_paragraph() -> None:
         "git clone",
         "bin/coven",
         "only `src/`",  # why a clone, not a wheel
-        "plugin coven@coven is not installed",  # why not the Claude Code shim
+        "falls back to the clone",  # the shim works without Claude Code
         "`covenRoot`",  # moving the clone
         "`coven root` check fails",
         "regenerates from `profile.json`",
