@@ -5431,6 +5431,7 @@ SUBSCRIPT_RUNS: dict[str, str] = {
     "array-subscript": 'a=(x y); echo "${a[D]}"',
     "zsh-subscript": "a=(x y); echo $a[D]",
     "printf-number": 'printf %d "$D"',
+    "count-or-variable": 'n=$(grep -c x ~/.claude/a || echo "$D"); [ "$n" -ge 2 ]',
     "break-count": 'for f in x; do break "$D"; done',
     "exit-status": 'exit "$D"',
 }
@@ -5471,6 +5472,9 @@ def test_an_assignment_that_keeps_command_text_is_no_read(
         '[ "$x" = y ] && cat ~/.claude/CLAUDE.md',
         "[ -n \"$(ls ~/.claude)\" ] && ls ~/.claude",
         "n=$(grep -c x ~/.claude/a); printf '%d files\\n' \"$n\"; ls ~/.claude",
+        'n=$(grep -c x ~/.claude/a 2>/dev/null || echo 0); [ "$n" -ge 2 ] && ls ~/.claude',
+        '[ "$(grep -c x ~/.claude/a || grep -c y ~/.claude/a)" -gt 6 ] && ls ~/.claude',
+        'n=$([ -f ~/.claude/a ] && grep -c x ~/.claude/a || echo 0); [ "$n" -ge 2 ]',
         "D=~/.claude/skills; ls \"$D\"",
     ],
     ids=[
@@ -5479,6 +5483,9 @@ def test_an_assignment_that_keeps_command_text_is_no_read(
         "bracket-equals",
         "count-test",
         "printf-count",
+        "count-or-zero",
+        "count-or-count",
+        "tested-count",
         "assigned-path",
     ],
 )

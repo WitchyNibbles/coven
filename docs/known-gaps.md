@@ -192,8 +192,8 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   the user folder only, and the other zones read the word as it is written. A read stops being one
   when a command may read a value as a variable name or a number and the guard cannot tell the
   value is a number (`test -v "$D"`, `[ "$n" -eq 1 ]`, `${!D}`, `$((D))`, a printf `%d`, zsh's
-  `exit "$n"`): a subscript in it runs its `$(...)`. A count (`$(grep -c x f)`, `$(... | wc -l)`),
-  an integer and a variable the text sets only to one of these are numbers. A `cd` or `pushd` with
+  `exit "$n"`): a subscript in it runs its `$(...)`. A count (`$(grep -c x f)`, `$(... | wc -l)`,
+  `$(grep -c x f || echo 0)`), an integer and a variable the text sets only to one of these are numbers. A `cd` or `pushd` with
   two operands (zsh's `cd old new`) is not followed: a relative write after it is refused. A leading `$PWD` or `~+` is read as the
   folder the session is in. Any write under `/proc` or `/dev` is refused (`/proc/self/cwd` is the
   shell's folder), but `/dev/null`, `/dev/stdout`, `/dev/stderr` and `/dev/tty`. A read stops

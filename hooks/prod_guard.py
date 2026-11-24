@@ -4571,20 +4571,36 @@ def _number_arithmetic(raw: str, numbers: frozenset[str]) -> bool:
 
 
 def _counts(text: str) -> bool:
-    """Whether a substitution's text prints only a count: one pipeline whose last command is a
-    `grep -c` of one file or of its input, or a `wc` of its input with COUNT_OPTIONS alone."""
+    """Whether a substitution's text prints only numbers: every pipeline of it (`a || echo 0`)
+    ends in a command that prints a count or an integer, or a test that prints nothing
+    (`_prints_number`)."""
     commands = _scanned_commands(text)
-    if not commands or not all(each.after_pipe for each in commands[1:]):
+    if not commands:
         return False
-    words = _proper_words(commands[-1].words)
-    if not words or words[0].value not in COUNTERS:
+    pairs = zip(commands, [*commands[1:], None], strict=True)
+    ends = [each for each, after in pairs if not (after and after.after_pipe)]
+    return all(_prints_number(_proper_words(each.words)) for each in ends)
+
+
+def _prints_number(words: Sequence[_ShellWord]) -> bool:
+    """Whether a command prints only a number or nothing: a `grep -c` of one file or of its
+    input, a `wc` of its input with COUNT_OPTIONS alone, an `echo` of integers, or a test that
+    reads no word as a number or name (`[ -f x ]`)."""
+    if not words:
         return False
-    letters = [_option_letters(word) for word in words[1:] if (word.value or "").startswith("-")]
-    operands = [word for word in words[1:] if not (word.value or "x").startswith("-")]
+    name, args = words[0].value, words[1:]
+    if name == "echo":
+        return all(INTEGER.fullmatch(word.value or "x") for word in args)
+    if name in TEST_COMMANDS:
+        return _evaluated_words(words) == []
+    if name not in COUNTERS:
+        return False
+    letters = [_option_letters(word) for word in args if (word.value or "").startswith("-")]
+    operands = [word for word in args if not (word.value or "x").startswith("-")]
     if any(letter is None for letter in letters):
         return False
     flags = set("".join(letter or "" for letter in letters))
-    if words[0].value == "wc":
+    if name == "wc":
         return not operands and flags <= COUNT_OPTIONS
     return "c" in flags and len(operands) <= (1 if flags & {"e", "f"} else 2)
 
