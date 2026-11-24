@@ -3761,6 +3761,17 @@ def _runs_program(name: str, args: Sequence[_ShellWord]) -> bool:
     )
 
 
+def _copy_operands(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The operands of `cp`, when its options are only COPY_OPTIONS letters; None otherwise."""
+    options = [word for word in args if _unquoted(word.raw).startswith("-")]
+    if any(
+        letters is None or not set(letters) <= COPY_OPTIONS
+        for letters in map(_option_letters, options)
+    ):
+        return None
+    return [word for word in args if word not in options]
+
+
 def _copy_sources(name: str, args: Sequence[_ShellWord]) -> list[_ShellWord]:
     """The sources of `cp` (every operand but the last, which is where it writes) and of `tar`
     creating an archive (`tar -cf ARCHIVE SRC...`: every operand after the archive), when its
@@ -3770,14 +3781,8 @@ def _copy_sources(name: str, args: Sequence[_ShellWord]) -> list[_ShellWord]:
     if _may_expand([word for word in args if not word.raw.startswith("~")]):
         return []
     if name == "cp":
-        options = [word for word in args if _unquoted(word.raw).startswith("-")]
-        if any(
-            letters is None or not set(letters) <= COPY_OPTIONS
-            for letters in map(_option_letters, options)
-        ):
-            return []
-        operands = [word for word in args if word not in options]
-        return operands[:-1]
+        operands = _copy_operands(args)
+        return [] if operands is None else operands[:-1]
     cluster = (args[0].value or "").removeprefix("-") if args else ""
     operands = list(args[1:])
     if "c" not in cluster or not set(cluster) <= ARCHIVE_OPTIONS:
@@ -4093,15 +4098,10 @@ def _sed_reads(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
 def _copies_out(args: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
     """Whether `cp` only copies to a place outside the zone: its options are only COPY_OPTIONS,
     its last operand is the destination (`_outside_zone`), and no source may expand to an option."""
-    options = [word for word in args if _unquoted(word.raw).startswith("-")]
-    if any(
-        letters is None or not set(letters) <= COPY_OPTIONS
-        for letters in map(_option_letters, options)
-    ):
-        return False
-    operands = [word for word in args if word not in options]
+    operands = _copy_operands(args)
     return (
-        len(operands) >= 2
+        operands is not None
+        and len(operands) >= 2
         and not _expands_to_option(operands)
         and _outside_zone(operands[-1].value, zone, cwd)
     )
