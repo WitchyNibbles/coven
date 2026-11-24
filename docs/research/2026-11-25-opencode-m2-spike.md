@@ -9,13 +9,15 @@ against the OpenCode that coven installs (`@opencode/cli` 2.3.2, `opencode v2.3.
 **Go with changes.** Every piece the hierarchy needs exists on 2.3.2 and was seen working: one
 `opencode serve` holding sessions in several directories, messages between sessions, a turn-end
 signal on one event stream, unattended PM sessions, a role that reaches child sessions, coven's
-plugin loaded per directory, and launch, list, stop and resume over a documented OpenAPI.
+plugin loaded per directory, and launch, list, stop and resume over a documented OpenAPI. The
+one thing not seen is deny-secrets refusing a read inside a served session (item f); the code
+path is the same as on `run`, where it was seen.
 
 The changes are mostly in how the 1.x plan names things (paths, events, where the role and the
 ruleset live). Two of them are new work the plan did not have: secrets reach every shell
 command unless the plugin scrubs them, and a PM tree must turn asks into refusals in-process.
-The research doc said 2.x has "no per-session env" and that the only way was one server per
-role. That is wrong on 2.3.2: one server is enough.
+The research doc said 2.x has "no per-session env" and assumed one server per role. That is
+wrong on 2.3.2: one server is enough.
 
 ## How it was run
 
@@ -46,7 +48,7 @@ role. That is wrong on 2.3.2: one server is enough.
 | b. one session messages another, the reply comes back | yes | the GM's `spike_send` called `ctx.session.prompt({sessionID, text, delivery: "queue"})` into the PM (another directory), the PM's `spike_send` answered, and the GM woke on `[from ses_df041b39…] DONE m2/b: ...`, 0.6 s end to end |
 | c. a turn-end notice seen on the event stream by a watcher | yes, different names | `GET /api/event` carries every location. 909 events, 0 `session.idle` (it is in the schema, never sent). The signal is `session.execution.succeeded` (also `failed`, `interrupted`). The watcher posted `[coven idle notice] ...` into the GM, which woke and answered |
 | d. PM ruleset with no asks runs unattended; meeting an ask anyway | yes, with session rules and a hook | PM shell, edit and push calls ran with nothing waiting. A child under the PM with its own agent (`implementer`) fell back to the profile's `shell * ask` and waited (`permission.asked` event, `GET /api/session/{child}/permission`) until an API reply `{"decision":"once"}`. With the PM's rules on the session instead (children copy them), the child ran unattended. With `permission.hook("evaluate")` the plugin turned an ask into a deny for the PM and for a child of the PM: `ask turned into deny for pm tree`, the tool got `permission.rejected`. A control ask with no hook was still pending after 2 min 26 s and its session read `running` in `/api/session/active` |
-| e. a session role reaching child sessions | yes, two ways | metadata `{"coven":{"role":"pm"}}` given at create is copied to every child (`role=pm via=own metadata` for the implementer child). `PUT /api/session/{id}/environment` gave the PM's shell `ROLE=[pm]` but is not copied to children (`CHILDROLE=[]`) and is lost on restart. The plugin's `shell.hook("create.before")` can edit `event.env`: it set the role from metadata for the PM and its child (`HOOK=[pm]`), also after a restart |
+| e. a session role reaching child sessions | yes, two ways | metadata `{"coven":{"role":"pm"}}` given at create is copied to every child (`role=pm via=own metadata` for the implementer child). `PUT /api/session/{id}/environment` gave the PM's shell `ROLE=[pm]` but is not copied to children (`CHILDROLE=[]`) and is lost on restart. The plugin's `shell.hook("create.before")` can edit `event.env`: it set the role from metadata for the PM and its child (`HOOK=[pm]`), also after a restart. That hook has no session id, so the spike paired it with the preceding `execute.before`; under parallel shell calls the pairing is a guess (change 5) |
 | f. coven's plugin in served sessions; deny-secrets refusing an env-file read | plugin yes; served refusal not checked | `GET /api/plugin` lists `coven` `active`; `coven_ping` in the PM session returned `{"plugin":"coven","version":"0.1.0",...}`. The repo's offline e2e: `ok 4 - deny-secrets: read and cat of .env are refused` (5/5, on `opencode run --standalone`). The served-session probe was not run: the Claude session's own guard refuses the probe text, and it was not routed around. From the code, the path is the same (see below) |
 | g. launch, list, resume and stop over the HTTP API | yes | see "The API a `coven pm` would sit on" |
 
@@ -99,8 +101,8 @@ research doc (`/session`, `prompt_async`, `/global/event`, `/session/status`) do
    PM rules on the session, and the role agents keep their own narrowing rules.
 4. **Asks turn into refusals in-process.** On 1.x the plan was "name every key that asks". On 2.3.2
    `permission.hook("evaluate")` fires (the research doc had seen it register, not fire) and can
-   set `effect = "deny"`. coven's plugin does that for any session whose role is `pm`, and the
-   refusal reaches the model as `permission.rejected`. The same hook is the natural home for
+   set `effect = "deny"`. The spike plugin did that for any session whose role is `pm`, and the
+   refusal reached the model as `permission.rejected`; coven's plugin would do the same. The same hook is the natural home for
    pm-permissions decisions, next to `execute.before`.
 5. **The role comes from metadata, and a plugin hook puts it into the shell env.** `metadata`
    at create is copied to every child and survives restarts. `shell.hook("create.before")` has no
@@ -131,9 +133,10 @@ research doc (`/session`, `prompt_async`, `/global/event`, `/session/status`) do
 
 ## Re-estimate at agent speed
 
-Agent wall-clock time with an implementer and a reviewer per piece, from what PRs of this size
-took in coven this week (a one-file generator change with review and CI: about 40 minutes). The
-human gates are separate: the brainstorm on the questions below, the spec review, and PR reviews.
+Agent wall-clock time with an implementer and a reviewer per piece. These are judgement, with
+one data point behind them: a one-file generator change in coven this week took about 40
+minutes with review and CI. The human gates are separate: the brainstorm on the questions
+below, the spec review, and PR reviews.
 
 | Piece | Agent time |
 |---|---|
@@ -142,12 +145,13 @@ human gates are separate: the brainstorm on the questions below, the spec review
 | `coven pm status/health/resume/stop` on the API (replaces about 900 lines of transcript parsing) | 3-4 h |
 | Plugin: `coven_send` and `coven_sessions` tools (prefix check from `pm/text.py`), role from metadata, env injection and secret scrub in `create.before`, ask-to-deny in `permission.hook` | 3-5 h |
 | pm-permissions in `execute.before` / `evaluate` (the Python engine behind the adapter) | 3-4 h |
-| Turn-end watcher inside the plugin, one instance acting | 1-2 h |
+| Turn-end watcher inside the plugin, one instance acting (it can reuse the `ctx.event.subscribe` loop in `opencode/src/join/subscription.ts`) | 1-2 h |
 | Guard twin: refuse model access to the server API (`opencode api`, curl to its port, the password) | 1-2 h |
-| Fake-model e2e for the hierarchy (two sessions, send and reply, notice, ask-to-deny, role in a child, restart) | 2-3 h |
+| Fake-model e2e for the hierarchy (two sessions, send and reply, notice, ask-to-deny, role in a child, restart, deny-secrets in a served session, two PMs with parallel shell calls) | 2-3 h |
+| PM task list (phase 2 of the plan): 2.3.2 has no todo route, so `coven pm status` would read the todo tool's parts from the session messages, or drop it | 1 h, or out of scope |
 | `manager` and SDD skill text for `coven_send` and `coven pm ...` | 1-2 h |
 | Whole-branch review, docs, CI | 1-2 h |
-| **Total** | **17-28 h** of agent time, about 3-4 days of PM runs with the human gates |
+| **Total** | **17-29 h** of agent time, about 3-4 days of PM runs with the human gates |
 
 The research doc put phase 2 at 50-80 hours at human speed.
 
@@ -173,7 +177,9 @@ The research doc put phase 2 at 50-80 hours at human speed.
 - deny-secrets refusing a read in a served session (see f).
 - The TUI attached to the server, and `opencode service`.
 - Two PMs busy at once, and the `execute.before` / `create.before` pairing under parallel shell
-  calls.
+  calls. This is a go condition for the role-in-env design.
+- Whether session `permissions` survive a restart. After the restart the PM's shell ran
+  unattended, but its `pm` agent allows shell too, so that run does not tell.
 - `grep` or other tools reading the server's own environment through `/proc/self/environ`. The
   `read` tool failed only because the file is binary ("Cannot read binary file"), not because of
   a rule.
