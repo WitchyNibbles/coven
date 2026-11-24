@@ -515,9 +515,13 @@ CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
 # write may still go to: a stream or the terminal.
 ALIAS_FOLDERS = ("/proc", "/dev")
 DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
-# A brace expansion (`{a,b}`, `{1..3}`), and what `_glued_expansions` keeps in an expansion's
-# word: blanks, separators, parentheses, braces and backticks, as private-use characters.
-BRACE_LIST = re.compile(r"\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}")
+# A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words the guard reads one word as
+# (`_brace_members`), a range's text, and a word of a text that holds a brace.
+BRACE_MEMBERS = 64
+BRACE_RANGE = re.compile(r"(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?|(\D)\.\.(\D)(?:\.\.(-?\d+))?")
+BRACE_WORD = re.compile(r"[^\s;&|()<>`]*\{[^\s;&|()<>`]*")
+# What `_glued_expansions` keeps in an expansion's word: blanks, separators, parentheses, braces
+# and backticks, as private-use characters.
 GLUED = str.maketrans({char: chr(0xE000 + at) for at, char in enumerate(" \t\n;&|(){}`<>")})
 UNGLUED = str.maketrans({chr(0xE000 + at): char for at, char in enumerate(" \t\n;&|(){}`<>")})
 # What the user folder's zone adds to READ_COMMANDS: `rg` (it writes no file), and the commands
@@ -3097,14 +3101,23 @@ def _expanded(text: str, *, default: bool) -> str:
 
 
 def _expansions(text: str, glob_text: str) -> list[tuple[str, str]]:
-    """The text as written, and with its zone variables expanded each way, each with its glob text
-    expanded the same way: the check reads them all, since the command may run under other values
-    than the hook sees."""
-    pairs = (
-        (text, glob_text),
-        (_expanded(text, default=False), _expanded(glob_text, default=False)),
-        (_expanded(text, default=True), _expanded(glob_text, default=True)),
-    )
+    """The text as written and with its brace expansions written out (`_brace_expanded`), each
+    as it is and with its zone variables expanded each way, each with its glob text expanded the
+    same way: the check reads them all, since the command may run under other values than the
+    hook sees."""
+    sources = [(text, glob_text)]
+    braced, braced_glob = _brace_expanded(text), _brace_expanded(glob_text)
+    if braced is not None and braced_glob is not None:
+        sources.append((braced, braced_glob))
+    pairs = [
+        pair
+        for plain, globbing in sources
+        for pair in (
+            (plain, globbing),
+            (_expanded(plain, default=False), _expanded(globbing, default=False)),
+            (_expanded(plain, default=True), _expanded(globbing, default=True)),
+        )
+    ]
     return list(dict.fromkeys(pairs))
 
 
@@ -3413,8 +3426,122 @@ def _expansion_end(text: str, index: int) -> int:
     if text[index] == "`":
         close_at = text.find("`", index + 1)
         return len(text) if close_at < 0 else close_at + 1
-    match = BRACE_LIST.match(text, index)
-    return match.end() if match else index
+    if text[index] != "{":
+        return index
+    group = text[index : _closing_brace(text, index) + 1]
+    return index + len(group) if "," in group or ".." in group else index
+
+
+def _closing_brace(word: str, start: int) -> int:
+    """Where the brace that closes the `{` at `start` stands, nested braces counted; -1 when a
+    blank or the end of the text comes first."""
+    depth = 0
+    for at in range(start, len(word)):
+        char = word[at]
+        if char.isspace():
+            return -1
+        depth += (char == "{") - (char == "}")
+        if depth == 0:
+            return at
+    return -1
+
+
+class _Braces(NamedTuple):
+    """The first brace expansion of a word: where it starts, where it ends (past its `}`), and the
+    words it stands for, None when the guard cannot tell them (`_brace_group`)."""
+
+    start: int
+    end: int
+    alternatives: tuple[str, ...] | None
+
+
+def _brace_group(word: str) -> _Braces | None:
+    """The first brace expansion of a word: a `{...}` with a comma outside the braces in it
+    (`{a,{b,c}}`), or a range (`_range_members`); None when it has none. Not a `${`, nor a brace
+    that closes no list or range (`{}`, `{a}`). A range the guard cannot tell has no
+    alternatives: zsh expands `{1..$N}` after `$N`."""
+    index = 0
+    while (start := word.find("{", index)) >= 0:
+        index = start + 1
+        close = _closing_brace(word, start)
+        if close < 0 or word[start - 1 : start] == "$":
+            continue
+        content = word[start + 1 : close]
+        alternatives = _alternatives(content)
+        if len(alternatives) > 1:
+            return _Braces(start, close + 1, tuple(alternatives))
+        if ".." in content and UNPINNED_EXPANSION.search(content):
+            return _Braces(start, close + 1, None)
+        match = BRACE_RANGE.fullmatch(content)
+        if match:
+            return _Braces(start, close + 1, _range_members(match))
+    return None
+
+
+def _alternatives(content: str) -> list[str]:
+    """A brace list's words: its text cut at each comma outside the braces in it."""
+    found = [""]
+    depth = 0
+    for char in content:
+        depth += (char == "{") - (char == "}")
+        if char == "," and depth == 0:
+            found.append("")
+        else:
+            found[-1] += char
+    return found
+
+
+def _range_members(match: re.Match[str]) -> tuple[str, ...] | None:
+    """The words a brace range makes (BRACE_RANGE: `1..3`, `a..e`, `01..10..2`), zero-padded
+    when an end is; None past BRACE_MEMBERS."""
+    numbers = match[1] is not None
+    first, last, every = (match[1], match[2], match[3]) if numbers else match.group(4, 5, 6)
+    step = abs(int(every or 1)) or 1
+    low, high = (int(first), int(last)) if numbers else (ord(first), ord(last))
+    if abs(high - low) // step + 1 > BRACE_MEMBERS:
+        return None
+    values = range(low, high + (1 if high >= low else -1), step if high >= low else -step)
+    if not numbers:
+        return tuple(map(chr, values))
+    padded = any(len(end.lstrip("-")) > 1 and end.lstrip("-")[0] == "0" for end in (first, last))
+    width = max(len(first), len(last)) if padded else 0
+    return tuple(f"{value:0{width}d}" for value in values)
+
+
+def _brace_members(word: str) -> list[str] | None:
+    """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
+    `abd acd`, `{1..3}` is `1 2 3`, nested lists too); `[word]` when it has none. None when they
+    are more than BRACE_MEMBERS or one cannot be told (`_brace_group`)."""
+    group = _brace_group(word)
+    if group is None:
+        return [word]
+    if group.alternatives is None:
+        return None
+    heads: list[str] = []
+    for alternative in group.alternatives:
+        made = _brace_members(alternative)
+        if made is None:
+            return None
+        heads += made
+    tails = _brace_members(word[group.end :])
+    if tails is None or len(heads) * len(tails) > BRACE_MEMBERS:
+        return None
+    return [word[: group.start] + head + tail for head in heads for tail in tails]
+
+
+def _brace_expanded(text: str) -> str | None:
+    """`text` with each word that holds a brace expansion (BRACE_WORD) written as the words it
+    makes (`_brace_members`), as the shell runs it; None when a word makes words the guard cannot
+    tell or more than BRACE_MEMBERS."""
+    found: list[str] = []
+    last = 0
+    for match in BRACE_WORD.finditer(text):
+        members = _brace_members(match[0])
+        if members is None:
+            return None
+        found += [text[last : match.start()], " ".join(members)]
+        last = match.end()
+    return "".join(found) + text[last:]
 
 
 def _restored(step: _Step) -> _Step:
@@ -3442,8 +3569,10 @@ def _pinned(word: str, current: str | None) -> str:
 
 def _followed(word: str) -> bool:
     """Whether the guard reads a word as the shell does: it has no expansion of UNPINNED_EXPANSION or
-    FOLDER_EXPANSION."""
-    return not (UNPINNED_EXPANSION.search(word) or FOLDER_EXPANSION.search(word))
+    FOLDER_EXPANSION, and no brace expansion (`_brace_members`)."""
+    if UNPINNED_EXPANSION.search(word) or FOLDER_EXPANSION.search(word):
+        return False
+    return _brace_members(word) == [word]
 
 
 def _after_pinned_cd(current: str | None, folder: str | None) -> str | None:
@@ -3456,9 +3585,16 @@ def _after_pinned_cd(current: str | None, folder: str | None) -> str | None:
 
 
 def _may_name_zone(word: str, current: str | None, zone: _Zone) -> bool:
-    """Whether a word the guard does not follow may name the zone or a folder that holds it: it
-    has a folder expansion the guard cannot pin (FOLDER_EXPANSION) or a root's name
-    (`.claude`), or a component of it (`_part_may_name_zone`) may."""
+    """Whether a word the guard does not follow may name the zone or a folder that holds it: a
+    word its brace expansion makes may (`_member_may_name_zone`), or makes more than the guard
+    reads (`_brace_members`), or it has a folder expansion the guard cannot pin
+    (FOLDER_EXPANSION) or a root's name (`.claude`), or a component of it may
+    (`_part_may_name_zone`)."""
+    members = _brace_members(word)
+    if members is None:
+        return True
+    if members != [word]:
+        return any(_member_may_name_zone(member, current, zone) for member in members)
     if FOLDER_EXPANSION.search(word) or any(root.name in word for root in zone.roots):
         return True
     parts = word.split("/")
@@ -3471,6 +3607,14 @@ def _may_name_zone(word: str, current: str | None, zone: _Zone) -> bool:
             return True
         unknown = unknown or not followed
     return False
+
+
+def _member_may_name_zone(member: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a word a brace expansion makes may name the zone (`_may_name_zone`), or, when the
+    guard follows it, changes a holder of the zone or a path in it, or may alias a folder."""
+    if not _followed(member):
+        return _may_name_zone(member, current, zone)
+    return _changes_holder(member, current, zone) or _through_alias(member, current)
 
 
 def _part_may_name_zone(
@@ -4032,14 +4176,19 @@ def _plain_name(name: str) -> bool:
 
 
 def _outside_zone(target: str | None, zone: _Zone, cwd: str) -> bool:
-    """Whether a file a command writes is `/dev/null` or a path from `/` or `~/`, as written,
-    that is not in the zone: a path from a variable or relative to a `cd` is not read."""
+    """Whether a file a command writes is `/dev/null` or a path from `/` or `~/`, as written and
+    as each word its brace expansion makes (`_brace_members`), that is not in the zone: a path
+    from a variable or relative to a `cd` is not read."""
     discard: str = _shell_words().DISCARD
     if target == discard:
         return True
     if target is None or (zone.writes_inside and _written_near_zone(target, cwd, zone)):
         return False
-    return target.startswith(("/", "~/")) and not _is_zone_path(target, cwd, zone)
+    members = _brace_members(target)
+    return members is not None and all(
+        word.startswith(("/", "~/")) and not _is_zone_path(word, cwd, zone)
+        for word in (target, *members)
+    )
 
 
 def _written_near_zone(target: str, cwd: str, zone: _Zone) -> bool:

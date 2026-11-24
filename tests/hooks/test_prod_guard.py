@@ -5312,6 +5312,71 @@ def test_a_named_file_in_the_session_folder_or_any_copy_into_the_job_folder_runs
     assert proc.returncode == 0, proc.stderr
 
 
+# --- brace expansions: a word read as each of the words the shell makes of it ---
+
+# Writes whose brace expansion makes a word in the user folder: `{/tmp/zz,~}/.cl{a,}ude` is
+# `/tmp/zz/.claude ~/.claude /tmp/zz/.clude ~/.clude`.
+BRACED_WRITES: dict[str, str] = {
+    "tee": "echo x | tee {/tmp/zz,~}/.cl{a,}ude/CLAUDE.md",
+    "rm": "rm -rf {/tmp/zz,~}/.cl{a,}ude/skills",
+    "redirect-json": "echo x > {/tmp/zz,~}/.cl{a,}ude.json",
+    "cp-destination": "cp /tmp/e.md {~/.cl{a,}ude,/tmp/zz}/agents/x.md",
+    "letter-range": "rm -rf {/tmp/zz,~}/.cl{a..b}ude/skills",
+    "number-range": "rm -rf {/srv,~}/.cl{a,}ude/skills{1..3}",
+    "nested": "rm -rf {/tmp/zz,{/srv,~}}/.cl{a,{b,}}ude/skills",
+    "from-root": "echo x | tee /{srv,{H}}/.cl{a,}ude/CLAUDE.md",
+    "command-word": "{rm,-rf,~/.cl{a,}ude/skills}",
+    "cd-then-write": "cd {/srv,~}/.cl{a,}ude && rm -rf skills",
+    "past-the-cap": "rm -rf {/srv,~}/.cl{a,}ude{1..100}",
+    "range-from-variable": "rm -rf ~/.cl{a..$X}ude",
+}
+
+BRACED_IDS = list(BRACED_WRITES)
+
+
+@pytest.mark.parametrize("name", BRACED_IDS)
+def test_a_write_whose_brace_expansion_makes_a_word_in_the_user_folder_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(bash(pinned(BRACED_WRITES[name])))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls {/tmp/zz,~}/.cl{a,}ude/skills",
+        "cat ~/.claude/{CLAUDE.md,agents/a.md}",
+        "rm -rf /srv/{a,b}/x",
+        "mkdir -p /srv/w/{a..c}/{x,y}",
+        "cp /srv/f{,.bak}",
+        "touch /srv/f{1..60}",
+    ],
+    ids=["ls", "cat-two", "rm-far", "mkdir-ranges", "backup-copy", "many-far"],
+)
+def test_a_brace_expansion_that_stays_far_from_the_user_folder_or_only_reads_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(in_session(bash(command)), role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf {/tmp/zz,~}/coven-mem{o,}ry/systems",
+        "echo x > {/srv,~}/coven-mem{o,}ry/systems/guard.json",
+    ],
+    ids=["rm", "redirect"],
+)
+def test_a_brace_expansion_that_makes_the_store_is_refused_in_a_restricted_session(
+    run: Run, store: Path, command: str
+) -> None:
+    assert run(bash(command), role="pm").returncode == 2
+    assert run(bash(command)).returncode == 0
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
