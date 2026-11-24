@@ -5457,9 +5457,7 @@ KEPT_IDS = list(KEPT_COMMAND_VALUES)
 
 
 @pytest.mark.parametrize("name", KEPT_IDS)
-def test_an_assignment_that_keeps_command_text_is_no_read(
-    run: Run, store: Path, name: str
-) -> None:
+def test_an_assignment_that_keeps_command_text_is_no_read(run: Run, store: Path, name: str) -> None:
     payload = bash(KEPT_COMMAND_VALUES[name])
     assert run(payload, role="pm").returncode == 2
 
@@ -5470,12 +5468,12 @@ def test_an_assignment_that_keeps_command_text_is_no_read(
         "test -d ~/.claude/skills && ls ~/.claude/skills",
         "[ -f ~/.claude/CLAUDE.md ] && cat ~/.claude/CLAUDE.md",
         '[ "$x" = y ] && cat ~/.claude/CLAUDE.md',
-        "[ -n \"$(ls ~/.claude)\" ] && ls ~/.claude",
+        '[ -n "$(ls ~/.claude)" ] && ls ~/.claude',
         "n=$(grep -c x ~/.claude/a); printf '%d files\\n' \"$n\"; ls ~/.claude",
         'n=$(grep -c x ~/.claude/a 2>/dev/null || echo 0); [ "$n" -ge 2 ] && ls ~/.claude',
         '[ "$(grep -c x ~/.claude/a || grep -c y ~/.claude/a)" -gt 6 ] && ls ~/.claude',
         'n=$([ -f ~/.claude/a ] && grep -c x ~/.claude/a || echo 0); [ "$n" -ge 2 ]',
-        "D=~/.claude/skills; ls \"$D\"",
+        'D=~/.claude/skills; ls "$D"',
     ],
     ids=[
         "test-d",
