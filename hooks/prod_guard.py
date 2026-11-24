@@ -462,6 +462,17 @@ CLAUDE_FOLDER_ENTRIES = (
     *("agents", "skills", "commands", "hooks", "output-styles", "plugins", "projects", "todos"),
     *("history.jsonl", "shell-snapshots", "statsig"),
 )
+# A session's own scratch folders in the user folder: its background job's folder, which Claude
+# Code names in the hook's CLAUDE_JOB_DIR (`<folder>/jobs/<id>`), and the folder beside its
+# transcript (`<folder>/projects/<project>/<session id>.jsonl`), but for its subagents' transcripts.
+JOB_VARIABLE = "CLAUDE_JOB_DIR"
+JOBS_FOLDER = "jobs"
+PROJECTS_FOLDER = "projects"
+TRANSCRIPT_SUFFIX = ".jsonl"
+SUBAGENTS_FOLDER = "subagents"
+SESSION_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+JOB_NAME = re.compile(rf"(?<!\w){JOB_VARIABLE}(?!\w)")
+JOB_REFERENCE = re.compile(rf"\$\{{{JOB_VARIABLE}\}}|\${JOB_VARIABLE}(?!\w)")
 # What the user folder's zone adds to READ_COMMANDS: `rg` (it writes no file), and the commands
 # that only print or do nothing, which a path may follow (`echo $CLAUDE_CONFIG_DIR`). A reader of
 # PROGRAM_READERS has options that run a program (`rg --pre CMD` runs CMD on each file).
@@ -629,6 +640,7 @@ class Call:
     bash: Bash | None  # None for every tool but Bash
     tool_input: Mapping[str, object]
     cwd: str  # the session's working directory, or this process's when the payload has none
+    transcript: str | None = None  # the payload's transcript_path, when it is a string
 
 
 @dataclass(frozen=True)
@@ -909,14 +921,21 @@ def _call(payload: Mapping[str, object]) -> Call:
         raise PayloadError("tool_input is not an object")
     cwd = payload.get("cwd")
     where = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+    found = payload.get("transcript_path")
+    transcript = found if isinstance(found, str) else None
     if tool != "Bash":
-        return Call(tool, None, tool_input, where)
+        return Call(tool, None, tool_input, where, transcript)
     command = tool_input.get("command")
     if not isinstance(command, str):
         raise PayloadError("a Bash call without a command")
-    # The PM's read-only self-check is blanked as a lone command.
+    return Call(tool, _bash_text(command), tool_input, where, transcript)
+
+
+def _bash_text(command: str) -> Bash:
+    """A Bash command and its code text. The PM's read-only self-check is blanked as a lone
+    command."""
     code: str = _shell_words().code_text(command, lone=("printenv", ROLE_VAR))
-    return Call(tool, Bash(command, code), tool_input, where)
+    return Bash(command, code)
 
 
 def _reaches_out(call: Call) -> bool:
@@ -2136,6 +2155,14 @@ def _host_problem(command: str, depth: int = 0) -> _HostProblem | None:
     return _line_problem(command, [command.words for command in commands], depth)
 
 
+class _Own(NamedTuple):
+    """A session's own scratch folder inside a zone (its real path), and the names right below it
+    that stay the zone's (a session folder's `subagents`)."""
+
+    folder: str
+    kept: tuple[str, ...] = ()
+
+
 class _Zone(NamedTuple):
     """A place a restricted session may not write: what a Bash or MCP text can name it by."""
 
@@ -2154,6 +2181,8 @@ class _Zone(NamedTuple):
     loop_reads: bool = False  # a `for` loop over it is no write when the text only reads
     shell_reads: bool = False  # a read may follow a wrapper, hold a `$(...)`, read a `<` file
     writes_inside: bool = False  # a changed word inside it counts, not only a root or its holder
+    own_folders: bool = False  # the session may write in its own scratch folders inside it
+    own: tuple[_Own, ...] = ()  # those folders, for one call (`_with_own`)
 
 
 def _store_zone(store: Path) -> _Zone:
@@ -2242,7 +2271,116 @@ def _claude_folder_zone() -> _Zone:
         loop_reads=True,
         shell_reads=True,
         writes_inside=True,
+        own_folders=True,
     )
+
+
+def _job_folder(folders: Iterable[Path]) -> _Own | None:
+    """The session's job folder: the hook's own CLAUDE_JOB_DIR (a command cannot set it), when it
+    is an absolute path whose real path sits right under a user folder's `jobs/`."""
+    value = os.environ.get(JOB_VARIABLE, "")
+    if not os.path.isabs(value):
+        return None
+    real = Path(os.path.realpath(value))
+    if any(real.parent == Path(os.path.realpath(folder / JOBS_FOLDER)) for folder in folders):
+        return _Own(str(real))
+    return None
+
+
+def _session_folder(transcript: str | None, folders: Iterable[Path]) -> _Own | None:
+    """The folder beside the session's transcript, its `subagents/` kept: when the payload's
+    transcript_path is an absolute, normal path `<folder>/projects/<project>/<session id>.jsonl`
+    and that folder's real path is where it says."""
+    if transcript is None or not os.path.isabs(transcript):
+        return None
+    path = Path(transcript)
+    if os.path.normpath(transcript) != transcript or path.suffix != TRANSCRIPT_SUFFIX:
+        return None
+    if not SESSION_ID.fullmatch(path.stem):
+        return None
+    real = Path(os.path.realpath(path.with_suffix("")))
+    projects = {Path(os.path.realpath(folder / PROJECTS_FOLDER)) for folder in folders}
+    if real.name != path.stem or real.parent.parent not in projects:
+        return None
+    return _Own(str(real), (SUBAGENTS_FOLDER,))
+
+
+def _job_variable_kept(command: str) -> bool:
+    """Whether a Bash text leaves CLAUDE_JOB_DIR as the hook has it: every mention of the name, as
+    written and with quotes dropped, is `$CLAUDE_JOB_DIR` or `${CLAUDE_JOB_DIR}`, and when there is
+    one no builtin may set a name given as a word (NAME_SETTERS: `read`, `export`, `eval`...)."""
+    texts = (command, _unquoted(command))
+    if not any(JOB_NAME.search(text) for text in texts):
+        return True
+    return all(
+        len(JOB_NAME.findall(text)) == len(JOB_REFERENCE.findall(text)) for text in texts
+    ) and not NAME_SETTERS.intersection(_words_of(command))
+
+
+def _with_own(zone: _Zone, call: Call) -> _Zone:
+    """The zone with this call's own scratch folders (`_job_folder`, `_session_folder`), for a
+    zone with `own_folders` and a Bash or edit call; an MCP tool gets none. A Bash text that may
+    change CLAUDE_JOB_DIR (`_job_variable_kept`) gets no job folder."""
+    if not zone.own_folders or (call.bash is None and call.tool not in EDIT_TOOLS):
+        return zone
+    folders = _claude_folders()
+    job = _job_folder(folders)
+    if call.bash is not None and not _job_variable_kept(call.bash.command):
+        job = None
+    session = _session_folder(call.transcript, folders)
+    return zone._replace(own=tuple(own for own in (job, session) if own is not None))
+
+
+def _job_written_out(call: Call, zone: _Zone) -> Call:
+    """A Bash call with `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` written as the job folder, when
+    the zone has one (`_with_own`): the shell expands them so, and the checks then follow a `cd`
+    there and see what a path leaves it for."""
+    job = _job_folder(_claude_folders())
+    if call.bash is None or job is None or job not in zone.own:
+        return call
+    command = JOB_REFERENCE.sub(lambda _match: job.folder, call.bash.command)
+    return replace(call, bash=_bash_text(command))
+
+
+def _in_own(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved path is one of the zone's own scratch folders or inside one, below none
+    of its kept names."""
+    if path is None:
+        return False
+    for own in zone.own:
+        if path == own.folder:
+            return True
+        if _inside(path, own.folder):
+            return Path(path).relative_to(own.folder).parts[0] not in own.kept
+    return False
+
+
+def _is_own_folder(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved path is one of the zone's own scratch folders itself."""
+    return any(path == own.folder for own in zone.own)
+
+
+def _glob_in_own(word: str, base: str, zone: _Zone) -> bool:
+    """Whether a glob, read from `base`, stays in one of the zone's own scratch folders: it has no
+    `..`, and the folders before its first glob component are inside one (`_in_own`), or are one
+    whose kept names (`subagents`) that component cannot match."""
+    if not zone.own or UP_PATH.search(word):
+        return False
+    path = os.path.normpath(os.path.join(base, os.path.expandvars(os.path.expanduser(word))))
+    parts = Path(path).parts
+    at = next((i for i, part in enumerate(parts) if GLOB_CHARS.intersection(part)), len(parts))
+    if at == len(parts):
+        return False
+    prefix = _resolve(os.path.join(*parts[:at]), os.sep)
+    for own in zone.own:
+        if prefix == own.folder:
+            return not _matches_any(own.kept, parts[at])
+    return _in_own(prefix, zone)
+
+
+def _glob_hits(word: str, base: str, zone: _Zone, roots: Sequence[tuple[str, ...]]) -> bool:
+    """`_glob_reaches`, but for a glob that stays in an own scratch folder (`_glob_in_own`)."""
+    return _glob_reaches(word, base, roots) and not _glob_in_own(word, base, zone)
 
 
 def _zones(store: Path) -> tuple[_Zone, ...]:
@@ -2823,19 +2961,29 @@ def _find_targets(args: Sequence[str]) -> list[str]:
     return list(args[:start])
 
 
-def _command_targets(words: Sequence[str], index: int) -> list[str]:
-    """The words a command at `index` changes or replaces: what it deletes, moves, links or
-    changes the mode of, the destination of a copy, the folder an archive unpacks into."""
+def _replaced_operands(words: Sequence[str], index: int) -> list[str]:
+    """The words a command at `index` changes in themselves: what it deletes, moves, links or
+    changes the mode of, and where a `find` that acts starts."""
     name, args = _basename(words[index]), words[index + 1 :]
     if name in CHANGES_OPERANDS:
         return [*_operands(args), *_target_directory(args)]
+    return _find_targets(args) if name == "find" else []
+
+
+def _command_targets(words: Sequence[str], index: int) -> list[str]:
+    """The words a command at `index` changes or replaces: what it deletes, moves, links or
+    changes the mode of (`_replaced_operands`), the destination of a copy, the folder an archive
+    unpacks into."""
+    name, args = _basename(words[index]), words[index + 1 :]
+    if name in CHANGES_OPERANDS or name == "find":
+        return _replaced_operands(words, index)
     if name in CHANGES_DESTINATION:
         return _target_directory(args) or _operands(args)[-1:]
     if name == "tar":
         return _option_folders(args, "C", "--directory") or _unpacks_here(args, "x", "--extract")
     if name == "unzip":
         return _option_folders(args, "d") or _unpacks_here(args, "", "")
-    return _find_targets(args) if name == "find" else []
+    return []
 
 
 def _redirect_targets(words: Sequence[str]) -> list[str]:
@@ -2852,24 +3000,34 @@ def _redirect_targets(words: Sequence[str]) -> list[str]:
 
 
 class _Step(NamedTuple):
-    """One simple command of a text: the words it changes or replaces, and whether it moves the
+    """One simple command of a text: the words it changes or replaces, those it changes in
+    themselves (`replaced`), the links it makes (`links`), all its words, and whether it moves the
     session to another folder (`folder` is where, None when that cannot be told)."""
 
     targets: list[str]
     moves: bool = False
     folder: str | None = None
+    replaced: tuple[str, ...] = ()
+    links: tuple[str, ...] = ()
+    words: tuple[str, ...] = ()
 
 
 def _step(words: Sequence[str]) -> _Step:
     targets = _redirect_targets(words)
+    replaced: list[str] = []
+    links: list[str] = []
     for index in _runnable(words):
         targets += _command_targets(words, index)
+        replaced += _replaced_operands(words, index)
+        if _basename(words[index]) == "ln":
+            links += _operands(words[index + 1 :])
+    found = _Step(targets, replaced=tuple(replaced), links=tuple(links), words=tuple(words))
     first = _basename(words[0]) if words else ""
     if first in CHANGE_DIR:
         operands = _operands(words[1:])
-        return _Step(targets, True, operands[0] if operands else "~")
+        return found._replace(moves=True, folder=operands[0] if operands else "~")
     # `popd`, or a `cd` further in (`(cd x; ...)`, `env -C`): the folder is not followed.
-    return _Step(targets, first == "popd" or bool(CHANGE_DIR.intersection(words)))
+    return found._replace(moves=first == "popd" or bool(CHANGE_DIR.intersection(words)))
 
 
 def _write_targets(text: str) -> list[_Step]:
@@ -2927,9 +3085,21 @@ def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
     for step in _write_targets(text):
         if any(_changes_holder(target, current, zone) for target in step.targets):
             return True
+        if zone.own and _changes_own(step, current, zone):
+            return True
         if step.moves:
             current = _after_cd(current, step.folder)
     return False
+
+
+def _changes_own(step: _Step, current: str | None, zone: _Zone) -> bool:
+    """Whether a step changes one of the session's own scratch folders in itself (`rm -rf`, `mv`,
+    `chmod` of it), or makes a link inside one, which a later write could go through."""
+    base = current or os.sep
+    known = [word for word in (*step.replaced, *step.links) if current or word.startswith("/")]
+    return any(_is_own_folder(_resolve(word, base), zone) for word in known) or any(
+        _in_own(_resolve(word, base), zone) for word in step.links if word in known
+    )
 
 
 def _after_cd(current: str | None, folder: str | None) -> str | None:
@@ -2947,7 +3117,7 @@ def _changes_holder(target: str, current: str | None, zone: _Zone) -> bool:
     base = current or os.sep
     if GLOB_CHARS.intersection(target):
         roots = [root.parts for root in zone.roots]
-        return _glob_reaches(target, base, roots)
+        return _glob_hits(target, base, zone, roots)
     resolved = _resolve(target, base)
     return resolved is not None and (
         _is_root_or_parent(resolved, zone) or (zone.writes_inside and _in_zone(resolved, zone))
@@ -3010,7 +3180,7 @@ def _expanded_text_reaches(text: str, where: _Where, zone: _Zone, *, glob_text: 
     ):
         return True
     globs = _shell_glob_words(glob_text) if cwd_known else words
-    if any(GLOB_CHARS.intersection(word) and _glob_reaches(word, cwd, roots) for word in globs):
+    if any(GLOB_CHARS.intersection(word) and _glob_hits(word, cwd, zone, roots) for word in globs):
         return True
     if any(_in_zone(_resolve(word, cwd), zone) for word in words):
         return True
@@ -3018,8 +3188,9 @@ def _expanded_text_reaches(text: str, where: _Where, zone: _Zone, *, glob_text: 
 
 
 def _in_zone(path: str | None, zone: _Zone) -> bool:
-    """Whether a resolved path is one of the zone's roots, inside one, or ends in its suffixes."""
-    if path is None:
+    """Whether a resolved path is one of the zone's roots, inside one, or ends in its suffixes; not
+    when it is one of the session's own scratch folders or inside one (`_in_own`)."""
+    if path is None or _in_own(path, zone):
         return False
     if any(_inside(path, os.path.realpath(root)) for root in zone.roots):
         return True
@@ -3870,7 +4041,7 @@ def _bash_touches(call: Call, zone: _Zone) -> bool:
     bash = _bash(call)
     if zone.writes_only and _only_reads_text(bash.command, zone, call.cwd):
         return False  # it writes nothing, in the zone or out of it
-    if any(_inside(cwd, os.path.realpath(root)) for root in zone.roots):
+    if any(_inside(cwd, os.path.realpath(root)) for root in zone.roots) and not _in_own(cwd, zone):
         return True
     code, glob_code = bash.code, _globbing_code(bash)
     if zone.writes_only:
@@ -4143,8 +4314,9 @@ def _store_writer_rule(call: Call, _store: Path, role: str, _now: datetime) -> R
 def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> Refused | None:
     """A Bash command that runs in, or whose text reaches, a place a restricted session may not
     write."""
-    for zone in _zones(store):
-        if _bash_touches(call, zone):
+    for each in _zones(store):
+        zone = _with_own(each, call)
+        if _bash_touches(_job_written_out(call, zone), zone):
             return _zone_refusal(zone, role)
     return None
 
@@ -4176,7 +4348,8 @@ def _tool_refusal(call: Call, store: Path, role: str, _now: datetime) -> Refused
     store, coven's config, or Claude Code's settings and plugins."""
     if call.bash is not None:
         return None
-    for zone in _zones(store):
+    for each in _zones(store):
+        zone = _with_own(each, call)
         if _tool_writes(call, zone):
             return _zone_refusal(zone, role)
     return None

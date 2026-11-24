@@ -4537,6 +4537,307 @@ def test_a_restricted_session_reads_claude_codes_user_folder_and_writes_next_to_
     assert proc.returncode == 0, proc.stderr
 
 
+# --- a session's own scratch folders: its CLAUDE_JOB_DIR and its transcript's session folder ---
+
+SESSION_ID = "0b5d3c1e-2f4a-4b6c-8d9e-0123456789ab"
+OTHER_SESSION_ID = "9f8e7d6c-5b4a-4321-8fed-cba987654321"
+JOB_ID = SESSION_ID[:8]
+OTHER_JOB_ID = OTHER_SESSION_ID[:8]
+
+
+def job_folder(job: str = JOB_ID) -> Path:
+    return claude_dir() / "jobs" / job
+
+
+def session_folder(session: str = SESSION_ID) -> Path:
+    return claude_dir() / "projects" / "-proj" / session
+
+
+def transcript(session: str = SESSION_ID) -> str:
+    return f"{session_folder(session)}.jsonl"
+
+
+def in_session(payload: Payload, transcript_path: object = None) -> Payload:
+    """The payload as Claude Code sends it for this session: with its transcript's path."""
+    path = transcript() if transcript_path is None else transcript_path
+    return {**payload, "transcript_path": path}
+
+
+def job_env(job_dir: str | None = None) -> dict[str, str]:
+    """The hook's own environment, where Claude Code sets CLAUDE_JOB_DIR for a background session."""
+    return {"CLAUDE_JOB_DIR": str(job_folder()) if job_dir is None else job_dir}
+
+
+def own_folder_writes(job: Path, session: Path) -> dict[str, Payload]:
+    """Writes inside the session's own folders: allowed for a restricted session."""
+    return {
+        "write-in-job": tool("Write", file_path=f"{job}/notes.md", content="x"),
+        "edit-in-job": tool("Edit", file_path=f"{job}/notes.md", old_string="a", new_string="b"),
+        "write-in-session": tool("Write", file_path=f"{session}/plan.md", content="x"),
+        "edit-in-session": tool(
+            "Edit", file_path=f"{session}/plan.md", old_string="a", new_string="b"
+        ),
+        "notebook-in-job": tool("NotebookEdit", notebook_path=f"{job}/x.ipynb"),
+        "redirect-job-variable": bash('echo x > "$CLAUDE_JOB_DIR/out.txt"'),
+        "redirect-braced-job-variable": bash("echo x >> ${CLAUDE_JOB_DIR}/out.txt"),
+        "redirect-job-literal": bash(f"echo x > {job}/out.txt"),
+        "redirect-session-literal": bash(f"printf x > {session}/notes.md"),
+        "mkdir-in-job": bash('mkdir -p "$CLAUDE_JOB_DIR/sub/deeper"'),
+        "mkdir-the-job-folder": bash('mkdir -p "$CLAUDE_JOB_DIR"'),
+        "mkdir-in-session": bash(f"mkdir -p {session}/scratch"),
+        "cp-into-job": bash('cp /tmp/x "$CLAUDE_JOB_DIR/x"'),
+        "cp-into-job-folder": bash('cp /tmp/x "$CLAUDE_JOB_DIR/"'),
+        "cp-into-session": bash(f"cp -r /tmp/d {session}/d"),
+        "rm-file-in-job": bash('rm "$CLAUDE_JOB_DIR/out.txt"'),
+        "rm-folder-in-job": bash('rm -rf "$CLAUDE_JOB_DIR/sub"'),
+        "rm-glob-in-job": bash('rm -f "$CLAUDE_JOB_DIR"/*.tmp'),
+        "rm-file-in-session": bash(f"rm -f {session}/notes.md"),
+        "mv-inside-job": bash('mv "$CLAUDE_JOB_DIR/a" "$CLAUDE_JOB_DIR/b"'),
+        "tee-in-job": bash('ls | tee "$CLAUDE_JOB_DIR/list.txt"'),
+        "sed-in-place-in-job": bash('sed -i s/a/b/ "$CLAUDE_JOB_DIR/notes.md"'),
+        "touch-in-session": bash(f"touch {session}/x"),
+        "cd-job-then-write": bash('cd "$CLAUDE_JOB_DIR" && echo x > out.txt && mkdir -p sub'),
+        "cd-session-then-write": bash(f"cd {session} && echo x > notes.md"),
+        "heredoc-into-job": bash("cat > \"$CLAUDE_JOB_DIR/s.md\" <<'EOF'\ntext\nEOF"),
+        "read-then-write-in-job": bash('grep x ~/.claude/a > "$CLAUDE_JOB_DIR/hits.txt"'),
+    }
+
+
+OWN_WRITE_IDS = list(own_folder_writes(Path("/j"), Path("/s")))
+
+
+@pytest.mark.parametrize("name", OWN_WRITE_IDS)
+def test_a_restricted_session_writes_in_its_own_scratch_folders(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(own_folder_writes(job_folder(), session_folder())[name])
+    proc = run(payload, role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", ["echo x > out.txt", "rm -rf sub", "mkdir -p a/b"])
+def test_a_restricted_session_working_in_its_job_folder_writes_there(
+    run: Run, store: Path, command: str
+) -> None:
+    job_folder().mkdir(parents=True)
+    payload = in_session(bash(command, cwd=str(job_folder())))
+    assert run(payload, role="pm", env=job_env()).returncode == 0
+
+
+def own_folder_refusals(job: Path, session: Path, folder: Path) -> dict[str, Payload]:
+    """What stays refused with the session's own folders known: the folders themselves, what is
+    beside or above them, and their way out."""
+    other_job, other_session = folder / "jobs" / OTHER_JOB_ID, session.parent / OTHER_SESSION_ID
+    return {
+        "rm-job-folder": bash('rm -rf "$CLAUDE_JOB_DIR"'),
+        "rm-job-folder-slash": bash('rm -rf "$CLAUDE_JOB_DIR/"'),
+        "rm-job-folder-literal": bash(f"rm -rf {job}"),
+        "rm-job-folder-dot": bash('rm -rf "$CLAUDE_JOB_DIR/."'),
+        "rm-session-folder": bash(f"rm -rf {session}"),
+        "mv-job-folder": bash('mv "$CLAUDE_JOB_DIR" /tmp/j'),
+        "mv-into-job-folder-name": bash('mv /tmp/l "$CLAUDE_JOB_DIR"'),
+        "chmod-job-folder": bash('chmod 000 "$CLAUDE_JOB_DIR"'),
+        "chmod-session-folder": bash(f"chmod -R 000 {session}"),
+        "ln-job-folder": bash('ln -sfn ~/.claude/skills "$CLAUDE_JOB_DIR"'),
+        "ln-inside-job": bash('ln -s ../../skills "$CLAUDE_JOB_DIR/s"'),
+        "find-delete-job-folder": bash('find "$CLAUDE_JOB_DIR" -name "*.tmp" -delete'),
+        "rm-jobs-root": bash("rm -rf ~/.claude/jobs"),
+        "rm-projects-root": bash("rm -rf ~/.claude/projects"),
+        "rm-project-of-session": bash(f"rm -rf {session.parent}"),
+        "write-jobs-root": bash("echo x > ~/.claude/jobs/x"),
+        "write-projects-root": tool("Write", file_path=f"{folder}/projects/x.md", content="x"),
+        "write-transcript": bash(f"echo x >> {session}.jsonl"),
+        "write-transcript-tool": tool("Write", file_path=f"{session}.jsonl", content="x"),
+        "write-other-job": bash(f"echo x > {other_job}/x"),
+        "write-other-job-tool": tool("Write", file_path=f"{other_job}/x", content="x"),
+        "write-other-session": bash(f"echo x > {other_session}/x"),
+        "write-other-session-tool": tool("Write", file_path=f"{other_session}/x", content="x"),
+        "glob-other-jobs": bash('rm -rf "$CLAUDE_JOB_DIR"*'),
+        "glob-beside-job": bash('rm -rf "$CLAUDE_JOB_DIR"/../*'),
+        "escape-job": bash(f'echo x > "$CLAUDE_JOB_DIR/../{OTHER_JOB_ID}/x"'),
+        "escape-job-tool": tool("Write", file_path=f"{job}/../{OTHER_JOB_ID}/x", content="x"),
+        "escape-session": bash(f"echo x > {session}/../{OTHER_SESSION_ID}/x"),
+        "escape-session-tool": tool(
+            "Write", file_path=f"{session}/../{OTHER_SESSION_ID}/x", content="x"
+        ),
+        "escape-to-skills": bash('echo x > "$CLAUDE_JOB_DIR/../../skills/x"'),
+        "cd-job-then-up": bash('cd "$CLAUDE_JOB_DIR" && rm -rf ../x'),
+        "subagents": bash(f"echo x > {session}/subagents/x"),
+        "subagents-tool": tool("Write", file_path=f"{session}/subagents/a.jsonl", content="x"),
+        "rm-subagents": bash(f"rm -rf {session}/subagents"),
+        "glob-subagents": bash(f"rm -rf {session}/sub*"),
+        "glob-session-contents": bash(f"rm -rf {session}/*"),
+        "auto-memory": tool("Write", file_path=f"{session.parent}/memory/MEMORY.md", content="x"),
+        "auto-memory-bash": bash(f"echo x >> {session.parent}/memory/MEMORY.md"),
+        "skills": bash("echo x > ~/.claude/skills/x"),
+        "claude-json": bash("echo x > ~/.claude.json"),
+        "inline-job-variable": bash('CLAUDE_JOB_DIR=~/.claude/skills; rm -rf "$CLAUDE_JOB_DIR/x"'),
+        "inline-job-variable-prefix": bash(
+            "CLAUDE_JOB_DIR=~/.claude/skills sh -c 'echo x > \"$CLAUDE_JOB_DIR/y\"'"
+        ),
+        "exported-job-variable": bash(
+            'export CLAUDE_JOB_DIR=~/.claude/skills && echo x > "$CLAUDE_JOB_DIR/y"'
+        ),
+        "unset-job-variable": bash('unset CLAUDE_JOB_DIR; echo x > "$CLAUDE_JOB_DIR/y"'),
+        "read-into-job-variable": bash(
+            'read CLAUDE_JOB_DIR < /tmp/p; echo x > "$CLAUDE_JOB_DIR/y"'
+        ),
+        "loop-job-variable": bash(
+            'for CLAUDE_JOB_DIR in ~/.claude/skills; do echo x > "$CLAUDE_JOB_DIR/y"; done'
+        ),
+    }
+
+
+OWN_REFUSAL_IDS = list(own_folder_refusals(Path("/j"), Path("/s"), Path("/f")))
+
+
+@pytest.mark.parametrize("name", OWN_REFUSAL_IDS)
+def test_a_restricted_session_cannot_change_its_scratch_folders_or_what_is_beside_them(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(own_folder_refusals(job_folder(), session_folder(), claude_dir())[name])
+    proc = run(payload, role="pm", env=job_env())
+    assert proc.returncode == 2
+    assert FOLDER_REFUSAL in proc.stderr
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize("command", ["rm -rf .", "rm -rf ..", "rm -rf ../x", "chmod 000 ."])
+def test_a_restricted_session_working_in_its_job_folder_changes_nothing_around_it(
+    run: Run, store: Path, command: str
+) -> None:
+    job_folder().mkdir(parents=True)
+    payload = in_session(bash(command, cwd=str(job_folder())))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+
+
+def test_a_restricted_session_working_in_another_job_folder_writes_nothing_there(
+    run: Run, store: Path
+) -> None:
+    job_folder(OTHER_JOB_ID).mkdir(parents=True)
+    payload = in_session(bash("echo x > out.txt", cwd=str(job_folder(OTHER_JOB_ID))))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+
+
+@pytest.mark.parametrize(
+    "job_dir",
+    ["", "jobs/0b5d3c1e", "JOBS", "SKILLS", "JOBS/0b5d3c1e/deeper", "/tmp/jobs/0b5d3c1e"],
+    ids=["empty", "relative", "jobs-root", "not-under-jobs", "nested", "another-folder"],
+)
+def test_a_job_folder_that_is_not_one_widens_nothing(run: Run, store: Path, job_dir: str) -> None:
+    """Only a CLAUDE_JOB_DIR that is a folder right under `<claude folder>/jobs/` is a scratch
+    folder: any other value leaves the zone whole."""
+    value = job_dir.replace("JOBS", str(claude_dir() / "jobs"))
+    value = value.replace("SKILLS", str(claude_dir() / "skills"))
+    for payload in (
+        bash(f"echo x > {job_folder()}/out.txt"),
+        bash(f"echo x > {claude_dir()}/skills/x"),
+        bash(f"mkdir -p {claude_dir()}/jobs/0b5d3c1e/deeper/x"),
+        tool("Write", file_path=f"{job_folder()}/notes.md", content="x"),
+    ):
+        proc = run(payload, role="pm", env=job_env(value))
+        assert proc.returncode == 2, (payload, proc.stderr)
+
+
+def test_without_a_job_folder_the_jobs_folder_stays_refused(run: Run, store: Path) -> None:
+    payload = bash(f"echo x > {job_folder()}/out.txt")
+    proc = run(payload, role="pm", env={"CLAUDE_JOB_DIR": ""})
+    assert proc.returncode == 2
+    assert FOLDER_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "transcript_path",
+    [
+        None,
+        "",
+        7,
+        f"projects/-proj/{SESSION_ID}.jsonl",
+        "CLAUDE/SESSION.jsonl",
+        "CLAUDE/projects/SESSION.jsonl",
+        "CLAUDE/projects/-proj/x/SESSION.jsonl",
+        "CLAUDE/projects/-proj/SESSION",
+        "CLAUDE/projects/-proj/SESSION.txt",
+        "CLAUDE/projects/-proj/memory.jsonl",
+        "CLAUDE/projects/-proj/../-proj/SESSION.jsonl",
+        f"/tmp/projects/-proj/{SESSION_ID}.jsonl",
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "not-a-string",
+        "relative",
+        "not-under-projects",
+        "projects-root",
+        "too-deep",
+        "no-jsonl",
+        "other-suffix",
+        "memory-name",
+        "dot-dot",
+        "another-folder",
+    ],
+)
+def test_an_odd_transcript_path_widens_nothing(
+    run: Run, store: Path, transcript_path: object
+) -> None:
+    """Only a transcript right under `<claude folder>/projects/<project>/`, named for a session id,
+    gives a scratch folder; anything else leaves the zone whole."""
+    if isinstance(transcript_path, str):
+        transcript_path = transcript_path.replace("CLAUDE", str(claude_dir()))
+        transcript_path = transcript_path.replace("SESSION", SESSION_ID)
+    extra = {} if transcript_path is None else {"transcript_path": transcript_path}
+    for payload in (
+        tool("Write", file_path=f"{session_folder()}/x.md", content="x"),
+        bash(f"echo x > {session_folder()}/x.md"),
+        bash(f"echo x > {session_folder().parent}/memory/x"),
+    ):
+        proc = run({**payload, **extra}, role="pm", env=job_env(""))
+        assert proc.returncode == 2, (payload, proc.stderr)
+
+
+def test_a_symlink_out_of_a_scratch_folder_is_followed(run: Run, store: Path) -> None:
+    """The guard resolves a path that exists through its symlinks (os.path.realpath), so a link in
+    the job folder that points at the skills folder is the skills folder."""
+    job_folder().mkdir(parents=True)
+    (claude_dir() / "skills").mkdir()
+    (job_folder() / "out").symlink_to(claude_dir() / "skills")
+    for payload in (
+        bash('echo x > "$CLAUDE_JOB_DIR/out/y"'),
+        tool("Write", file_path=f"{job_folder()}/out/y", content="x"),
+    ):
+        assert run(in_session(payload), role="pm", env=job_env()).returncode == 2
+
+
+def test_a_job_folder_that_is_a_symlink_elsewhere_is_no_scratch_folder(
+    run: Run, store: Path
+) -> None:
+    (claude_dir() / "skills").mkdir(parents=True)
+    (claude_dir() / "jobs").mkdir()
+    job_folder().symlink_to(claude_dir() / "skills")
+    payload = bash(f"echo x > {claude_dir()}/skills/y")
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+
+
+def test_the_settings_zone_still_holds_inside_a_scratch_folder(run: Run, store: Path) -> None:
+    """The scratch folders are the user folder zone's alone: a settings file in one stays the
+    settings zone's."""
+    for payload in (
+        bash('echo {} > "$CLAUDE_JOB_DIR/.claude/settings.json"'),
+        tool("Write", file_path=f"{session_folder()}/.claude/settings.local.json", content="{}"),
+    ):
+        proc = run(in_session(payload), role="pm", env=job_env())
+        assert proc.returncode == 2
+        assert SETTINGS_REFUSAL in proc.stderr
+
+
+@pytest.mark.parametrize("name", ["redirect-job-literal", "write-in-session", "mkdir-in-job"])
+def test_a_plain_session_writes_in_the_scratch_folders_as_before(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(own_folder_writes(job_folder(), session_folder())[name])
+    assert run(payload, env=job_env()).returncode == 0
+
+
 # --- a quoted glob is literal: in `~`, `.*` matches `.claude` only when the shell expands it ---
 
 QUOTED_GLOBS = {
