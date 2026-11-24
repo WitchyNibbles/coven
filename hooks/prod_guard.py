@@ -63,9 +63,10 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   beside any command that is no reader (`_feeds_code`), and a read in a text that sets what its
   programs read (`_arms_reads`: `export TAR_OPTIONS=...`). A written word the guard cannot pin to
   a path fails closed when it may lead to the folder (`_writes_unpinned`: `${HOME%/}/.claude`,
-  `~/$N`, `$X/..`), and so does any write under /proc or /dev but the streams and the terminal
-  (`_through_alias`). After a `cd` every word left is read from its folder (`_names_inside`), and a
-  `cd` the scanner cannot follow is read from the text (`_written_cds_clear`). `~/.claude.json`'s
+  `~/$N`, `$X/..`), and so does any write under /proc, /dev/fd or to /dev/stdin, which stand for
+  other files (`_through_alias`). After a `cd` every word left is read from its folder
+  (`_names_inside`), and a `cd` the scanner cannot follow is read from the text
+  (`_written_cds_clear`). `~/.claude.json`'s
   siblings (`.backup`) are in the folder's zone. `cd ~/.claude && ls skills` runs, `cd ~/.claude &&
   rm -rf skills` does not. A restricted session may write in its own scratch folders there
   (`_with_own`): its job folder, the hook's own CLAUDE_JOB_DIR right under `jobs/`, and its session
@@ -512,9 +513,10 @@ UNPINNED_EXPANSION = re.compile(r"\$|`|\{[^{}]*(?:,|\.\.)[^{}]*\}")
 EXPANSION_TEXT = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$\w+|\$.|[{},]")
 # A written word's leading current folder, which the guard knows where the text's `cd`s go.
 CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
-# Folders whose paths stand for others (`/proc/self/cwd`, `/dev/fd/3`), and the files in them a
-# write may still go to: a stream or the terminal.
-ALIAS_FOLDERS = ("/proc", "/dev")
+# Folders whose paths stand for others (`/proc/self/cwd`, `/dev/fd/3`, `/dev/stdin`), and the
+# files of /dev a write may still go to: a stream or the terminal. The rest of /dev names no file
+# a write could reach the zone by: `/dev/shm` is a folder like /tmp, `/dev/tcp/HOST/PORT` a socket.
+ALIAS_FOLDERS = ("/proc", "/dev/fd", "/dev/stdin")
 DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
 # A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words the guard reads one word as
 # (`_brace_members`), a range's text, and a word of a text that holds a brace.

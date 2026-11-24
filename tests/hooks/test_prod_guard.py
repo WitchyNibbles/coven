@@ -5812,6 +5812,44 @@ def test_a_quoted_command_text_a_shell_may_run_is_refused(run: Run, store: Path,
     assert run(payload).returncode == 0
 
 
+# --- a write under /dev reaches a file only through /dev/fd and /dev/stdin; /proc stays shut ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "awk '{print}' f > /dev/shm/.p_$$; rm -f /dev/shm/.p_$$",
+        'timeout 4 bash -c "cat < /dev/null > /dev/tcp/10.0.0.1/6379"',
+        "echo x > /dev/udp/10.0.0.1/53",
+        "/opt/v/bin/python - <<'EOF'\ns = 'sort > /dev/shm/.p_$$; rm -f /dev/shm/.p_$$'\nEOF",
+    ],
+    ids=["shm", "tcp", "udp", "heredoc-body"],
+)
+def test_a_write_to_a_device_that_names_no_file_is_allowed(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/.claude && echo x > /dev/fd/1",
+        "cd ~/.claude && echo x > /dev/stdin",
+        "cd ~/.claude && echo x > /dev/fd/3/CLAUDE.md",
+        "echo x > /proc/self/task/1/cwd/CLAUDE.md",
+    ],
+    ids=["dev-fd-1", "dev-stdin", "dev-fd-folder", "proc-task-cwd"],
+)
+def test_a_write_through_a_device_alias_is_still_refused(
+    run: Run, store: Path, command: str
+) -> None:
+    payload = bash(command, cwd=str(claude_dir()) if "proc" in command else "/tmp")
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
