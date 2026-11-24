@@ -73,7 +73,9 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
     read and edit of `.env` files (an example file stays readable), then allow file access outside
     the session's folder for the profile's skills and the memory store, which OpenCode would
     otherwise ask about and a headless run cannot answer. Edits to the profile's installed
-    skills are denied.
+    skills are denied. `shell` and `webfetch` ask before they run, for every agent. A headless
+    `opencode run` rejects an ask by itself, so `coven opencode run -- run ...` cannot use shell;
+    the TUI asks you. There are no MCP rules, because the profile loads no MCP servers.
 
   The `.env` rules are the second layer. The first is the plugin's guard, which runs coven's
   `deny_secrets.py` before each `read`, `grep`, `glob`, `shell`, `write`, `edit` and `patch`.
