@@ -688,6 +688,9 @@ FILE_URL = re.compile(r"file://(?:localhost)?(/[^\s'\"]*)")
 URL_SCHEME = re.compile(r"[A-Za-z][\w+.-]*://")
 BLANK = re.compile(r"\s")
 TARGET_DIRECTORY = re.compile(r"(?:-t|--target-directory=?)(.*)")
+# A redirect in a text's words, its file glued on or in the next word (`2>/dev/null`, `> x`, `2>&1`,
+# `<<<x`): no operand of the command it is on.
+REDIRECT_WORD = re.compile(r"(?:\d+|&)?(?:<<<|<<-?|<>|<&|>&|>>|>\||<|>)(.*)")
 OUTPUT_REDIRECT = re.compile(r"\d*>>?\|?(.*)")
 FIND_ACTIONS = frozenset(
     {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
@@ -3206,6 +3209,21 @@ def _operands(args: Sequence[str]) -> list[str]:
     return found
 
 
+def _without_redirects(words: Sequence[str]) -> list[str]:
+    """A command's words but its redirects (REDIRECT_WORD), and the file of one whose operator
+    stands alone (`2> /dev/null`)."""
+    found: list[str] = []
+    redirected = False
+    for word in words:
+        if redirected:
+            redirected = False
+        elif match := REDIRECT_WORD.fullmatch(word):
+            redirected = not match[1]
+        else:
+            found.append(word)
+    return found
+
+
 def _target_directory(args: Sequence[str]) -> list[str]:
     """The folder given as `-t DIR`, `-tDIR`, `--target-directory DIR` or `=DIR`."""
     for index, word in enumerate(args):
@@ -3292,7 +3310,9 @@ def _redirect_targets(words: Sequence[str]) -> list[str]:
 class _Step(NamedTuple):
     """One simple command of a text: the words it changes or replaces, those it changes in
     themselves (`replaced`), the links it makes (`links`), all its words, and whether it moves the
-    session to another folder (`folder` is where, None when that cannot be told)."""
+    session to another folder (`folder` is where, None when that cannot be told). `bare` is
+    whether its text held no quote or backslash, so that a word that reads as a redirect is one
+    (`'>x'` is a name)."""
 
     targets: list[str]
     moves: bool = False
@@ -3300,9 +3320,10 @@ class _Step(NamedTuple):
     replaced: tuple[str, ...] = ()
     links: tuple[str, ...] = ()
     words: tuple[str, ...] = ()
+    bare: bool = True
 
 
-def _step(words: Sequence[str]) -> _Step:
+def _step(words: Sequence[str], *, bare: bool = True) -> _Step:
     targets = _redirect_targets(words)
     replaced: list[str] = []
     links: list[str] = []
@@ -3311,10 +3332,12 @@ def _step(words: Sequence[str]) -> _Step:
         replaced += _replaced_operands(words, index)
         if _basename(words[index]) == "ln":
             links += _operands(words[index + 1 :])
-    found = _Step(targets, replaced=tuple(replaced), links=tuple(links), words=tuple(words))
+    found = _Step(
+        targets, replaced=tuple(replaced), links=tuple(links), words=tuple(words), bare=bare
+    )
     first = _basename(words[0]) if words else ""
     if first in CHANGE_DIR:
-        operands = _operands(words[1:])
+        operands = _cd_operands(found)
         return found._replace(moves=True, folder=operands[0] if operands else "~")
     # `popd`, or a `cd` further in (`(cd x; ...)`, `env -C`): the folder is not followed.
     return found._replace(moves=first == "popd" or bool(CHANGE_DIR.intersection(words)))
@@ -3325,7 +3348,10 @@ def _write_targets(text: str) -> list[_Step]:
     of rm, mv, ln, chmod and the like, the destination of cp, install and rsync, the folder tar
     and unzip unpack into, a redirect's file, and what tee writes. A copy's source is only read."""
     return [
-        _step(_split_env_strings(_unquoted(segment).split()))
+        _step(
+            _split_env_strings(_unquoted(segment).split()),
+            bare=not QUOTE_MARKS.intersection(segment),
+        )
         for segment in COMMAND_SPLIT.split(text)
     ]
 
@@ -3403,7 +3429,7 @@ def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
 def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether a text writes a word the guard does not follow that may name the zone
     (`_may_name_zone`), or one whose leading current folder, written out (`_pinned`), is a holder
-    of the zone or in it, or goes by such a `cd` to a write, or writes a relative word after a
+    of the zone or in it, or goes by such a `cd` to a write of a file (`_writes_files`), or writes a relative word after a
     `cd old new` (`_swaps_folder`). Its command substitutions and brace expansions stay in their
     words (`_glued_expansions`), and its heredoc bodies read as text or code are no commands of it
     (`_without_text_bodies`)."""
@@ -3415,7 +3441,7 @@ def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
             return True
         if step.moves:
             folder = _pinned(step.folder, current) if step.folder is not None else None
-            later = any(map(_step_writes, steps[index + 1 :]))
+            later = _writes_files(steps[index + 1 :])
             if folder and not _followed(folder) and later and _may_name_zone(folder, current, zone):
                 return True
             if _swaps_folder(step) and _writes_relative(steps[index + 1 :]):
@@ -3425,10 +3451,23 @@ def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
 
 
 def _swaps_folder(step: _Step) -> bool:
-    """Whether a step is a `cd` or `pushd` with two operands: zsh's `cd old new` goes to the
-    current folder with `old` replaced by `new`, an older bash to the first."""
+    """Whether a step is a `cd` or `pushd` with two operands, its redirects none
+    (`_cd_operands`: `cd x 2>/dev/null` has one): zsh's `cd old new` goes to the current
+    folder with `old` replaced by `new`, an older bash to the first."""
     words = step.words
-    return bool(words) and _basename(words[0]) in CHANGE_DIR and len(_operands(words[1:])) == 2
+    return bool(words) and _basename(words[0]) in CHANGE_DIR and len(_cd_operands(step)) == 2
+
+
+def _cd_operands(step: _Step) -> list[str]:
+    """A `cd` step's operands, but its redirects (`_without_redirects`) when its text is `bare`:
+    in a quoted text a word that reads as a redirect may be a quoted name."""
+    words = step.words[1:]
+    return _operands(_without_redirects(words) if step.bare else words)
+
+
+def _writes_files(steps: Sequence[_Step]) -> bool:
+    """Whether a step writes a file: a word it writes is no stream or terminal (DEV_WRITABLE)."""
+    return any(word not in DEV_WRITABLE for step in steps for word in _step_writes(step))
 
 
 def _writes_relative(steps: Sequence[_Step]) -> bool:

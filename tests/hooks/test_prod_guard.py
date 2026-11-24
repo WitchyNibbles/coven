@@ -5850,6 +5850,58 @@ def test_a_write_through_a_device_alias_is_still_refused(
     assert run(payload).returncode == 0
 
 
+# --- a redirect is no operand of cd, and a discard after a cd the guard cannot follow is no write ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /tmp/x 2>/dev/null || mkdir -p /tmp/x; cd /tmp/x && cat > a.py <<'EOF'\nprint(1)\nEOF\n"
+        "python3 a.py",
+        "cd /srv/app 2>/dev/null && echo x > notes.txt",
+        "cd /srv/app 2> /dev/null && echo x > notes.txt",
+        "cd $(dirname $(find /srv -name u.py 2>/dev/null | head -1))/..; git log -1 2>/dev/null",
+    ],
+    ids=["scratch-script", "discard", "discard-apart", "unknown-cd-discard"],
+)
+def test_a_cd_with_a_redirect_or_a_discard_after_an_unknown_cd_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/proj && cd proj .claude && rm -rf skills",
+        "cd ~/proj && cd proj .claude 2>/dev/null && rm -rf skills",
+        "cd ~/proj && cd proj .claude > /dev/null && rm -rf skills",
+        "cd ~/proj && cd '>proj' .claude && rm -rf skills",
+        "cd ~/proj && cd \\>proj .claude && rm -rf skills",
+        "cd $(dirname $X)/.. ; rm -rf skills",
+        "cd $(dirname $X)/.. 2>/dev/null; rm -rf skills 2>/dev/null",
+        "cd 2>/dev/null ~/.claude && rm -rf skills",
+        "cd /tmp/x 2>/dev/null && cat > a.sh <<'EOF'\nrm -rf ~/.claude/skills\nEOF\nsh a.sh",
+    ],
+    ids=[
+        "two-operands",
+        "two-operands-redirect",
+        "two-operands-discard-apart",
+        "quoted-name",
+        "escaped-name",
+        "unknown",
+        "unknown-discard",
+        "redirect-first",
+        "script",
+    ],
+)
+def test_a_cd_with_a_redirect_still_follows_its_writes(run: Run, store: Path, command: str) -> None:
+    payload = bash(command)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
