@@ -669,6 +669,7 @@ CHANGES_DESTINATION = frozenset({"cp", "install", "rsync"})
 IFS_NAMED = re.compile(r"(?<![\w$\{])IFS\b")
 WORD_SPLIT_OPTION = re.compile(r"shwordsplit")
 SPLITTING_EMULATION = re.compile(r"\bemulate\b(?:\s+-\S+)*\s+(?:sh|ksh)\b")
+NULL_DEVICE = "/dev/null"  # input from it is no text
 STANDARD_INPUT = re.compile(r"-|/dev/stdin|/dev/fd/0|/proc/[^/]+/fd/0")
 # A `file://` URL, its host left out: the path is what an MCP tool opens.
 FILE_URL = re.compile(r"file://(?:localhost)?(/[^\s'\"]*)")
@@ -4605,24 +4606,44 @@ def _number_arithmetic(raw: str, numbers: frozenset[str]) -> bool:
 def _counts(text: str) -> bool:
     """Whether a substitution's text prints only numbers: every pipeline of it (`a || echo 0`)
     ends in a command that prints a count or an integer, or a test that prints nothing
-    (`_prints_number`)."""
+    (`_prints_number`), maybe through filters that keep a number one (`_keeps_number`:
+    `wc -l < f | tr -d ' '`)."""
     commands = _scanned_commands(text)
     if not commands:
         return False
-    pairs = zip(commands, [*commands[1:], None], strict=True)
-    ends = [each for each, after in pairs if not (after and after.after_pipe)]
-    return all(_prints_number(_proper_words(each.words)) for each in ends)
+    pipelines: list[list[Sequence[_ShellWord]]] = []
+    for each in commands:
+        words = _proper_words(each.words)
+        if each.after_pipe and pipelines:
+            pipelines[-1].append(words)
+        else:
+            pipelines.append([words])
+    for pipeline in pipelines:
+        while len(pipeline) > 1 and _keeps_number(pipeline[-1]):
+            pipeline.pop()
+        if not _prints_number(pipeline[-1]):
+            return False
+    return True
+
+
+def _keeps_number(words: Sequence[_ShellWord]) -> bool:
+    """Whether a command prints a number it is given as one or as nothing: a `tr -d` of one set
+    (it only drops characters)."""
+    values = [word.value for word in words]
+    return len(values) == 3 and values[:2] == ["tr", "-d"] and values[2] is not None
 
 
 def _prints_number(words: Sequence[_ShellWord]) -> bool:
     """Whether a command prints only a number or nothing: a `grep -c` of one file or of its
-    input, a `wc` of its input with COUNT_OPTIONS alone, an `echo` of integers, or a test that
-    reads no word as a number or name (`[ -f x ]`)."""
+    input, a `wc` of its input with COUNT_OPTIONS alone, an `echo` of integers, a bare `true` or
+    `:`, or a test that reads no word as a number or name (`[ -f x ]`)."""
     if not words:
         return False
     name, args = words[0].value, words[1:]
     if name == "echo":
         return all(INTEGER.fullmatch(word.value or "x") for word in args)
+    if name in ("true", ":"):
+        return not args
     if name in TEST_COMMANDS:
         return _evaluated_words(words) == []
     if name not in COUNTERS:
@@ -4638,8 +4659,9 @@ def _prints_number(words: Sequence[_ShellWord]) -> bool:
 
 
 def _number_names(commands: Sequence[_SimpleCommand]) -> frozenset[str]:
-    """The variables a text only sets to numbers (`_number_value` of each assignment), and by no
-    other word: no command is given the name (`read n`, `for n`) or `-vNAME` (`printf -vn`)."""
+    """The variables a text only sets to numbers (`_number_value` of each assignment, a copy of
+    one of them too: `m=$n`), and by no other word: no command is given the name (`read n`,
+    `for n`) or `-vNAME` (`printf -vn`)."""
     assigned: dict[str, list[_ShellWord]] = {}
     given: set[str] = set()
     for each in commands:
@@ -4648,17 +4670,24 @@ def _number_names(commands: Sequence[_SimpleCommand]) -> frozenset[str]:
                 assigned.setdefault(match[1], []).append(word)
             elif word.value is not None:
                 given |= {word.value, word.value.removeprefix(PRINTF_VARIABLE)}
-    return frozenset(
-        name
-        for name, words in assigned.items()
-        if name not in given and all(map(_number_value, words))
-    )
+    candidates = {name: words for name, words in assigned.items() if name not in given}
+    numbers: frozenset[str] = frozenset()
+    while True:  # each round adds a name or ends: a name is never its own proof (`n=$n`)
+        found = frozenset(
+            name
+            for name, words in candidates.items()
+            if all(_number_value(word, numbers) for word in words)
+        )
+        if found == numbers:
+            return numbers
+        numbers = found
 
 
-def _number_value(word: _ShellWord) -> bool:
-    """Whether an assignment's value holds a number (`_holds_number`, knowing no variable)."""
+def _number_value(word: _ShellWord, numbers: frozenset[str]) -> bool:
+    """Whether an assignment's value holds a number (`_holds_number`), knowing these variables
+    hold numbers."""
     value = None if word.value is None else word.value.partition("=")[2]
-    return _holds_number(word.raw.partition("=")[2], value, word.substitutions, frozenset())
+    return _holds_number(word.raw.partition("=")[2], value, word.substitutions, numbers)
 
 
 def _exports_all(words: Sequence[_ShellWord]) -> bool:
@@ -4750,7 +4779,7 @@ def _copies_input(each: _SimpleCommand) -> bool:
     fed = (
         bool(each.heredocs)
         or each.after_pipe
-        or bool(each.input_files)
+        or any(path != NULL_DEVICE for path in each.input_files)
         or any(not DESCRIPTOR_TARGET.fullmatch(target or "") for target in each.redirect_inputs)
     )
     return fed or any(STANDARD_INPUT.fullmatch(word.value or "") for word in words[1:])
