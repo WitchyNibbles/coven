@@ -3493,12 +3493,23 @@ def _names_inside(word: str, current: str | None, zone: _Zone) -> bool:
 
 def _changes_own(step: _Step, current: str | None, zone: _Zone) -> bool:
     """Whether a step changes one of the session's own scratch folders in itself (`rm -rf`, `mv`,
-    `chmod` of it), or makes a link inside one, which a later write could go through."""
+    `chmod` of it), makes a link inside one, which a later write could go through, or copies,
+    moves or unpacks into one with kept names (`_fills_kept`)."""
     base = current or os.sep
     known = [word for word in (*step.replaced, *step.links) if current or word.startswith("/")]
-    return any(_is_own_folder(_resolve(word, base), zone) for word in known) or any(
-        _in_own(_resolve(word, base), zone) for word in step.links if word in known
+    into = [word for word in step.targets if current or word.startswith("/")]
+    return (
+        any(_is_own_folder(_resolve(word, base), zone) for word in known)
+        or any(_in_own(_resolve(word, base), zone) for word in step.links if word in known)
+        or any(_fills_kept(_resolve(word, base), zone) for word in into)
     )
+
+
+def _fills_kept(path: str | None, zone: _Zone) -> bool:
+    """Whether a resolved destination is an own scratch folder with kept names itself (the
+    session's, whose `subagents/` is kept): what a copy, a sync or an archive puts there has
+    names the guard does not see (`cp -r /tmp/subagents <folder>`)."""
+    return any(path == own.folder and own.kept for own in zone.own)
 
 
 def _after_cd(current: str | None, folder: str | None) -> str | None:
@@ -3989,10 +4000,15 @@ def _outside_zone(target: str | None, zone: _Zone, cwd: str) -> bool:
 
 
 def _written_near_zone(target: str, cwd: str, zone: _Zone) -> bool:
-    """Whether a file a command writes may alias a folder (`_through_alias`) or is a word the guard
-    does not follow that may name the zone (`_unpinned_word`)."""
+    """Whether a file a command writes may alias a folder (`_through_alias`), is a word the guard
+    does not follow that may name the zone (`_unpinned_word`), or is an own scratch folder with
+    kept names (`_fills_kept`)."""
     current = os.path.realpath(cwd)
-    return _through_alias(target, current) or _unpinned_word(target, current, zone)
+    return (
+        _through_alias(target, current)
+        or _unpinned_word(target, current, zone)
+        or _fills_kept(_resolve(target, current), zone)
+    )
 
 
 def _writes_nothing(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:

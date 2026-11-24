@@ -5254,6 +5254,53 @@ def test_a_file_naming_the_user_folder_may_be_written_beside_readers(
     assert proc.returncode == 0, proc.stderr
 
 
+# A write into the session folder itself, with names the guard does not know: `subagents/`.
+SESSION_FOLDER_FILLS: dict[str, tuple[str, str]] = {
+    "cp-folder": ("cp -r /tmp/subagents {S}", "/tmp"),
+    "cp-folder-slash": ("cp -r /tmp/subagents {S}/", "/tmp"),
+    "cp-file": ("cp /tmp/a {S}", "/tmp"),
+    "mv-folder": ("mv /tmp/subagents {S}/", "/tmp"),
+    "tar-into": ("tar -xf /tmp/x.tar -C {S}", "/tmp"),
+    "rsync-delete": ("rsync -a --delete /tmp/empty/ {S}/", "/tmp"),
+    "unzip-into": ("unzip /tmp/x.zip -d {S}", "/tmp"),
+    "cd-then-tar": ("cd {S} && tar -xf /tmp/x.tar", "/tmp"),
+    "cwd-tar": ("tar -xf /tmp/x.tar", "{S}"),
+    "cwd-cp-here": ("cp -r /tmp/subagents .", "{S}"),
+    "cwd-unzip": ("unzip /tmp/x.zip", "{S}"),
+}
+
+SESSION_FILL_IDS = list(SESSION_FOLDER_FILLS)
+
+
+@pytest.mark.parametrize("name", SESSION_FILL_IDS)
+def test_a_copy_or_unpacking_into_the_session_folder_itself_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in SESSION_FOLDER_FILLS[name])
+    payload = in_session(bash(command, cwd=cwd))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cp /tmp/a {S}/a.txt",
+        "tar -xf /tmp/x.tar -C {S}/unpacked",
+        "cp -r /tmp/subagents {S}/copy",
+        "tar -xf /tmp/x.tar -C {J}",
+        "rsync -a /tmp/d/ {J}/",
+    ],
+    ids=["named-file", "tar-into-sub", "cp-folder-named", "tar-into-job", "rsync-into-job"],
+)
+def test_a_named_file_in_the_session_folder_or_any_copy_into_the_job_folder_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    payload = in_session(bash(pinned(command)))
+    proc = run(payload, role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
