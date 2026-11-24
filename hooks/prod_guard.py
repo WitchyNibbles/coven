@@ -672,6 +672,8 @@ SPLITTING_EMULATION = re.compile(r"\bemulate\b(?:\s+-\S+)*\s+(?:sh|ksh)\b")
 STANDARD_INPUT = re.compile(r"-|/dev/stdin|/dev/fd/0|/proc/[^/]+/fd/0")
 # A `file://` URL, its host left out: the path is what an MCP tool opens.
 FILE_URL = re.compile(r"file://(?:localhost)?(/[^\s'\"]*)")
+URL_SCHEME = re.compile(r"[A-Za-z][\w+.-]*://")
+BLANK = re.compile(r"\s")
 TARGET_DIRECTORY = re.compile(r"(?:-t|--target-directory=?)(.*)")
 OUTPUT_REDIRECT = re.compile(r"\d*>>?\|?(.*)")
 FIND_ACTIONS = frozenset(
@@ -5193,9 +5195,9 @@ def _is_zone_path(text: str, cwd: str, zone: _Zone) -> bool:
 def _string_reaches(text: str, cwd: str, zone: _Zone) -> bool:
     """An MCP input string that is a path in the zone, or whose words reach it as a Bash
     command's would: an MCP tool may run a command or a query, in a directory of its own. For
-    the user folder a `file://` URL is read as its path, and a relative path with a component
-    that may be the folder or `.claude.json` (`.claude/x`, `../.claude.json`) counts: the
-    tool's own folder may be home."""
+    the user folder a `file://` URL is read as its path, and a string that is a relative path
+    (no blank, no other URL scheme) with a component that may be the folder or `.claude.json`
+    (`.claude/x`, `../.claude.json`) counts: the tool's own folder may be home."""
     if zone.writes_inside:
         text = FILE_URL.sub(lambda url: urllib.parse.unquote(url[1]), text)
         if _relative_names_holder(text.strip(), zone):
@@ -5206,7 +5208,7 @@ def _string_reaches(text: str, cwd: str, zone: _Zone) -> bool:
 def _relative_names_holder(path: str, zone: _Zone) -> bool:
     """Whether a relative path has a component that names a root of the zone (`zone.globs`) or a
     sibling of one of its files (`.claude.json.bak`), as written: an MCP tool expands no glob."""
-    if path.startswith(("/", "~", "$")):
+    if path.startswith(("/", "~", "$")) or URL_SCHEME.match(path) or BLANK.search(path):
         return False
     siblings = tuple(f"{file.name}." for file in zone.siblings)
     return any(part in zone.globs or part.startswith(siblings) for part in path.split("/"))

@@ -5665,6 +5665,22 @@ def test_an_mcp_relative_path_outside_the_folder_is_allowed(
     assert proc.returncode == 0, proc.stderr
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        tool("mcp__github__create_issue", body="Changed packages/app/.claude/agents/foo.md"),
+        tool("mcp__web__fetch", url="https://example.com/.claude/x"),
+        tool("mcp__web__fetch", url="ssh://host/.claude/x"),
+    ],
+    ids=["prose", "https-url", "other-scheme"],
+)
+def test_mcp_prose_or_a_web_url_naming_a_claude_folder_is_no_relative_path(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    proc = run(payload, role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a text that changes how words split gets no job folder: its pieces may be the folder ---
 
 SPLIT_JOB_WRITES: dict[str, str] = {
