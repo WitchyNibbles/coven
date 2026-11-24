@@ -3309,9 +3309,12 @@ def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether a text writes a word the guard does not follow that may name the zone
     (`_may_name_zone`), or one whose leading current folder, written out (`_pinned`), is a holder
     of the zone or in it, or goes by such a `cd` to a write. Its command substitutions and brace
-    expansions stay in their words (`_glued_expansions`)."""
+    expansions stay in their words (`_glued_expansions`); heredoc bodies read as text or code
+    (`_text_bodies`: python's, `cat`'s) are no commands of the text."""
     current: str | None = cwd
-    steps = [_restored(step) for step in _write_targets(_glued_expansions(text))]
+    found = _text_bodies(text)
+    shell = found.rest if found is not None else text
+    steps = [_restored(step) for step in _write_targets(_glued_expansions(shell))]
     for index, step in enumerate(steps):
         if any(_unpinned_word(word, current, zone) for word in _step_writes(step)):
             return True
@@ -4328,13 +4331,16 @@ def _feeds_code(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bo
     """Whether a text, for a zone with `shell_reads`, writes a file with text (`_writes_text`) and
     runs a command that may run that file: code (`_runs_code_from_file`), or any command that
     does not only read (`_command_only_reads`: `git commit` runs a hook, `crontab`, `at` and
-    `npm run` a file's lines). What a read prints there, or a text names, may become a script
+    `npm run` a file's lines), but a compound command's closer (`} > f`: `_writes_for_many`),
+    whose commands are judged on their own. What a read prints there, or a text names, may become
+    a script
     (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
     return (
         zone.shell_reads
         and any(_writes_text(each, zone) for each in commands)
         and any(
-            _runs_code_from_file(each, zone) or not _command_only_reads(each, zone, cwd)
+            _runs_code_from_file(each, zone)
+            or not (_writes_for_many(each) or _command_only_reads(each, zone, cwd))
             for each in commands
         )
     )

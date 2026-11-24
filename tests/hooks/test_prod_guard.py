@@ -5044,6 +5044,10 @@ PINNED_WRITES: dict[str, tuple[str, str]] = {
     "job-folder-file": ('echo x > "$CLAUDE_JOB_DIR/out.txt"', "/tmp"),
     "job-braced-file": ("echo x > ${CLAUDE_JOB_DIR}/out.txt", "/tmp"),
     "read-to-named-file": ("cat ~/.claude/CLAUDE.md > /srv/$(date +%s).md", "/tmp"),
+    "python-heredoc-markdown": (
+        "cd /srv/docs && python3 - <<'PY'\ns = '> `A or B`.** settled'\nPY",
+        "/srv",
+    ),
 }
 
 UNPINNED_IDS = list(UNPINNED_WRITES)
@@ -5244,8 +5248,9 @@ def test_a_file_naming_the_user_folder_is_refused_beside_a_command_that_is_no_re
         "echo 'see ~/.claude/skills' > /tmp/n; cat /tmp/n",
         "grep x ~/.claude/p/a.jsonl > /tmp/out; wc -l /tmp/out",
         "printf '%s\\n' ~/.claude/a > /tmp/l; sort /tmp/l | uniq",
+        'cd /srv && { echo "transcripts: ~/.claude/projects/"; ls ~/.claude; } > /srv/i; wc -l i',
     ],
-    ids=["heredoc-alone", "echo-then-cat", "grep-then-count", "printf-then-sort"],
+    ids=["heredoc-alone", "echo-then-cat", "grep-then-count", "printf-then-sort", "group-to-file"],
 )
 def test_a_file_naming_the_user_folder_may_be_written_beside_readers(
     run: Run, store: Path, command: str
