@@ -2470,7 +2470,7 @@ def test_pm_cannot_feed_claude_to_a_shell(run: Run, store: Path, command: str) -
         "rg -l 'claude' | xargs sed -n 1p",
         PYTHON_READS_CLAUDE,
         # `.claude` is not claude
-        "ls ~/.claude | sh",
+        "ls .claude | sh",
         "echo claude | grep -c sh",
         "echo claude | xargs",
         "sh -c 'echo hi' <<< claude",
@@ -4003,7 +4003,6 @@ def test_a_custom_claude_config_dir_is_guarded_where_it_is(
         tool("Glob", pattern="*.json", path="CLAUDE"),
         tool("Write", file_path="/tmp/settings.json", content="{}"),
         tool("Write", file_path="/tmp/n.md", content="see ~/.claude/settings.json"),
-        tool("Write", file_path="CLAUDE/projects/notes.md", content="x"),
         bash("git status"),
         bash("ls .claude-plugin"),
         bash("echo 'edit ~/.claude/settings.json by hand' >> notes.md"),
@@ -4021,7 +4020,6 @@ def test_a_custom_claude_config_dir_is_guarded_where_it_is(
         "glob-folder",
         "write-another-settings-json",
         "write-text-naming-settings",
-        "write-elsewhere-in-the-folder",
         "git-status",
         "plugin-manifest-folder",
         "echo-text",
@@ -4038,6 +4036,273 @@ def test_a_restricted_session_reads_claude_settings_and_runs_ordinary_commands(
 ) -> None:
     text = json.dumps(payload).replace("CLAUDE", str(claude_dir()))
     proc = run(json.loads(text), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# --- all of Claude Code's user folder: a restricted session may read it, not change it ---
+
+FOLDER_REFUSAL = f"{PREFIX} a 'pm' session cannot write to Claude Code's user folder"
+
+
+def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
+    """Calls that write, move or delete something in Claude Code's user folder or `~/.claude.json`,
+    each by a different route: `user` is the home folder, `folder` Claude Code's folder."""
+    mcp = {"tool_name": "mcp__fs__write", "tool_input": {"args": {"path": f"{folder}/skills/x"}}}
+    mcp_command = {"tool_name": "mcp__shell__run", "tool_input": {"command": "rm -rf ~/.claude/x"}}
+    return {
+        "rm-folder": bash("rm -rf ~/.claude"),
+        "rm-home-variable": bash('rm -rf "$HOME/.claude/skills"'),
+        "rm-braced-home-variable": bash("rm -rf ${HOME}/.claude/skills"),
+        "rm-literal-home": bash(f"rm -rf {user}/.claude/skills"),
+        "rm-config-dir-variable": bash("rm -rf $CLAUDE_CONFIG_DIR/skills"),
+        "rm-braced-config-dir-variable": bash("rm -rf ${CLAUDE_CONFIG_DIR}"),
+        "rm-literal-folder": bash(f"rm -rf {folder}/skills"),
+        "mv-agent": bash("mv ~/.claude/agents/x.md ~/.cache/"),
+        "mv-in": bash("mv ~/.cache/x.md ~/.claude/agents/"),
+        "redirect": bash("echo x > ~/.claude/CLAUDE.md"),
+        "redirect-append": bash("echo x >> ~/.claude/CLAUDE.md"),
+        "redirect-home-variable": bash("echo x > $HOME/.claude/CLAUDE.md"),
+        "cp-destination": bash("cp x ~/.claude/commands/"),
+        "tee": bash("echo x | tee ~/.claude/todos/x"),
+        "ln": bash("ln -sf /tmp/x ~/.claude/skills/x"),
+        "chmod": bash("chmod 777 ~/.claude/hooks"),
+        "sed-in-place": bash("sed -i s/a/b/ ~/.claude/CLAUDE.md"),
+        "find-delete": bash("find ~/.claude -delete"),
+        "find-exec": bash("find ~/.claude/skills -name '*.md' -exec rm {} +"),
+        "find-delete-in-skills": bash("find ~/.claude/skills -delete"),
+        "read-piped-to-xargs": bash("ls ~/.claude/skills | xargs rm -rf"),
+        "read-piped-to-sh": bash("cat ~/.claude/CLAUDE.md | sh"),
+        "read-then-redirect-into-it": bash("ls ~/.claude/skills > ~/.claude/CLAUDE.md"),
+        "read-with-substitution": bash("cat $(rm -rf ~/.claude/skills)"),
+        "read-with-quoted-substitution": bash('ls "$(rm -rf ~/.claude/skills)"'),
+        "echo-with-substitution": bash("echo $(rm -rf ~/.claude/skills)"),
+        "echo-with-backticks": bash("echo `rm -rf ~/.claude/skills`"),
+        "echo-piped-to-xargs": bash("echo ~/.claude/skills | xargs rm -rf"),
+        "cp-between-two": bash("cp ~/.claude/a ~/.claude/b"),
+        "cp-target-directory": bash("cp -t ~/.claude/skills x"),
+        "cp-hard-link": bash("cp -l ~/.claude/CLAUDE.md /tmp/c"),
+        "cp-long-option": bash("cp --remove-destination x ~/.claude/y"),
+        "tar-archive-inside": bash("tar -cf ~/.claude/x.tar y"),
+        "tar-removing-files": bash("tar --remove-files -cf /tmp/x.tar ~/.claude/skills"),
+        "tar-extract-to-it": bash("tar -xf x.tar -C ~/.claude"),
+        "env-chdir": bash("env -C ~/.claude rm -rf skills"),
+        "bash-c": bash("bash -c 'rm -rf ~/.claude/skills'"),
+        "touch": bash("touch ~/.claude/skills/x"),
+        "install": bash("install -m 644 x ~/.claude/CLAUDE.md"),
+        "tar": bash("tar -C ~/.claude -xf x.tar"),
+        "dot-dot": bash("rm -rf ~/.claude/../.claude/skills"),
+        "heredoc-into-it": bash("cat > ~/.claude/CLAUDE.md <<EOF\nx\nEOF"),
+        "cd-rm": bash("cd ~/.claude && rm -rf skills"),
+        "cd-rm-after-reads": bash("cd ~/.claude && ls skills; rm -rf skills"),
+        "cd-home-variable-rm": bash("cd $HOME/.claude && rm -rf skills"),
+        "cd-literal-rm": bash(f"cd {user}/.claude && rm -rf skills"),
+        "cd-config-dir-variable-rm": bash("cd $CLAUDE_CONFIG_DIR && rm -rf skills"),
+        "cd-redirect": bash("cd ~/.claude && echo x > CLAUDE.md"),
+        "cd-reader-redirect": bash("cd ~/.claude && ls > out"),
+        "cd-reader-heredoc": bash("cd ~/.claude && cat > CLAUDE.md <<EOF\nx\nEOF"),
+        "cd-script": bash("cd ~/.claude && sh x.sh"),
+        "cd-tee": bash("cd ~/.claude && ls | tee x"),
+        "cd-substitution": bash("cd ~/.claude && ls $(rm -rf skills)"),
+        "cd-backticks": bash("cd ~/.claude && ls `rm -rf skills`"),
+        "cd-sed-in-place": bash("cd ~/.claude && sed -i s/a/b/ CLAUDE.md"),
+        "cd-glob-rm": bash("cd ~/.claude && rm -rf s*"),
+        "cd-pushd-rm": bash("pushd ~/.claude && rm -rf skills"),
+        "cd-home-rm": bash("cd ~ && rm -rf .claude"),
+        "cd-home-glob-rm": bash("cd ~ && rm -rf .cl*"),
+        "cd-reads-then-cd-away-rm": bash("cd ~/.claude && ls; cd /tmp && rm -rf x"),
+        "cd-relative-rm": bash("cd .claude && rm -rf skills", cwd=str(user)),
+        "cd-relative-redirect": bash("cd .claude && echo x > CLAUDE.md", cwd=str(user)),
+        "rm-relative-from-home": bash("rm -rf .claude/skills", cwd=str(user)),
+        "cd-home-rm-inside": bash("cd ~ && rm -rf .claude/skills"),
+        "cd-home-variable-rm-inside": bash("cd $HOME && rm -rf .claude/skills"),
+        "cd-unknown-rm-inside": bash('cd "$X" && rm -rf .claude/skills'),
+        "cd-unknown-rm-json": bash('cd "$X" && rm .claude.json'),
+        "cwd-in-folder": bash("rm -rf skills", cwd=str(folder)),
+        "cwd-in-folder-redirect": bash("echo x > CLAUDE.md", cwd=str(folder / "skills")),
+        "glob-dotted": bash("rm -rf ~/.cl*"),
+        "glob-folder-contents": bash("rm -rf ~/.claude/*"),
+        "glob-name": bash("rm -rf ~/.claude/sk*"),
+        "rm-json": bash("rm ~/.claude.json"),
+        "rm-json-variable": bash("rm $HOME/.claude.json"),
+        "redirect-json": bash("echo > ~/.claude.json"),
+        "mv-json": bash("mv ~/.claude.json /tmp/c.json"),
+        "cp-json": bash("cp /tmp/c.json ~/.claude.json"),
+        "glob-json": bash("rm ~/.claude.js*"),
+        "cd-home-rm-json": bash("cd ~ && rm .claude.json"),
+        "rg-pre": bash("rg --pre sh x ~/.claude"),
+        "rg-pre-equals": bash("rg --pre=sh x ~/.claude/skills"),
+        "rg-pre-glob": bash("rg --pre-glob '*.gz' --pre sh x ~/.claude"),
+        "write": tool("Write", file_path=f"{folder}/agents/x.md", content="x"),
+        "write-json": tool("Write", file_path=f"{user}/.claude.json", content="{}"),
+        "edit": tool("Edit", file_path=f"{folder}/CLAUDE.md", old_string="a", new_string="b"),
+        "notebook-edit": tool("NotebookEdit", notebook_path=f"{folder}/skills/x.ipynb"),
+        "mcp-path": mcp,
+        "mcp-command": mcp_command,
+    }
+
+
+FOLDER_IDS = list(folder_calls(Path("/x"), Path("/y")))
+
+
+@pytest.mark.parametrize("name", FOLDER_IDS)
+def test_a_restricted_session_cannot_change_claude_codes_user_folder(
+    run: Run, store: Path, name: str
+) -> None:
+    """Refused for a restricted session, by this zone or by a zone of a file inside it that names
+    the call first; a plain session is not refused."""
+    payload = folder_calls(home(), claude_dir())[name]
+    proc = run(payload, role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize("name", FOLDER_IDS)
+def test_the_user_folder_zone_refuses_each_call_by_itself(
+    store: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """With no other zone, so each call shows a hole in this one."""
+    monkeypatch.setattr(pg, "_zones", lambda _store: (pg._claude_folder_zone(),))
+    message = decide(folder_calls(home(), claude_dir())[name], store, "pm")
+    assert message is not None
+    assert FOLDER_REFUSAL in message
+    assert decide(folder_calls(home(), claude_dir())[name], store) is None
+
+
+def test_a_restricted_session_cannot_remove_the_home_folder(run: Run, store: Path) -> None:
+    """Whichever zone names it first: `~` holds the user folder and the store."""
+    payload = bash("rm -rf ~")
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+def test_a_custom_claude_config_dir_is_a_zone_where_it_is(
+    run: Run, store: Path, tmp_path: Path
+) -> None:
+    folder = tmp_path / "elsewhere"
+    env = {"CLAUDE_CONFIG_DIR": str(folder)}
+    for payload in (
+        bash(f"rm -rf {folder}/skills"),
+        bash("rm -rf $CLAUDE_CONFIG_DIR/skills"),
+        bash(f"cd {folder} && rm -rf skills"),
+        bash(f"echo x > {folder}/CLAUDE.md"),
+        bash("rm -rf ~/.claude/skills"),
+        bash("rm ~/.claude.json"),
+        tool("Write", file_path=f"{folder}/agents/x.md"),
+    ):
+        proc = run(payload, role="pm", env=env)
+        assert proc.returncode == 2, payload
+        assert FOLDER_REFUSAL in proc.stderr
+        assert run(payload, env=env).returncode == 0
+    assert run(bash(f"cd {folder} && ls skills"), role="pm", env=env).returncode == 0
+    assert run(bash(f"cat {folder}/CLAUDE.md"), role="pm", env=env).returncode == 0
+
+
+def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
+    """Calls a restricted session may make: reading the user folder, and writing next to it."""
+    worktree = user / "proj" / ".claude" / "worktrees" / "x"
+    return {
+        "cat": bash("cat ~/.claude/CLAUDE.md"),
+        "cat-home-variable": bash('cat "$HOME/.claude/CLAUDE.md"'),
+        "cat-literal-home": bash(f"cat {user}/.claude/CLAUDE.md"),
+        "cat-config-dir-variable": bash("cat $CLAUDE_CONFIG_DIR/CLAUDE.md"),
+        "ls": bash("ls -la ~/.claude/skills"),
+        "ls-folder": bash("ls ~/.claude"),
+        "head-json": bash("head ~/.claude.json"),
+        "wc-json": bash("wc -c ~/.claude.json"),
+        "rg": bash("rg foo ~/.claude/skills"),
+        "rg-options": bash("rg -n -i --glob '*.md' foo ~/.claude/agents"),
+        "rg-files": bash("rg --files ~/.claude/skills"),
+        "grep": bash("grep -r x ~/.claude/agents"),
+        "find": bash("find ~/.claude/skills -name '*.md'"),
+        "find-print": bash("find ~/.claude -maxdepth 2 -type d -print"),
+        "sed-print": bash("sed -n 1,5p ~/.claude/CLAUDE.md"),
+        "read-piped": bash("cat ~/.claude/CLAUDE.md | grep x | head -3"),
+        "ls-piped-to-wc": bash("ls ~/.claude/skills | wc -l"),
+        "read-then-read": bash("ls ~/.claude/skills && cat ~/.claude/CLAUDE.md"),
+        "diff": bash("diff ~/.claude/CLAUDE.md /tmp/CLAUDE.md"),
+        "cd-ls": bash("cd ~/.claude && ls skills"),
+        "cd-ls-bare": bash("cd ~/.claude && ls"),
+        "cd-relative-ls": bash("cd .claude && ls skills", cwd=str(user)),
+        "read-redirected-elsewhere": bash("cat ~/.claude/CLAUDE.md > /tmp/x"),
+        "echo-the-folder": bash("echo $CLAUDE_CONFIG_DIR"),
+        "echo-text-naming-it": bash("echo see ~/.claude/CLAUDE.md > /tmp/n.md"),
+        "cp-out-of-it": bash("cp ~/.claude/CLAUDE.md ~/.cache/c.md"),
+        "cp-folder-out": bash("cp -a ~/.claude ~/.cache/c"),
+        "tar-out-of-it": bash("tar -czf ~/.cache/b.tgz ~/.claude/skills"),
+        "read-discarding-errors": bash("ls ~/.claude 2>/dev/null"),
+        "cd-reads": bash("cd ~/.claude && cat CLAUDE.md && rg foo skills | head"),
+        "cd-semicolon-reads": bash("cd ~/.claude; ls skills; pwd"),
+        "cd-echo": bash("cd ~/.claude && echo skills && printf x && true"),
+        "cd-config-dir-variable-ls": bash("cd $CLAUDE_CONFIG_DIR && ls skills"),
+        "cd-home-variable-ls": bash("cd $HOME/.claude && ls skills"),
+        "cd-find": bash("cd ~/.claude && find skills -name '*.md'"),
+        "read-tool": tool("Read", file_path=f"{folder}/CLAUDE.md"),
+        "read-tool-json": tool("Read", file_path=f"{user}/.claude.json"),
+        "grep-tool": tool("Grep", pattern="x", path=f"{folder}/agents"),
+        "glob-tool": tool("Glob", pattern="*.md", path=f"{folder}/skills"),
+        "write-tmp": bash("echo x > /tmp/x"),
+        "rm-tmp": bash("rm -rf /tmp/x"),
+        "write-cache": bash("echo x > ~/.cache/x"),
+        "rm-cache": bash("rm -rf ~/.cache/x"),
+        "cd-cache-rm": bash("cd ~/.cache && rm -rf x"),
+        "write-cache-tool": tool("Write", file_path=f"{user}/.cache/x", content="x"),
+        "write-backup": bash("echo x > ~/.claude-backup/x"),
+        "write-json-lookalike": bash("echo x > ~/.claude.json.bak"),
+        "write-worktree-tool": tool("Write", file_path=f"{worktree}/f.py", content="x"),
+        "edit-worktree-tool": tool(
+            "Edit", file_path=f"{worktree}/f.py", old_string="a", new_string="b"
+        ),
+        "rm-worktree": bash(f"rm -rf {worktree}"),
+        "rm-worktree-tilde": bash("rm -rf ~/proj/.claude/worktrees/x"),
+        "redirect-worktree": bash(f"echo x > {worktree}/f.py"),
+        "cd-worktree-redirect": bash(f"cd {worktree} && echo x > f.py"),
+        "cd-worktree-rm": bash(f"cd {worktree} && rm -rf build"),
+        "cwd-worktree-redirect": bash("echo x > f.py", cwd=str(worktree)),
+        "cwd-worktree-rm": bash("rm -rf build", cwd=str(worktree)),
+        "mkdir-worktree": bash("mkdir -p ~/proj/.claude/worktrees/y"),
+        "cp-into-worktree": bash("cp -r a ~/proj/.claude/worktrees/x/"),
+        "git-worktree-add": bash("git worktree add ~/proj/.claude/worktrees/y"),
+        "git-in-worktree": bash("git -C ~/proj/.claude/worktrees/x commit -m x"),
+        "cd-repo-git-worktree-remove": bash("cd ~/proj && git worktree remove .claude/worktrees/x"),
+        "ln-lookalike": bash("ln -s a ~/.claude-x"),
+        "cwd-repo-relative-worktree-rm": bash("rm -rf .claude/worktrees/x", cwd=str(user / "proj")),
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg foo ~/.claude/plugins",
+        "rg foo ~/coven-memory",
+        "rg foo ~/.config/coven",
+        "rg foo ~/.claude/settings.json",
+        "cd ~/coven-memory && ls",
+        "cd ~/.config/coven && cat config.json",
+        "cd ~/.claude/plugins && ls",
+        "cat ~/.claude/settings.json",
+        "cat ~/coven-memory/systems/guard.json",
+    ],
+)
+def test_the_other_zones_take_no_reader_of_the_user_folders_zone(
+    run: Run, store: Path, command: str
+) -> None:
+    """`rg` and a `cd` that only reads are the user folder's own: the store, config, settings and
+    plugins zones judge them as they did."""
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+
+
+READS_IDS = list(folder_reads(Path("/x"), Path("/y")))
+
+
+@pytest.mark.parametrize("name", READS_IDS)
+def test_a_restricted_session_reads_claude_codes_user_folder_and_writes_next_to_it(
+    run: Run, store: Path, name: str
+) -> None:
+    (home() / "proj" / ".claude" / "worktrees" / "x").mkdir(parents=True)
+    proc = run(folder_reads(home(), claude_dir())[name], role="pm")
     assert proc.returncode == 0, proc.stderr
 
 
