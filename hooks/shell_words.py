@@ -29,8 +29,11 @@ last word of the previous command, a blanked message or the self-check's words, 
 `a[$(...)]` runs it. Any other line comes back unchanged.
 
 `heredoc_bodies(command)` hands prod-guard's relative-glob check the command with its heredoc bodies
-blanked, the bodies as written and the first word of each command that reads one, or None when
-the scanner cannot follow the line or it has a pipe (see its docstring). `without_patterns(command)`
+blanked, the bodies as written and the first word of each command that reads one (`program_name`:
+`~/x/python` as written), or None when the scanner cannot follow the line or it has a pipe (see its
+docstring). The scanner gives up on a command word it cannot name, but for a program by its path
+under the home folder (`home_program`: `~/x/tool`, `"$HOME/x/tool"`), since a path is never a
+builtin, a function or an alias. `without_patterns(command)`
 is the narrowest form, for the same check: only the pattern words of `grep`, `egrep`, `fgrep`, `rg`
 and `git grep` are blanked, on any line (a pipe or another command on it changes nothing), and the
 command comes back unchanged when the scanner cannot follow it. `without_quoted_globs(command)`
@@ -183,6 +186,10 @@ PATHSPEC_OPTION = "--pathspec-from-file"  # makes git read paths from a heredoc
 PATHSPEC_ABBREVIATION = "--pathspec-f"  # git takes any unique prefix of a long option
 
 DATA_SINKS = frozenset({"cat", "tee"})  # copy a heredoc to a file or to their output
+# A program by its path under the home folder (`~/x/tool`, `"$HOME/x/tool"`): a path holds a `/`,
+# so the shell runs the file, never a builtin, a function or an alias. Not an unquoted `$HOME/x`:
+# it is split on IFS, and a HOME set by a name built at run time may make it `eval ...`.
+HOME_PATH_MARKS = frozenset("_./@+:,%=-")  # with letters and digits, what such a path may hold
 
 # Short options that take no value, per search tool. Anything else ends the walk over the arguments.
 GREP_LETTERS = frozenset("abcEFGHhIiLlnoPqRrsTUuVvwxyZz")
@@ -561,6 +568,7 @@ class Command:
     writes_run_later: bool = False
     redirected: bool = False
     in_pipeline: bool = False
+    after_pipe: bool = False  # a pipe joins it to the command before it
 
     def add_write(self, target: str | None, *, cwd_moved: bool) -> None:
         """Record a written file. After a cd earlier on the line, a relative target's place is
@@ -597,7 +605,7 @@ def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
             pipe = token.text in PIPES
             piped = piped or pipe
             commands[-1].in_pipeline = commands[-1].in_pipeline or pipe
-            commands.append(Command(in_pipeline=pipe))
+            commands.append(Command(in_pipeline=pipe, after_pipe=pipe))
         previous = token
     cwd_moved = False
     for command in commands:
@@ -724,15 +732,35 @@ def _is_assignment(word: Word) -> bool:
 
 def _check_first_word(words: Sequence[Word]) -> None:
     """Give up when the command proper (after `if`, `command`, `X=1`, ...) is a redefiner, or one
-    whose name is not known."""
+    whose name is not known but for a program by its path under the home folder
+    (`home_program`)."""
     for word in words:
         if word.raw in LEADING_WORDS or word.value in LEADING_WORDS or _is_assignment(word):
             continue
         if word.value is not None and word.value.startswith("-"):
             continue  # an option of `command` or `time`
+        if word.value is None and home_program(word.raw):
+            return
         if word.value is None or word.value in REDEFINERS:
             raise _GiveUp
         return
+
+
+def home_program(raw: str) -> str | None:
+    """The path of a word that names a program under the home folder, as written but for its
+    quotes (`~/bin/tool`, `"$HOME/bin/tool"`); None for any other word: one that may expand
+    further (`~/bin/*`, `"$HOME/$X"`), may split (an unquoted `$HOME/x`), names a user's home
+    (`~user/x`) or ends in `/`."""
+    quoted = len(raw) > 1 and raw[0] == raw[-1] == '"'
+    prefix = '"$HOME/' if quoted else "~/"
+    if not raw.startswith(prefix):
+        return None
+    rest = raw[len(prefix) : -1 if quoted else None]
+    if not rest or rest.endswith("/"):
+        return None
+    if not all(char.isalnum() or char in HOME_PATH_MARKS for char in rest):
+        return None
+    return raw[1:-1] if quoted else raw
 
 
 @dataclass(frozen=True)
@@ -998,11 +1026,17 @@ def simple_commands(command: str) -> list[Command] | None:
     return commands
 
 
+def program_name(word: Word) -> str | None:
+    """What a command word names: its value, or the path of a program under the home folder
+    (`home_program`); None when it may expand to anything else."""
+    return word.value if word.value is not None else home_program(word.raw)
+
+
 @dataclass(frozen=True)
 class HeredocBodies:
     """A line's heredoc bodies: the line with each body blanked (same length), the bodies as
-    written, and the name of each command that reads one (its first word's value; None when
-    that is unknown or the command has no word)."""
+    written, and the name of each command that reads one (`program_name` of its first word;
+    None when that is unknown or the command has no word)."""
 
     rest: str
     bodies: list[str]
@@ -1025,7 +1059,7 @@ def heredoc_bodies(command: str) -> HeredocBodies | None:
     return HeredocBodies(
         rest=_blanked(command, spans),
         bodies=[command[start:end] for start, end in spans],
-        readers=[c.words[0].value if c.words else None for c in readers],
+        readers=[program_name(c.words[0]) if c.words else None for c in readers],
     )
 
 

@@ -4071,6 +4071,79 @@ def test_a_pm_may_quote_a_glob_in_a_project_with_a_claude_folder(store: Path) ->
     assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
 
 
+# sed scripts whose letters are no `e`, `w` or `W` command or flag, nor an `-f` file: the line
+# keeps its quotes literal, so the grep pattern's `\\s*` is no glob.
+SED_SCRIPTS = {
+    "character-class": 'sed -E "s/(:[[:space:]]*).*/\\1<literal>/"',
+    "expressions": "sed -e 's/.*/web/' -e '/^$/d'",
+    "range-and-group": "sed -n '/begin/,/end/{s/.*/=/;p}'",
+    "hold-and-label": "sed -n ':end;N;$!bend;s/.*/x/;p'",
+    "transliterate": "sed 'y/abc/xyz/;s/.*/e/g'",
+    "comment": "sed -n '# keep the ends\n/.*/p'",
+    "append-text": "sed 's/.*/x/;1a see the web'",
+    "read-file": "sed 's/.*/x/;$r /tmp/footer.txt'",
+    "quit-with-status": "sed -E 's/.*/x/;/error/q5'",
+}
+
+
+@pytest.mark.parametrize("name", SED_SCRIPTS)
+def test_a_pm_may_pipe_into_a_sed_script_in_a_project_with_a_claude_folder(
+    store: Path, name: str
+) -> None:
+    (project_dir() / ".claude").mkdir()
+    command = f'grep -nE "(A|B)\\s*=" -r app/*.py | {SED_SCRIPTS[name]}'
+    assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
+
+
+@pytest.mark.parametrize(
+    "python",
+    ["python3", "/usr/bin/python3", "/bin/python3"],
+)
+def test_a_pm_may_run_python_by_its_path_on_a_body_with_globs(store: Path, python: str) -> None:
+    """A body python reads is a script: its regex `[a-z]*` is no glob, though read as one by a
+    shell next to `~/.config` it names the coven folder in it."""
+    body = "# from ~/.config/x\nimport re\nword = '[a-z]*'\nprint(re.findall(word, 'a b'))\n"
+    command = f"{python} - <<'PY'\n{body}PY"
+    assert decide(bash(command, cwd=str(project_dir())), store, "pm") is None
+
+
+READER_GLOB_BODIES = {"settings": "print('.cl*')", "config": "print('.con*')"}
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        "./python3",
+        "/tmp/x/python3",
+        "bin/node",
+        "~/t/python3",
+        '"$HOME/t/python3"',
+        "/usr/local/bin/python3",
+    ],
+)
+@pytest.mark.parametrize("body", READER_GLOB_BODIES)
+def test_a_pm_cannot_run_a_body_with_a_glob_by_a_reader_anywhere_else(
+    store: Path, reader: str, body: str
+) -> None:
+    """A program by a path the session may write may be a shell under a reader's name: its
+    body's relative words are read as the shell would expand them, here from the home folder."""
+    command = f"{reader} - <<'PY'\n{READER_GLOB_BODIES[body]}\nPY"
+    assert decide(bash(command, cwd=str(home())), store, "pm") is not None
+
+
+@pytest.mark.parametrize(
+    ("reader", "body"),
+    # `/usr/bin/python3` on `.cl*` stays refused: a program by its path is blanked as a plugin
+    # run, and the body is then read with no reader (docs/known-gaps.md).
+    [("python3", "settings"), ("python3", "config"), ("/usr/bin/python3", "config")],
+)
+def test_a_pm_may_run_a_body_with_a_glob_by_a_reader_it_knows(
+    store: Path, reader: str, body: str
+) -> None:
+    command = f"{reader} - <<'PY'\n{READER_GLOB_BODIES[body]}\nPY"
+    assert decide(bash(command, cwd=str(home())), store, "pm") is None
+
+
 # Still refused: a glob the shell expands, a quoted word a shell or interpreter runs, a body a
 # shell reads, an unquoted heredoc (its `$(...)` expands), and a Bash read of the settings.
 QUOTED_GLOB_REFUSALS = {
@@ -4094,11 +4167,55 @@ QUOTED_GLOB_REFUSALS = {
     "find-brace-action": "find /tmp -maxdepth 0 -e{xec,xec} sh -c 'cd ~; rm -rf .cl*/plugins' ';'",
     "git-pathspec": "git rm -r --cached '.cl*'",
     "sed-runs-its-output": "sed 's/^/ls -d .cl* /e' /tmp/x",
+    "sed-run-command": "sed '1e ls -d .cl*' /tmp/x",
+    "sed-run-command-after-another": "sed 'p;e ls -d .cl*' /tmp/x",
+    "sed-run-command-after-a-label": "sed ':a;e ls -d .cl*' /tmp/x",
+    "sed-run-command-after-a-comment": "sed '#x\ne ls -d .cl*' /tmp/x",
+    "sed-run-command-after-a-transliteration": "sed 'y/ab/cd/;e ls -d .cl*' /tmp/x",
+    "sed-run-command-in-a-group": "sed -e '1{' -e 'e ls -d .cl*' -e '}' /tmp/x",
+    "sed-run-command-in-a-second-expression": "sed -e p -e 'e ls -d .cl*' /tmp/x",
+    "sed-run-command-in-an-option-cluster": "sed -ne 'e ls -d .cl*' /tmp/x",
+    "sed-run-command-in-a-long-option": "sed --expression='e ls -d .cl*' /tmp/x",
+    "sed-run-command-in-an-abbreviated-option": "sed --expr='e ls -d .cl*' /tmp/x",
+    "sed-run-flag-after-an-escaped-delimiter": "sed 's/a\\/x/ls -d .cl* #/e' /tmp/x",
+    "sed-run-flag-with-other-flags": "sed 's/^/ls -d .cl* /ge' /tmp/x",
+    "sed-write-flag": "sed -n 's/x/y/w .cl*' /tmp/x",
+    "sed-write-command": "sed -n 'W .cl*' /tmp/x",
+    "sed-unknown-command": "sed 'v;e ls -d .cl*' /tmp/x",
+    "sed-run-command-after-text": "sed -e '1a x' -e 'e ls -d .cl*' /tmp/x",
+    "sed-run-command-after-continued-text": "sed '1a x\\\\\ne ls -d .cl*' /tmp/x",
+    "sed-script-file": "sed -f /tmp/s.sed '.cl*'",
+    # Under POSIXLY_CORRECT, sed takes `-e` after its first operand as a file, the operand as
+    # the script.
+    "sed-expression-after-the-script": "sed 'e ls -d .cl*' -e p /tmp/x",
+    "sed-variable-script": "sed \"$S\" '.cl*'",
+    # GNU sed ends a comment or a file name at the newline, a backslash or not, and reads the
+    # delimiter inside `[...]` as part of the regex.
+    "sed-run-command-after-a-comment-with-a-backslash": "sed -n -e '#x\\' -e 'e ls -d .cl*' f",
+    "sed-run-command-after-a-read-file-with-a-backslash": "sed -n -e 'r x\\' -e 'e ls -d .cl*' f",
+    "sed-run-command-after-a-queued-file": "sed -n -e 'R x\\' -e 'e ls -d .cl*' f",
+    "sed-write-after-a-read-file": "sed -n -e 'r x\\' -e 'w .cl*' f",
+    "sed-piped-run-command-after-a-comment": "cat f | sed -n -e '#x\\' -e 'e ls -d .cl*'",
+    "sed-run-command-in-a-bracket": "sed -n 's/[a/b]x/;/;e ls -d .cl* ;/p' f",
+    "sed-run-command-after-an-address-bracket": "sed -n '/[/]/p;/;e ls -d .cl* ;/p' f",
+    "sed-run-flag-after-a-bracket": "sed 's/x[^/]/;i/e;e ls -d .cl* ;/p' f",
     "trap": "trap 'ls .*' EXIT; ls '.x*'",
     "python-body-glob": (
         "python3 - <<'EOF'\nimport glob, shutil\nfor p in glob.glob('.cl*'): shutil.rmtree(p)\nEOF"
     ),
 }
+
+
+def test_a_body_refused_for_its_glob_like_words_points_to_write_and_a_separate_run(
+    store: Path,
+) -> None:
+    """A body word with a literal (`**en**`) still counts as a glob next to `~/.config`: python
+    may hand it to a shell. The refusal says how to run such a script."""
+    body = "# from ~/.config/x\nold = '**en** route'\nprint(old)\n"
+    refusal = decide(bash(f"python3 - <<'PY'\n{body}PY", cwd=str(project_dir())), store, "pm")
+    assert refusal is not None
+    assert "with the Write tool" in refusal
+    assert "in its own Bash call" in refusal
 
 
 @pytest.mark.parametrize("name", QUOTED_GLOB_REFUSALS)
@@ -4136,6 +4253,23 @@ def plugin_reads() -> dict[str, str]:
         "grep-into-head": "grep -n '^#' ~/.claude/plugins/marketplaces/x/DESIGN.md | head -40",
         "find": "find ~/.claude/plugins -name '*.md' -path '*impeccable*'",
         "read-then-write-elsewhere": f"cat {SDD}/SKILL.md > /tmp/skill.md",
+        "sed-by-variable": (
+            f"CM={SDD}; wc -l $CM/scripts/*.py; sed -n 60,110p $CM/commands/map.md;"
+            " grep -n 'files' $CM/workflows/x.js | head -15"
+        ),
+        "sed-by-quoted-variable": f'S={SDD}; sed -n 1,80p "$S/references/fix-loop.md"',
+        "sed-by-variable-and-path": f"S={SDD} && sed -n 1p $S/a.md {SDD}/b.md",
+        "program-under-home": (
+            "~/.claude/plugins/cache/impeccable/impeccable/4.7.0/scripts/impeccable context"
+        ),
+        "reads-in-pipelines-in-a-row": (
+            "ls ~/.claude/skills/ | head -50; ls ~/.claude/plugins/marketplaces | head;"
+            " find ~/.claude -path '*impeccable*' -iname '*design*md*' 2>/dev/null | head"
+        ),
+        "sed-into-sed": f"S={SDD}; sed -n 1,200p $S/prompt.md | sed -n '/```/,/```/p'",
+        "program-under-home-variable": (
+            '"$HOME/.claude/plugins/cache/impeccable/impeccable/4.7.0/scripts/impeccable" context'
+        ),
     }
 
 
@@ -4193,6 +4327,44 @@ PLUGIN_WRITES = {
     "find-brace-word": f"find {SDD} {{-delete,-print}}",
     "sed-brace-option": f"sed -n 1p {SDD}/x {{-i,-i}}",
     "sed-glob-word": f"sed -n 1p {SDD}/x *",
+    # A sed operand by a variable that may not hold the assigned folder when sed runs: it may
+    # expand to an option (`-i`).
+    "sed-variable-assigned-after": f"sed -n 1p $CM/x {SDD}/SKILL.md; CM={SDD}",
+    "sed-variable-assigned-twice": f"CM={SDD}; CM=-i; sed -n 1p $CM/x {SDD}/SKILL.md",
+    "sed-variable-assigned-on-a-condition": f"false && CM={SDD}; sed -n 1p $CM/x {SDD}/SKILL.md",
+    "sed-variable-assigned-in-a-subshell": f"(CM={SDD}); sed -n 1p $CM/x {SDD}/SKILL.md",
+    "sed-variable-assigned-in-a-group": f"{{ CM={SDD}; }}; sed -n 1p $CM/x {SDD}/SKILL.md",
+    "sed-variable-assigned-in-the-background": f"CM={SDD} & sed -n 1p $CM/x {SDD}/SKILL.md",
+    "sed-variable-assigned-in-a-pipe": f"CM={SDD} | sed -n 1p $CM/x {SDD}/SKILL.md",
+    "sed-variable-assigned-an-option": f"CM=-i; sed -n 1p $CM {SDD}/SKILL.md",
+    "sed-variable-split-on-a-new-ifs": f"CM=/tmp/-i; IFS=/; sed -n 1p $CM {SDD}/SKILL.md",
+    "sed-variable-with-a-default": f"CM={SDD}; sed -n 1p ${{CM:--i}} {SDD}/SKILL.md",
+    "sed-second-variable": f"CM={SDD}; sed -n 1p $CM/x $X {SDD}/SKILL.md",
+    "sed-variable-in-place": f"CM={SDD}; sed -i 1d $CM/SKILL.md",
+    # A folder variable set again through a name built at run time.
+    "sed-variable-printed-into-a-built-name": (
+        f'CM={SDD}; n=C; m=M; printf -v "$n$m" "%s" -i; sed -n 1p $CM {SDD}/b'
+    ),
+    "sed-variable-read-into-a-built-name": (
+        f'CM={SDD}; n=C; m=M; read $n$m <<< "-i"; sed -n 1p $CM/a {SDD}/b'
+    ),
+    "sed-variable-mapped-into-a-built-name": (
+        f'CM={SDD}; n=C; m=M; mapfile -t $n$m <<< "-i"; sed -n 1p $CM {SDD}/b'
+    ),
+    # In a subshell the binding ends at `)`: `$CM` is then whatever the caller's CM holds.
+    "sed-variable-in-a-subshell-on-two-lines": f"(CM={SDD}\n); sed -n 1p $CM {SDD}/b",
+    "sed-variable-set-by-getopts": f"CM={SDD}; getopts i: $n -i; sed -n 1p $CM {SDD}/b",
+    # An unquoted `$HOME` program: a HOME set through a built name splits into other words.
+    "program-under-a-home-read-into-a-built-name": (
+        f'a=HO; b=ME; read $a$b <<< "rm -rf {SDD}"; $HOME/.claude/plugins/x/run'
+    ),
+    # A read piped into a sed that writes or runs, or a pipeline after one that only reads.
+    "sed-filter-writes": f"find {SDD} | sed -n 'w /tmp/list'",
+    "sed-filter-writes-each-line": f"find {SDD} | sed 'W /tmp/list'",
+    "sed-filter-in-place": f"cat {SDD}/a | sed -i 1d {SDD}/b",
+    "pipeline-after-a-read": f"ls {SDD} | head; find {SDD} | xargs rm",
+    # A program run under the home folder is run, its arguments are not read.
+    "program-under-home-given-a-path": f"~/bin/tool --rm {SDD}",
     # A read in a group or subshell whose output a pipe acts on.
     "subshell-into-xargs": f"(find {SDD} -type f) | xargs rm",
     "group-into-xargs": f"{{ :; find {SDD}; }} | xargs rm",
