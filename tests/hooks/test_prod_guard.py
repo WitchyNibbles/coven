@@ -5415,6 +5415,80 @@ def test_a_printf_that_prints_the_user_folder_or_sets_a_far_path_runs(
     assert proc.returncode == 0, proc.stderr
 
 
+# --- a variable's subscript or arithmetic runs the command substitutions in it ---
+
+# `D='a[$(...)]'`: whatever reads D as a variable name or a number runs what is in the brackets.
+RUN_BY_SUBSCRIPT = "D='a[$(rm${IFS}-rf${IFS}~/.claude/skills)]'; "
+SUBSCRIPT_RUNS: dict[str, str] = {
+    "test-v": 'test -v "$D"',
+    "bracket-v": '[ -v "$D" ]',
+    "bracket-named-ref": '[ -R "$D" ]',
+    "test-eq": 'test "$D" -eq 0',
+    "bracket-gt": '[ 1 -gt "$D" ]',
+    "operator-from-variable": 'O=-v; test "$O" "$D"',
+    "indirect": 'echo "${!D}"',
+    "substring-offset": 'x=abc; echo "${x:D}"',
+    "array-subscript": 'a=(x y); echo "${a[D]}"',
+    "zsh-subscript": "a=(x y); echo $a[D]",
+    "printf-number": 'printf %d "$D"',
+    "break-count": 'for f in x; do break "$D"; done',
+    "exit-status": 'exit "$D"',
+}
+SUBSCRIPT_IDS = list(SUBSCRIPT_RUNS)
+
+
+@pytest.mark.parametrize("name", SUBSCRIPT_IDS)
+def test_a_read_that_may_evaluate_a_variable_as_a_name_or_number_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(RUN_BY_SUBSCRIPT + SUBSCRIPT_RUNS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+# The command text a value keeps for later: single quotes, an escape, ANSI-C quoting.
+KEPT_COMMAND_VALUES: dict[str, str] = {
+    "escaped": 'D=a[\\$\\(rm\\ -rf\\ ~/.claude/skills\\)]; ls "$D"',
+    "ansi-c": "D=$'a[\\x24(rm -rf ~/.claude/skills)]'; ls \"$D\"",
+    "backtick": "D='a[`rm -rf ~/.claude/skills`]'; ls \"$D\"",
+}
+KEPT_IDS = list(KEPT_COMMAND_VALUES)
+
+
+@pytest.mark.parametrize("name", KEPT_IDS)
+def test_an_assignment_that_keeps_command_text_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(KEPT_COMMAND_VALUES[name])
+    assert run(payload, role="pm").returncode == 2
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "test -d ~/.claude/skills && ls ~/.claude/skills",
+        "[ -f ~/.claude/CLAUDE.md ] && cat ~/.claude/CLAUDE.md",
+        '[ "$x" = y ] && cat ~/.claude/CLAUDE.md',
+        "[ -n \"$(ls ~/.claude)\" ] && ls ~/.claude",
+        "n=$(grep -c x ~/.claude/a); printf '%d files\\n' \"$n\"; ls ~/.claude",
+        "D=~/.claude/skills; ls \"$D\"",
+    ],
+    ids=[
+        "test-d",
+        "bracket-f",
+        "bracket-equals",
+        "count-test",
+        "printf-count",
+        "assigned-path",
+    ],
+)
+def test_a_test_or_expansion_that_evaluates_nothing_still_reads(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative

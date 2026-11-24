@@ -598,6 +598,26 @@ BLOCKED_PREFIXES = (
     "XDG_",
     "SHELLOPTS",
 )
+# What reads a variable's value as a name or a number, and so runs the command substitutions in a
+# subscript of it (`D='a[$(rm x)]'`): an expansion that reads a name (NAME_EXPANSION: `${!D}`, a
+# subscript `${a[D]}` or zsh's `$a[D]`, an offset `${x:D}`) or a number (ARITHMETIC_EXPANSION:
+# `$((D))`, `$[D]`), a test's `-v` or `-R`, one of its number comparisons (zsh's test evaluates
+# both sides), and the commands zsh gives a number (NUMBER_COMMANDS: `break $n`; `printf %d $n` by
+# NUMBER_CONVERSION). What a word holds that is a number: an integer, a special parameter, a
+# variable (VARIABLE_WORD) the text only sets to one, a count (`$(grep -c x f)`: COUNT_OPTIONS).
+NAME_EXPANSION = re.compile(r"\$\{!|\$\{?#?\w+\[(?![@*]\]|\d+\])|\$\{#?\w+:(?![-=+?])")
+ARITHMETIC_EXPANSION = re.compile(r"\$\(\(([^()]*)\)\)|\$\[([^\]]*)\]|\$\(\(|\$\[")
+VARIABLE_WORD = re.compile(r'"?\$(?:\{(\w+)\}|(\w+)|[?#$!])"?')
+SUBSTITUTION_WORD = re.compile(r'"?\$\(.*\)"?', re.DOTALL)
+COUNTERS = frozenset({"grep", "egrep", "fgrep", "wc"})
+COUNT_OPTIONS = frozenset("lcwm")  # wc's, which with no file print numbers alone
+TEST_COMMANDS = frozenset({"test", "["})
+NAME_TESTS = frozenset({"-v", "-R"})
+NUMBER_TESTS = frozenset({"-eq", "-ne", "-lt", "-le", "-gt", "-ge"})
+TEST_WORDS = frozenset({"!", "(", ")", "-a", "-o"})
+NUMBER_COMMANDS = frozenset({"break", "continue", "exit", "return", "shift"})
+NUMBER_CONVERSION = re.compile(r"%[-+ #0'\d.*]*[diouxXeEfFgGaA]")
+INTEGER = re.compile(r"-?\d+")
 # What a read may set or export for the programs it runs: their language, time zone, terminal,
 # output width and colours, nothing a program runs by (`TAR_OPTIONS`, `RIPGREP_CONFIG_PATH`,
 # `LESSOPEN`); and in front of a command, with a plain value (`LC_ALL=C grep`).
@@ -4223,8 +4243,10 @@ def _text_reads(text: str, zone: _Zone, cwd: str) -> bool:
     """Whether a command text only reads (`_reads_only`); not when the scanner cannot follow it
     (shell_words.simple_commands, with the plain `$(...)` of `Word.substitutions` read)."""
     commands = _scanned_commands(text)
-    return commands is not None and _reads_only(
-        _bound_view(commands, _bound_paths(text, commands), zone), zone, cwd
+    return (
+        commands is not None
+        and not _evaluates_unknown(commands, zone)
+        and _reads_only(_bound_view(commands, _bound_paths(text, commands), zone), zone, cwd)
     )
 
 
@@ -4306,9 +4328,10 @@ def _proper_words(words: Sequence[_ShellWord]) -> Sequence[_ShellWord]:
 def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
     """Whether a simple command writes and runs nothing, whatever its operands: after the words
     that open a command in a compound one (COMMAND_OPENERS), a closer of one, a `for` header
-    (`_loop_header`), a lone assignment, maybe after `export`, of a plain name (`_plain_name`), or
-    a program that only reads (`_program_only_reads`). No word may run a command but a plain
-    `$(...)` that only reads (`_substitutions_read`)."""
+    (`_loop_header`), a lone assignment, maybe after `export`, of a plain name (`_plain_name`)
+    that keeps no command text (`_keeps_command_text`), or a program that only reads
+    (`_program_only_reads`). No word may run a command but a plain `$(...)` that only reads
+    (`_substitutions_read`)."""
     words = _proper_words(each.words)
     if not words:
         return True
@@ -4324,7 +4347,8 @@ def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
     if head == "export":
         words = words[1:]
     if all(BINDING.match(word.raw) for word in words):
-        return all(map(_plain_assignment, words))
+        kept = zone.shell_reads and any(map(_keeps_command_text, words))
+        return not kept and all(map(_plain_assignment, words))
     return _program_only_reads(each, _unwrap(words, zone), zone, cwd)
 
 
@@ -4418,6 +4442,149 @@ def _arms_reads(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
         return False
     every = any(_exports_all(_proper_words(each.words)) for each in commands)
     return any(_sets_for_programs(_proper_words(each.words), exported=every) for each in commands)
+
+
+def _evaluates_unknown(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
+    """Whether a text, for a zone with `shell_reads`, may read a value it does not know to be a
+    number (`_number_word`) as a variable's name or a number (`_evaluated_words`), which runs the
+    command substitutions in its subscript: `D='a[$(rm x)]'; test -v "$D"` runs `rm x`. Its reads
+    are then no reads."""
+    if not zone.shell_reads:
+        return False
+    numbers = _number_names(commands)
+    for each in commands:
+        evaluated = _evaluated_words(_proper_words(each.words))
+        if evaluated is None or not all(_number_word(word, numbers) for word in evaluated):
+            return True
+    return False
+
+
+def _evaluated_words(words: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The words a command reads as numbers: those with an arithmetic expansion, a test's number
+    comparison's operands (`_test_operands`), a NUMBER_COMMANDS one's arguments and the
+    arguments of a printf with a number conversion (`_printf_operands`). None when it reads a
+    word as a variable's name (NAME_EXPANSION, a test's `-v`) or may read any word as one."""
+    if any(NAME_EXPANSION.search(word.raw) for word in words):
+        return None
+    found = [word for word in words if ARITHMETIC_EXPANSION.search(word.raw)]
+    name, args = (words[0].value if words else None), words[1:]
+    operands: list[_ShellWord] | None = []
+    if name in TEST_COMMANDS:
+        operands = _test_operands(args)
+    elif name in NUMBER_COMMANDS:
+        operands = list(args)
+    elif name == "printf":
+        operands = _printf_operands(args)
+    return None if operands is None else [*found, *operands]
+
+
+def _test_operands(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The words a `test` or `[` reads as numbers: with a number comparison (NUMBER_TESTS) every
+    word but its operators. None when it names a variable (`-v`, `-R`: NAME_TESTS) or a word
+    the guard cannot read stands where an operator does (`test "$O" "$D"`)."""
+    words = list(args)
+    if words[-1:] and words[-1].value == "]":
+        words = words[:-1]
+    while words[:1] and words[0].value == "!":
+        words = words[1:]
+    values = [word.value for word in words]
+    operator = {2: values[:1], 3: values[1:2]}.get(len(values), [])
+    if NAME_TESTS.intersection(values) or None in operator:
+        return None
+    if not NUMBER_TESTS.intersection(values):
+        return []
+    return [word for word in words if word.value not in {*NUMBER_TESTS, *TEST_WORDS}]
+
+
+def _printf_operands(args: Sequence[_ShellWord]) -> list[_ShellWord] | None:
+    """The words a printf may read as numbers, which zsh evaluates: those after a format with a
+    number conversion (NUMBER_CONVERSION); None after a format the guard cannot read."""
+    if args[:1] and args[0].value == "--":
+        args = args[1:]
+    if len(args) < 2:
+        return []
+    format_text = args[0].value
+    if format_text is None:
+        return None
+    return list(args[1:]) if NUMBER_CONVERSION.search(format_text) else []
+
+
+def _number_word(word: _ShellWord, numbers: frozenset[str]) -> bool:
+    """Whether a word holds a number: an integer, a special parameter (`$?`, `$#`), a variable of
+    `numbers`, a count (`_counts`), or arithmetic of these alone (`_number_arithmetic`)."""
+    return _holds_number(word.raw, word.value, word.substitutions, numbers)
+
+
+def _holds_number(
+    raw: str, value: str | None, substitutions: Sequence[str], numbers: frozenset[str]
+) -> bool:
+    """`_number_word` of a word given as its text, its value and its substitutions' texts."""
+    if value is not None:
+        return INTEGER.fullmatch(value) is not None
+    variable = VARIABLE_WORD.fullmatch(raw)
+    if variable:
+        name = variable[1] or variable[2]
+        return name is None or name in numbers
+    if SUBSTITUTION_WORD.fullmatch(raw) and len(substitutions) == 1:
+        return _counts(substitutions[0])
+    return _number_arithmetic(raw, numbers)
+
+
+def _number_arithmetic(raw: str, numbers: frozenset[str]) -> bool:
+    """Whether every arithmetic expansion of a word (ARITHMETIC_EXPANSION) has no expansion of
+    its own and names only variables of `numbers`, and nothing else of the word expands."""
+    rest = raw
+    for match in ARITHMETIC_EXPANSION.finditer(raw):
+        expression = match[1] if match[1] is not None else match[2]
+        if expression is None or RUNS_COMMAND.search(expression) or "[" in expression:
+            return False
+        if not set(re.findall(r"[A-Za-z_]\w*", expression)) <= numbers:
+            return False
+        rest = rest.replace(match[0], "")
+    return "$" not in rest and "`" not in rest
+
+
+def _counts(text: str) -> bool:
+    """Whether a substitution's text prints only a count: one pipeline whose last command is a
+    `grep -c` of one file or of its input, or a `wc` of its input with COUNT_OPTIONS alone."""
+    commands = _scanned_commands(text)
+    if not commands or not all(each.after_pipe for each in commands[1:]):
+        return False
+    words = _proper_words(commands[-1].words)
+    if not words or words[0].value not in COUNTERS:
+        return False
+    letters = [_option_letters(word) for word in words[1:] if (word.value or "").startswith("-")]
+    operands = [word for word in words[1:] if not (word.value or "x").startswith("-")]
+    if any(letter is None for letter in letters):
+        return False
+    flags = set("".join(letter or "" for letter in letters))
+    if words[0].value == "wc":
+        return not operands and flags <= COUNT_OPTIONS
+    return "c" in flags and len(operands) <= (1 if flags & {"e", "f"} else 2)
+
+
+def _number_names(commands: Sequence[_SimpleCommand]) -> frozenset[str]:
+    """The variables a text only sets to numbers (`_number_value` of each assignment), and by no
+    other word: no command is given the name (`read n`, `for n`) or `-vNAME` (`printf -vn`)."""
+    assigned: dict[str, list[_ShellWord]] = {}
+    given: set[str] = set()
+    for each in commands:
+        for word in each.words:
+            if match := BINDING.match(word.raw):
+                assigned.setdefault(match[1], []).append(word)
+            elif word.value is not None:
+                given |= {word.value, word.value.removeprefix(PRINTF_VARIABLE)}
+    return frozenset(
+        name
+        for name, words in assigned.items()
+        if name not in given and all(map(_number_value, words))
+    )
+
+
+def _number_value(word: _ShellWord) -> bool:
+    """Whether an assignment's value holds a number (`_holds_number`, knowing no variable)."""
+    value = None if word.value is None else word.value.partition("=")[2]
+    return _holds_number(word.raw.partition("=")[2], value, word.substitutions, frozenset())
 
 
 def _exports_all(words: Sequence[_ShellWord]) -> bool:
@@ -4532,6 +4699,22 @@ def _read_runs(
             yield run
 
 
+def _read_value(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
+    """Whether a lone assignment may be blanked as a read: its value runs nothing but `$(...)` that
+    only read, of a plain name (`_only_reads_value`), and keeps no command text for later (a
+    quoted or escaped `$(` or backtick, an ANSI-C `$'...'`), which a subscript of it would run."""
+    if _keeps_command_text(word) or not _substitutions_read(word, zone, cwd):
+        return False
+    return not word.substitutions or _plain_assignment(word)
+
+
+def _keeps_command_text(word: _ShellWord) -> bool:
+    """Whether an assignment keeps command text for later, which a subscript of its name would
+    run: a quoted or escaped `$(` (more than the word's own substitutions) or an ANSI-C `$'...'`,
+    whose escapes may spell one."""
+    return "$'" in word.raw or _unquoted(word.raw).count("$(") > len(word.substitutions)
+
+
 def _only_reads_value(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
     """Whether an assignment of a plain name (`_plain_assignment`) has only `$(...)` that read
     (`_substitutions_read`) in its value."""
@@ -4612,13 +4795,9 @@ def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
     feeding = _feeds_code(commands, zone, cwd)
     if feeding and any(_writes_for_many(each) for each in commands):
         return []
-    if _arms_reads(commands, zone):
+    if _arms_reads(commands, zone) or _evaluates_unknown(commands, zone):
         return []  # a read may then write: `export TAR_OPTIONS=--remove-files; tar -c ~/x`
-    lone = [
-        word
-        for word in _lone_assignments(commands)
-        if not word.substitutions or _only_reads_value(word, zone, cwd)
-    ]
+    lone = [word for word in _lone_assignments(commands) if _read_value(word, zone, cwd)]
     folders = (
         _bound_paths(command, commands) if zone.shell_reads else _bound_folders(command, commands)
     )
