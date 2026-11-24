@@ -492,6 +492,23 @@ SUBAGENTS_FOLDER = "subagents"
 SESSION_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 JOB_NAME = re.compile(rf"(?<!\w){JOB_VARIABLE}(?!\w)")
 JOB_REFERENCE = re.compile(rf"\$\{{{JOB_VARIABLE}\}}|\${JOB_VARIABLE}(?!\w)")
+# What may stand right before and right after a `$CLAUDE_JOB_DIR` that starts a word and expands
+# as the hook has it: not zsh's `$CLAUDE_JOB_DIR:h` or `$CLAUDE_JOB_DIR[1]`, nor `x$CLAUDE_JOB_DIR`.
+JOB_WORD_BEFORE = frozenset(' \t\n"=<>(;|&')
+JOB_WORD_AFTER = frozenset("/ \t\n\"';&|)<>")
+# What a written word may hold that the guard does not follow (`_may_name_zone`): a parameter,
+# command or arithmetic expansion, a backtick, or a brace expansion.
+UNPINNED_EXPANSION = re.compile(r"\$|`|\{[^{}]*(?:,|\.\.)[^{}]*\}")
+# The text of those expansions, each read as a glob's `*` to see what a word may spell
+# (`.cl${X}aude` may be `.claude`).
+EXPANSION_TEXT = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$\w+|\$.|[{},]")
+# A written word's leading current folder, which the guard knows where the text's `cd`s go.
+CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
+# A brace expansion (`{a,b}`, `{1..3}`), and what `_glued_expansions` keeps in an expansion's
+# word: blanks, separators, parentheses, braces and backticks, as private-use characters.
+BRACE_LIST = re.compile(r"\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}")
+GLUED = str.maketrans({char: chr(0xE000 + at) for at, char in enumerate(" \t\n;&|(){}`<>")})
+UNGLUED = str.maketrans({chr(0xE000 + at): char for at, char in enumerate(" \t\n;&|(){}`<>")})
 # What the user folder's zone adds to READ_COMMANDS: `rg` (it writes no file), and the commands
 # that only print or do nothing, which a path may follow (`echo $CLAUDE_CONFIG_DIR`). A reader of
 # PROGRAM_READERS has options that run a program (`rg --pre CMD` runs CMD on each file).
@@ -583,6 +600,14 @@ COMPOUND_CLOSERS = frozenset({"done", "fi", "}", "esac"})
 # Variables that can name a zone, and what a session may have set them to instead of the hook's
 # own value: the default of each (the plugin root is a folder under the plugins folder).
 ZONE_VARIABLES = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_PLUGIN_ROOT", "XDG_CONFIG_HOME")
+# Expansions in a written word whose value is a folder the guard cannot pin: the current folder
+# where it does not know it, the last one, the directory stack (`~-`, `~1`), and a zone variable
+# or CLAUDE_JOB_DIR read with an operator (`${HOME%/}`, `${CLAUDE_JOB_DIR:-x}`). A plain zone
+# variable is expanded each way (`_expansions`).
+FOLDER_EXPANSION = re.compile(
+    r"\$\{?(?:PWD|OLDPWD)\b|^~[-+\d]|"
+    rf"\$\{{[#!]?(?:{'|'.join((*ZONE_VARIABLES, JOB_VARIABLE))})[^}}\w]"
+)
 ZONE_VARIABLE = re.compile(
     rf"\$(?:\{{({'|'.join(ZONE_VARIABLES)})(?::?[-=?+]([^}}]*))?\}}|({'|'.join(ZONE_VARIABLES)})(?!\w))"
 )
@@ -2356,16 +2381,58 @@ def _session_folder(transcript: str | None, folders: Iterable[Path]) -> _Own | N
     return _Own(str(real), (SUBAGENTS_FOLDER,))
 
 
+def _live_dollars(text: str) -> set[int]:
+    """Where a `$` of a Bash text starts an expansion: not in single quotes, not after a
+    backslash."""
+    live: set[int] = set()
+    quote = ""
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            index += 1
+        elif char == '"':
+            quote = "" if quote else '"'
+        elif char == "'" and not quote:
+            quote = "'"
+        elif char == "$":
+            live.add(index)
+        index += 1
+    return live
+
+
+def _job_references(text: str) -> list[tuple[int, int]]:
+    """The spans of the `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` of a Bash text that the shell
+    expands to the hook's value as a word's first part: a live `$` (`_live_dollars`), after what
+    starts a word (JOB_WORD_BEFORE) and before what ends one or its first component
+    (JOB_WORD_AFTER). Not `'$CLAUDE_JOB_DIR'`, `\\$CLAUDE_JOB_DIR`, `x$CLAUDE_JOB_DIR` or zsh's
+    `$CLAUDE_JOB_DIR:h`."""
+    live = _live_dollars(text)
+    return [
+        match.span()
+        for match in JOB_REFERENCE.finditer(text)
+        if match.start() in live
+        and (match.start() == 0 or text[match.start() - 1] in JOB_WORD_BEFORE)
+        and (match.end() == len(text) or text[match.end()] in JOB_WORD_AFTER)
+    ]
+
+
+def _odd_job_mention(text: str) -> bool:
+    """Whether a Bash text names CLAUDE_JOB_DIR otherwise than by `_job_references`, as written or
+    with its quotes dropped (`${CLAUDE_JOB_DIR%/*}`, `'$CLAUDE_JOB_DIR'`, `$CLAUDE_JOB""_DIR`)."""
+    named = len(JOB_NAME.findall(text))
+    return named > len(_job_references(text)) or len(JOB_NAME.findall(_unquoted(text))) != named
+
+
 def _job_variable_kept(command: str) -> bool:
-    """Whether a Bash text leaves CLAUDE_JOB_DIR as the hook has it: every mention of the name, as
-    written and with quotes dropped, is `$CLAUDE_JOB_DIR` or `${CLAUDE_JOB_DIR}`, and when there is
-    one no builtin may set a name given as a word (NAME_SETTERS: `read`, `export`, `eval`...)."""
-    texts = (command, _unquoted(command))
-    if not any(JOB_NAME.search(text) for text in texts):
+    """Whether a Bash text leaves CLAUDE_JOB_DIR as the hook has it: it names it only by
+    `_job_references` (`_odd_job_mention`), and when it does no builtin may set a name given as a
+    word (NAME_SETTERS: `read`, `export`, `eval`...)."""
+    if not any(JOB_NAME.search(text) for text in (command, _unquoted(command))):
         return True
-    return all(
-        len(JOB_NAME.findall(text)) == len(JOB_REFERENCE.findall(text)) for text in texts
-    ) and not NAME_SETTERS.intersection(_words_of(command))
+    return not _odd_job_mention(command) and not NAME_SETTERS.intersection(_words_of(command))
 
 
 def _with_own(zone: _Zone, call: Call) -> _Zone:
@@ -2383,13 +2450,15 @@ def _with_own(zone: _Zone, call: Call) -> _Zone:
 
 
 def _job_written_out(call: Call, zone: _Zone) -> Call:
-    """A Bash call with `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` written as the job folder, when
-    the zone has one (`_with_own`): the shell expands them so, and the checks then follow a `cd`
-    there and see what a path leaves it for."""
+    """A Bash call with its `$CLAUDE_JOB_DIR` and `${CLAUDE_JOB_DIR}` that the shell expands
+    (`_job_references`) written as the job folder, when the zone has one (`_with_own`): the checks
+    then follow a `cd` there and see what a path leaves it for."""
     job = _job_folder(_claude_folders())
     if call.bash is None or job is None or job not in zone.own:
         return call
-    command = JOB_REFERENCE.sub(lambda _match: job.folder, call.bash.command)
+    command = call.bash.command
+    for start, end in reversed(_job_references(command)):
+        command = command[:start] + job.folder + command[end:]
     return replace(call, bash=_bash_text(command))
 
 
@@ -3204,9 +3273,10 @@ def _names_sibling(part: str, zone: _Zone) -> bool:
 
 def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
     """Whether something in the text changes or replaces a root of the zone or a folder holding
-    one, or for a zone with `writes_inside` names a path inside it (`_names_inside`). The folder a
-    relative word is read from follows the `cd`s of the text; after one that cannot be followed
-    (`cd "$X"`, `cd -`), a relative operand counts when it can name a holder."""
+    one, or for a zone with `writes_inside` names a path inside it (`_names_inside`) or writes a
+    word the guard cannot pin that may name it (`_writes_unpinned`). The folder a relative word
+    is read from follows the `cd`s of the text; after one that cannot be followed (`cd "$X"`,
+    `cd -`), a relative operand counts when it can name a holder."""
     current: str | None = cwd
     for step in _write_targets(text):
         if any(_changes_holder(target, current, zone) for target in step.targets):
@@ -3218,8 +3288,153 @@ def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
         if zone.writes_inside and current and _creates_climbing(step, current, zone):
             return True
         if step.moves:
-            current = _after_cd(current, step.folder)
+            current = (_after_pinned_cd if zone.writes_inside else _after_cd)(current, step.folder)
+    return zone.writes_inside and _writes_unpinned(text, cwd, zone)
+
+
+def _writes_unpinned(text: str, cwd: str, zone: _Zone) -> bool:
+    """Whether a text writes a word the guard does not follow that may name the zone
+    (`_may_name_zone`), or one whose leading current folder, written out (`_pinned`), is a holder
+    of the zone or in it, or goes by such a `cd` to a write. Its command substitutions and brace
+    expansions stay in their words (`_glued_expansions`)."""
+    current: str | None = cwd
+    steps = [_restored(step) for step in _write_targets(_glued_expansions(text))]
+    for index, step in enumerate(steps):
+        if any(_unpinned_word(word, current, zone) for word in _step_writes(step)):
+            return True
+        if step.moves:
+            folder = _pinned(step.folder, current) if step.folder is not None else None
+            later = any(map(_step_writes, steps[index + 1 :]))
+            if folder and not _followed(folder) and later and _may_name_zone(folder, current, zone):
+                return True
+            current = _after_pinned_cd(current, step.folder)
     return False
+
+
+def _step_writes(step: _Step) -> tuple[str, ...]:
+    """The words a step changes, replaces or links."""
+    return (*step.targets, *step.replaced, *step.links)
+
+
+def _unpinned_word(word: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a written word the guard does not follow may name the zone (`_may_name_zone`),
+    or its leading current folder, written out (`_pinned`), makes it a holder or a path in it."""
+    pinned = _pinned(word, current)
+    if not _followed(pinned):
+        return _may_name_zone(pinned, current, zone)
+    return pinned != word and _changes_holder(pinned, current, zone)
+
+
+def _glued_expansions(text: str) -> str:
+    """`text` with its `$(...)`, backtick and `${...}` expansions and its brace expansions glued
+    (GLUED): their blanks, separators, parentheses and braces as private characters, so that
+    COMMAND_SPLIT and a split at blanks keep each in its word (`"$(dirname ~/x)/.claude"`)."""
+    found: list[str] = []
+    index = 0
+    while index < len(text):
+        end = _expansion_end(text, index)
+        found.append(text[index:end].translate(GLUED) if end > index else text[index])
+        index = max(end, index + 1)
+    return "".join(found)
+
+
+def _expansion_end(text: str, index: int) -> int:
+    """Where an expansion of `_glued_expansions` that starts at `index` ends; `index` when none
+    starts there."""
+    pairs = {"$(": ("(", ")"), "${": ("{", "}")}
+    opener = text[index : index + 2]
+    if opener in pairs:
+        start, close = pairs[opener]
+        depth = 0
+        for at in range(index + 1, len(text)):
+            depth += (text[at] == start) - (text[at] == close)
+            if depth == 0:
+                return at + 1
+        return len(text)
+    if text[index] == "`":
+        close_at = text.find("`", index + 1)
+        return len(text) if close_at < 0 else close_at + 1
+    match = BRACE_LIST.match(text, index)
+    return match.end() if match else index
+
+
+def _restored(step: _Step) -> _Step:
+    """A step of a glued text (`_glued_expansions`) with its words as written."""
+
+    def back(word: str) -> str:
+        return word.translate(UNGLUED)
+
+    return step._replace(
+        targets=[back(word) for word in step.targets],
+        folder=None if step.folder is None else back(step.folder),
+        replaced=tuple(map(back, step.replaced)),
+        links=tuple(map(back, step.links)),
+        words=tuple(map(back, step.words)),
+    )
+
+
+def _pinned(word: str, current: str | None) -> str:
+    """A word with its leading `$PWD`, `${PWD}` or `~+` written as the folder `current`, when the
+    guard knows it (CURRENT_FOLDER)."""
+    if current is None:
+        return word
+    return CURRENT_FOLDER.sub(lambda _match: current, word)
+
+
+def _followed(word: str) -> bool:
+    """Whether the guard reads a word as the shell does: it has no expansion of UNPINNED_EXPANSION or
+    FOLDER_EXPANSION."""
+    return not (UNPINNED_EXPANSION.search(word) or FOLDER_EXPANSION.search(word))
+
+
+def _after_pinned_cd(current: str | None, folder: str | None) -> str | None:
+    """Where the session is after `cd folder` (`_after_cd`) with its leading current folder
+    written out (`_pinned`); None when the guard does not follow the folder (`_followed`)."""
+    if folder is None:
+        return None
+    pinned = _pinned(folder, current)
+    return _after_cd(current, pinned) if _followed(pinned) else None
+
+
+def _may_name_zone(word: str, current: str | None, zone: _Zone) -> bool:
+    """Whether a word the guard does not follow may name the zone or a folder that holds it: it
+    has a folder expansion the guard cannot pin (FOLDER_EXPANSION) or a root's name
+    (`.claude`), or a component of it (`_part_may_name_zone`) may."""
+    if FOLDER_EXPANSION.search(word) or any(root.name in word for root in zone.roots):
+        return True
+    parts = word.split("/")
+    unknown = False  # whether an expansion names a folder before this component
+    for index, part in enumerate(parts):
+        followed = not UNPINNED_EXPANSION.search(part)
+        if unknown and part == "..":
+            return True
+        if not followed and _part_may_name_zone(parts[:index], part, current, zone, unknown):
+            return True
+        unknown = unknown or not followed
+    return False
+
+
+def _part_may_name_zone(
+    before: Sequence[str], part: str, current: str | None, zone: _Zone, unknown: bool
+) -> bool:
+    """Whether a component with an expansion, its expansions read as `*` (EXPANSION_TEXT), may
+    be `..`, or be a holder's name or a sibling's (`.cl${X}aude`) where the folder before it is
+    unknown, or whether the folder before it holds the zone or is in it (`~/$N`, `/$X`)."""
+    unknown = unknown or (not before and part.startswith(("$", "`")))  # `$D/x`: D is anywhere
+    glob = EXPANSION_TEXT.sub("*", part)
+    if not _has_no_literal(glob):
+        if fnmatch.fnmatchcase("..", glob):
+            return True
+        named = _matches_any(_holder_names(zone), glob) or _names_sibling(glob, zone)
+        if named and (unknown or current is None):
+            return True
+    if unknown:
+        return False
+    prefix = "/".join(before) if before else "."
+    if current is None and not prefix.startswith(("/", "~")):
+        return False
+    resolved = _resolve(prefix or os.sep, current or os.sep)
+    return resolved is not None and (_is_root_or_parent(resolved, zone) or _in_zone(resolved, zone))
 
 
 def _creates_climbing(step: _Step, current: str, zone: _Zone) -> bool:
@@ -3747,11 +3962,19 @@ def _outside_zone(target: str | None, zone: _Zone, cwd: str) -> bool:
     discard: str = _shell_words().DISCARD
     if target == discard:
         return True
+    if zone.writes_inside and target is not None and _written_near_zone(target, cwd, zone):
+        return False
     return (
         target is not None
         and target.startswith(("/", "~/"))
         and not _is_zone_path(target, cwd, zone)
     )
+
+
+def _written_near_zone(target: str, cwd: str, zone: _Zone) -> bool:
+    """Whether a file a command writes is a word the guard does not follow that may name the zone
+    (`_unpinned_word`)."""
+    return _unpinned_word(target, os.path.realpath(cwd), zone)
 
 
 def _writes_nothing(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
@@ -4395,6 +4618,8 @@ def _bash_touches(call: Call, zone: _Zone) -> bool:
             return True
         spans = _read_spans(bash.command, zone, call.cwd)
         code, glob_code = _blank(code, spans), _blank(glob_code, spans)
+    if zone.writes_inside and _odd_job_mention(code):
+        return True  # CLAUDE_JOB_DIR used otherwise than as written out: where it goes is unknown
     clear = zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
     return _text_reaches(code, _Where(call.cwd, cds_clear=clear), zone, glob_text=glob_code)
 

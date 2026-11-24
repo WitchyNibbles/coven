@@ -4980,6 +4980,103 @@ def test_a_plain_session_writes_in_the_scratch_folders_as_before(
     assert run(payload, env=job_env()).returncode == 0
 
 
+# --- the user folder: a write the guard cannot pin to a path, or that may alias a folder ---
+
+
+def pinned(text: str) -> str:
+    """A case with its folders written in: H home, C the user folder, J the job folder, S the
+    session folder."""
+    return (
+        text.replace("{S}", str(session_folder()))
+        .replace("{J}", str(job_folder()))
+        .replace("{C}", str(claude_dir()))
+        .replace("{H}", str(home()))
+    )
+
+
+# Written words with an expansion the guard does not follow: each fails closed when it names
+# `.claude`, puts the expansion right under home or `/`, or climbs from a folder it cannot pin.
+UNPINNED_WRITES: dict[str, tuple[str, str]] = {
+    "variable-holds-home": ("D=~; rm -rf $D/.claude/skills", "/tmp"),
+    "stripped-home": ("rm -rf ${HOME%/}/.claude/skills", "/tmp"),
+    "stripped-home-mv": ("mv /tmp/e.md ${HOME%/}/.claude/CLAUDE.md", "/tmp"),
+    "stripped-home-json": ("echo {} > ${HOME%/}/.claude.json", "/tmp"),
+    "stripped-home-cp": ("cp /tmp/s.json ${HOME%/}/.claude/agents/x.md", "/tmp"),
+    "stripped-home-ln": ("ln -sf /tmp/x ${HOME%/}/.claude/skills/x", "/tmp"),
+    "stripped-config-dir": ("rm -rf ${CLAUDE_CONFIG_DIR%/}/skills", "/tmp"),
+    "defaulted-home": ('rm -rf "${HOME:-/}"/.claude', "/tmp"),
+    "split-name": ("rm -rf ~/.cl${X}aude/skills", "/tmp"),
+    "split-name-plain": ("rm -rf ~/.cl$Xaude/skills", "/tmp"),
+    "split-json": ("echo {} > ~/.cl${X}aude.json", "/tmp"),
+    "name-in-variable": ("N=.claude; rm -rf ~/$N/skills", "/tmp"),
+    "array-holds-home": ("a=(~); rm -rf ${a[0]}/.claude/skills", "/tmp"),
+    "substitution-dirname": ('rm -rf "$(dirname ~/x)/.claude/skills"', "/tmp"),
+    "substitution-pwd": ('rm -rf "$(pwd)/../.claude/skills"', "{H}/proj"),
+    "backtick-pwd": ("rm -rf `pwd`/../.claude/skills", "{H}/proj"),
+    "tilde-plus": ("rm -rf ~+/../.claude/skills", "{H}/proj"),
+    "tilde-plus-two-up": ("rm -rf ~+/../../.claude/skills", "{H}/proj/sub"),
+    "pwd-variable": ('rm -rf "$PWD"/../.claude/skills', "{H}/proj"),
+    "pwd-variable-two-up": ('rm -rf "$PWD"/../../.claude/skills', "{H}/proj/sub"),
+    "brace-climb": ("rm -rf {.,}./.claude/skills", "{H}/proj"),
+    "brace-climb-after": ("rm -rf .{.,}/.claude/skills", "{H}/proj"),
+    "tilde-minus": ("cd ~ && cd /tmp && rm -rf ~-/.claude/skills", "/tmp"),
+    "oldpwd": ("cd ~ && cd /tmp && rm -rf $OLDPWD/.claude/skills", "/tmp"),
+    "dir-stack": ("cd ~ && pushd /tmp && rm -rf ~1/.claude/skills", "/tmp"),
+    "unknown-climb": ("rm -rf $X/../../skills", "{C}/jobs"),
+    "cd-unknown-climb": ("cd $X/.. && rm -rf skills", "/tmp"),
+    "cd-tilde-plus": ("cd ~+/.. && rm -rf .claude/skills", "{H}/proj"),
+    "job-defaulted": ("rm -rf ${CLAUDE_JOB_DIR:-x}/../../skills", "/tmp"),
+    "job-stripped": ("echo x > ${CLAUDE_JOB_DIR%/*}/../CLAUDE.md", "/tmp"),
+    "job-stripped-twice": ("rm -rf ${CLAUDE_JOB_DIR%/*/*}/skills", "/tmp"),
+    "job-unset-climb": ('rm -rf "$CLAUDE_JOB_DIR/../../skills"; export A=1', "/tmp"),
+    "job-zsh-modifier": ("rm -rf $CLAUDE_JOB_DIR:h/../skills", "/tmp"),
+    "job-glued": ("rm -rf x$CLAUDE_JOB_DIR/../skills", "/tmp"),
+    "job-escaped": ("cd .. && echo x > \\$CLAUDE_JOB_DIR", "{J}"),
+    "job-single-quoted": ("cd .. && touch '$CLAUDE_JOB_DIR'", "{J}"),
+}
+
+# Written words with an expansion that stays pinned or far from the folder, and reads.
+PINNED_WRITES: dict[str, tuple[str, str]] = {
+    "unknown-variable-folder": ('echo x > "$OUT/result.txt"', "/tmp"),
+    "substitution-in-tmp": ("echo x > /srv/run-$(date +%s).log", "/tmp"),
+    "brace-in-tmp": ("mkdir -p /tmp/w/{a,b}", "/tmp"),
+    "pid-in-tmp": ("rm -rf /srv/x-$$", "/tmp"),
+    "home-variable-elsewhere": ('echo x > "$HOME/proj/out.txt"', "/tmp"),
+    "job-folder-file": ('echo x > "$CLAUDE_JOB_DIR/out.txt"', "/tmp"),
+    "job-braced-file": ("echo x > ${CLAUDE_JOB_DIR}/out.txt", "/tmp"),
+    "read-to-named-file": ("cat ~/.claude/CLAUDE.md > /srv/$(date +%s).md", "/tmp"),
+}
+
+UNPINNED_IDS = list(UNPINNED_WRITES)
+PINNED_IDS = list(PINNED_WRITES)
+
+
+@pytest.mark.parametrize("name", UNPINNED_IDS)
+def test_a_written_word_the_guard_cannot_pin_fails_closed_near_the_user_folder(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in UNPINNED_WRITES[name])
+    payload = in_session(bash(command, cwd=cwd))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize("name", PINNED_IDS)
+def test_a_written_word_with_an_expansion_far_from_the_user_folder_runs(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in PINNED_WRITES[name])
+    proc = run(in_session(bash(command, cwd=cwd)), role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_job_variable_with_no_job_folder_still_fails_closed_when_it_climbs(
+    run: Run, store: Path
+) -> None:
+    payload = bash('rm -rf "$CLAUDE_JOB_DIR/../../skills"')
+    assert run(payload, role="pm").returncode == 2
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
