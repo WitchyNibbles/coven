@@ -689,6 +689,43 @@ def test_simple_commands_give_up_on_any_other_program_under_the_home_folder(comm
     assert module.simple_commands(command) is None
 
 
+def test_simple_commands_sort_the_redirections_a_command_has():
+    commands = module.simple_commands("ls >a 2>/dev/null 2>&1 <b <<< x")
+    (command,) = (c for c in commands if c.words)
+    assert command.redirect_targets == ["a", "/dev/null"]
+    assert command.redirect_inputs == ["1", "b", "x"]
+    assert command.heredocs == []
+
+
+def test_simple_commands_read_a_plain_substitution_only_when_asked():
+    command = "for f in $(ls -t '*.x' | head -3); do cat \"$f\"; done"
+    assert module.simple_commands(command) is None
+    commands = module.simple_commands(command, substitutions=True)
+    first = commands[0].words
+    assert [w.raw for w in first] == ["for", "f", "in", "$(ls -t '*.x' | head -3)"]
+    assert first[3].value is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for f in $(ls; rm x); do :; done",
+        "for f in $(ls && rm x); do :; done",
+        "for f in $(ls > x); do :; done",
+        "for f in $(ls $(rm x)); do :; done",
+        "for f in $(ls `rm x`); do :; done",
+        'for f in $(ls "$x"); do :; done',
+        "for f in $(ls \\; rm x); do :; done",
+        "for f in $(ls # x); do :; done",
+        "for f in $(cat <<EOF); do :; done",
+        "for f in $(ls",
+        "for f in $((1+2)); do :; done",
+    ],
+)
+def test_simple_commands_give_up_on_any_other_substitution_even_when_asked(command):
+    assert module.simple_commands(command, substitutions=True) is None
+
+
 def test_simple_commands_mark_each_command_a_pipe_joins_to_the_one_before():
     commands = module.simple_commands("ls a | head; find b |& head")
     assert [(c.words[0].value, c.after_pipe) for c in commands if c.words] == [

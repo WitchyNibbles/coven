@@ -72,6 +72,7 @@ bash or zsh, so every rule has to hold for both: where they differ (`>!`, `12>f`
 functions kept in tables) the scanner gives up, and `without_data` also gives up on comments.
 """
 
+import string
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -139,6 +140,8 @@ SYSTEM_CONFIG = "etc"  # an absolute path whose first component is this (`//etc`
 CHANGE_DIRS = frozenset({"cd", "pushd", "popd"})  # after one, a relative path may be anywhere
 # A `#` after one of these (or at the start) begins a comment; after `(`, `)` or a word it does not.
 COMMENT_AFTER = frozenset(BLANKS + "\n;&|")
+# What the text of a plain `$(...)` may hold outside quotes, besides blanks (`_plain_substitution`).
+SUBSTITUTION_CHARS = frozenset(string.ascii_letters + string.digits + "_|*?[]=,:@%+-./~")
 LITERAL_DOLLAR_FOLLOWERS = frozenset(' \t\n"')  # a `$` followed by anything else may expand
 # A word holding one of these unquoted may expand to something else (zsh extendedglob: `^`, `#`,
 # `~`): its value is unknown.
@@ -301,12 +304,13 @@ def _find_body(text: str, start: int, heredoc: _Heredoc) -> int:
 class _Lexer:
     """Splits a command line into words, redirections and separators, reading heredoc bodies."""
 
-    def __init__(self, text: str, *, comments: bool = False) -> None:
+    def __init__(self, text: str, *, comments: bool = False, substitutions: bool = False) -> None:
         self.text = text
         self.pos = 0
         self.tokens: list[_Token] = []
         self.pending: list[_Heredoc] = []  # heredocs whose body starts after the next newline
         self.comments = comments
+        self.substitutions = substitutions  # read a plain `$(...)` as part of a word
         self.comment_spans: list[tuple[int, int]] = []
 
     def tokenize(self) -> list[_Token]:
@@ -468,6 +472,8 @@ class _Lexer:
         following = self.text[self.pos + 1 : self.pos + 2]
         if following == "(" and in_double_quotes:
             word.parts.append(self._cat_heredoc_substitution())
+        elif following == "(" and self.substitutions and not in_double_quotes:
+            self._plain_substitution(word)
         elif following in ("(", "{"):
             raise _GiveUp
         elif not in_double_quotes and following in ("'", '"'):
@@ -479,6 +485,28 @@ class _Lexer:
         else:  # a literal dollar sign
             word.parts.append("$")
             self.pos += 1
+
+    def _plain_substitution(self, word: _WordBuilder) -> None:
+        """An unquoted `$(...)` whose text is only names, blanks, `|`, `*?[]`, `=,:@%+-./~` and
+        quoted strings with no `$`, backtick or backslash in them: a pipeline of plain commands.
+        The word keeps its text and its value is unknown. Anything else (`;`, `&`, a redirection,
+        a nested substitution, a comment, a heredoc, a backslash, a case pattern) gives up."""
+        end = self.pos + 2
+        while True:
+            char = self.text[end] if end < len(self.text) else ""
+            if char == ")":
+                break
+            if char in ("'", '"'):
+                close = self.text.find(char, end + 1)
+                if close == -1 or (char == '"' and set(self.text[end:close]) & set("$`\\")):
+                    raise _GiveUp
+                end = close
+            elif not char or not (char in SUBSTITUTION_CHARS or char in BLANKS):
+                raise _GiveUp
+            end += 1
+        word.parts.append(self.text[self.pos : end + 1])
+        word.known = False
+        self.pos = end + 1
 
     def _cat_heredoc_substitution(self) -> str:
         """The value of `$(cat <<'X'`, body, `X`, `)` at the current position (Claude Code's own
@@ -564,6 +592,8 @@ class Command:
     words: list[Word] = field(default_factory=list)
     heredocs: list[_Heredoc] = field(default_factory=list)
     redirect_targets: list[str | None] = field(default_factory=list)  # the files it writes to
+    # The targets of its other redirections but heredocs: `<` and `<<<` input, `2>&1`'s `1`.
+    redirect_inputs: list[str | None] = field(default_factory=list)
     writes: bool = False
     writes_run_later: bool = False
     redirected: bool = False
@@ -600,6 +630,8 @@ def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
                 commands[-1].heredocs.append(token.heredoc)
             if token.writes:
                 commands[-1].redirect_targets.append(token.target)
+            elif token.heredoc is None:
+                commands[-1].redirect_inputs.append(token.target)
         else:
             _check_separator(token, previous)
             pipe = token.text in PIPES
@@ -1016,11 +1048,15 @@ def _blanked(command: str, spans: Sequence[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
-def simple_commands(command: str) -> list[Command] | None:
+def simple_commands(command: str, *, substitutions: bool = False) -> list[Command] | None:
     """The simple commands of `command`, in line order, comments read as comments (some come back
-    without words: a separator ends one); None when the scanner cannot follow the command."""
+    without words: a separator ends one); None when the scanner cannot follow the command. With
+    `substitutions`, a plain `$(...)` (`_plain_substitution`) stays in its word instead of
+    stopping the scanner: the caller reads its text."""
     try:
-        commands, _piped = _commands(_Lexer(command, comments=True).tokenize())
+        commands, _piped = _commands(
+            _Lexer(command, comments=True, substitutions=substitutions).tokenize()
+        )
     except _GiveUp:
         return None
     return commands

@@ -4099,6 +4099,40 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-config-dir-variable-rm": bash("cd $CLAUDE_CONFIG_DIR && rm -rf skills"),
         "cd-redirect": bash("cd ~/.claude && echo x > CLAUDE.md"),
         "cd-reader-redirect": bash("cd ~/.claude && ls > out"),
+        "cd-reader-redirect-file-name": bash("cd ~/.claude && ls > out.txt"),
+        "cd-reader-append": bash("cd ~/.claude && ls >> out"),
+        "cd-reader-stderr-to-file": bash("cd ~/.claude && ls 2>err"),
+        "cd-reader-discard-then-file": bash("cd ~/.claude && ls 2>/dev/null > out"),
+        "cd-reader-dup-to-file": bash("cd ~/.claude && ls >&out"),
+        "cd-reader-input-substitution": bash('cd ~/.claude && cat <<< "$(rm -rf skills)"'),
+        "jq-redirect-into-it": bash("jq . ~/.claude.json > ~/.claude.json"),
+        "jq-redirect-into-folder": bash("jq . ~/.claude.json > ~/.claude/x.json"),
+        "jq-after-cd-redirect": bash("cd ~ && jq . .claude.json > .claude/x.json"),
+        "loop-rm": bash('for f in ~/.claude/skills/*; do rm -rf "$f"; done'),
+        "loop-sed-in-place": bash('for f in ~/.claude/agents/*.md; do sed -i s/a/b/ "$f"; done'),
+        "loop-cd-mv": bash('cd ~/.claude && for f in *; do mv "$f" /tmp/; done'),
+        "loop-runs-script": bash('for f in ~/.claude/skills/*.sh; do sh "$f"; done'),
+        "loop-substitution-writes": bash("for f in $(rm -rf ~/.claude); do :; done"),
+        "loop-substitution-find-delete": bash("for f in $(find ~/.claude -delete); do ls; done"),
+        "loop-redirect-in-body": bash('for f in ~/.claude/a; do cat "$f" > "$f.bak"; done'),
+        "loop-redirect-after-done": bash("for f in ~/.claude/a; do ls; done > ~/.claude/out"),
+        "loop-write-after-read": bash('for f in ~/.claude/a; do ls "$f"; rm -rf "$f"; done'),
+        "loop-piped-to-shell": bash('for f in ~/.claude/a; do cat "$f" | sh; done'),
+        "loop-nested": bash("for f in ~/.claude/a; do for g in ~/.claude/b; do ls; done; done"),
+        "loop-over-path-variable": bash("for PATH in ~/.claude/x; do ls; done"),
+        "loop-without-words": bash('cd ~/.claude && for f; do rm -rf "$f"; done'),
+        "loop-then-write": bash("for f in ~/.claude/a; do ls; done; rm -rf ~/.claude/a"),
+        "loop-while": bash("while true; do rm -rf ~/.claude/a; done"),
+        "loop-quoted-substitution": bash('for f in "$(rm -rf ~/.claude)"; do ls; done'),
+        "loop-backticks": bash("for f in `rm -rf ~/.claude`; do ls; done"),
+        "loop-case-in-substitution": bash(
+            "for f in $(case x in a) rm -rf ~/.claude;; esac); do ls; done"
+        ),
+        "loop-two-substitutions": bash("for f in $(ls)$(rm -rf ~/.claude); do ls; done"),
+        "loop-substitution-with-more": bash("for f in $(ls ~/.claude)x; do rm -rf ~/.claude; done"),
+        "loop-substitution-redirect": bash("for f in $(ls > ~/.claude/x); do cat; done"),
+        "loop-substitution-semicolon": bash("for f in $(ls; rm -rf ~/.claude/a); do cat; done"),
+        "loop-over-uppercase-variable": bash("for HOME in ~/.claude/a; do ls; done"),
         "cd-reader-heredoc": bash("cd ~/.claude && cat > CLAUDE.md <<EOF\nx\nEOF"),
         "cd-script": bash("cd ~/.claude && sh x.sh"),
         "cd-tee": bash("cd ~/.claude && ls | tee x"),
@@ -4223,6 +4257,37 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "diff": bash("diff ~/.claude/CLAUDE.md /tmp/CLAUDE.md"),
         "cd-ls": bash("cd ~/.claude && ls skills"),
         "cd-ls-bare": bash("cd ~/.claude && ls"),
+        "cd-grep-discarding-errors": bash(
+            "cd ~/.claude/projects/p && grep -l foo *.jsonl 2>/dev/null | head"
+        ),
+        "cd-ls-errors-to-output": bash("cd ~/.claude/projects/p && ls -t 2>&1 | head -5"),
+        "cd-ls-to-stderr": bash("cd ~/.claude && ls >&2"),
+        "cd-ls-numbered-to-stderr": bash("cd ~/.claude && ls 1>&2"),
+        "cd-ls-to-null": bash("cd ~/.claude && ls >/dev/null"),
+        "cd-ls-both-to-null": bash("cd ~/.claude && ls &>/dev/null"),
+        "jq": bash("jq '.projects | keys' ~/.claude.json"),
+        "jq-options": bash("jq -r --arg k x '.[$k]' ~/.claude.json"),
+        "jq-files": bash("jq --slurpfile s ~/.claude/a.json -f ~/.claude/p.jq ~/.claude.json"),
+        "jq-piped": bash("cat ~/.claude/projects/p/a.jsonl | jq -c .type | head -3"),
+        "cd-jq": bash("cd ~/.claude && jq . history.json | head"),
+        "loop-over-files": bash(
+            "for f in ~/.claude/projects/p/a.jsonl ~/.claude/projects/p/b.jsonl;"
+            ' do grep -c foo "$f"; done'
+        ),
+        "loop-over-listing": bash(
+            "cd ~/.claude/projects/p && for f in $(ls -t *.jsonl | head -3);"
+            ' do grep -l foo "$f"; done'
+        ),
+        "loop-over-glob-with-pipe": bash(
+            "for f in ~/.claude/projects/*/x.jsonl;"
+            ' do echo "== $f"; grep -o \'k.\\{0,40\\}\' "$f" | head -3; done'
+        ),
+        "loop-over-find": bash(
+            'for f in $(find ~/.claude/projects -name "*.jsonl"); do wc -l "$f"; done'
+        ),
+        "loop-multiline": bash('for f in ~/.claude/a ~/.claude/b\ndo\n  cat "$f"\ndone'),
+        "loop-discarding-errors": bash('for f in ~/.claude/a; do cat "$f" 2>/dev/null; done'),
+        "loop-body-reads-path": bash('for f in ~/.claude/a; do cat ~/.claude/b "$f"; done'),
         "cd-relative-ls": bash("cd .claude && ls skills", cwd=str(user)),
         "read-redirected-elsewhere": bash("cat ~/.claude/CLAUDE.md > /tmp/x"),
         "echo-the-folder": bash("echo $CLAUDE_CONFIG_DIR"),
@@ -4282,6 +4347,12 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "cd ~/.claude/plugins && ls",
         "cat ~/.claude/settings.json",
         "cat ~/coven-memory/systems/guard.json",
+        "jq . ~/.claude/settings.json",
+        "jq . ~/coven-memory/systems/guard.json",
+        "cd ~/coven-memory && ls 2>/dev/null",
+        "cd ~/.config/coven && ls 2>&1",
+        'for f in ~/.claude/plugins/*; do cat "$f"; done',
+        'for f in ~/coven-memory/systems/*; do cat "$f"; done',
     ],
 )
 def test_the_other_zones_take_no_reader_of_the_user_folders_zone(
@@ -4292,6 +4363,19 @@ def test_the_other_zones_take_no_reader_of_the_user_folders_zone(
     proc = run(bash(command), role="pm")
     assert proc.returncode == 2
     assert "cannot write to" in proc.stderr
+
+
+PYTHON_READS_FOLDER = "python3 - <<'EOF'\nprint(open('~/.claude/projects/p/a.jsonl').read())\nEOF"
+
+
+def test_an_interpreter_reading_the_user_folder_stays_refused(run: Run, store: Path) -> None:
+    """python3 is no reader of the user folder: its code could write there as well. Pinned until
+    the question is decided."""
+    for command in (PYTHON_READS_FOLDER, "python3 -c \"print(open('~/.claude.json').read())\""):
+        proc = run(bash(command), role="pm")
+        assert proc.returncode == 2, command
+        assert FOLDER_REFUSAL in proc.stderr
+        assert run(bash(command)).returncode == 0
 
 
 READS_IDS = list(folder_reads(Path("/x"), Path("/y")))
