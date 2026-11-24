@@ -73,8 +73,8 @@ functions kept in tables) the scanner gives up, and `without_data` also gives up
 """
 
 import string
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 
 BLANKS = " \t"
@@ -141,10 +141,11 @@ CHANGE_DIRS = frozenset({"cd", "pushd", "popd"})  # after one, a relative path m
 # A `#` after one of these (or at the start) begins a comment; after `(`, `)` or a word it does not.
 COMMENT_AFTER = frozenset(BLANKS + "\n;&|")
 # What the text of a plain `$(...)` may hold outside quotes, besides blanks (`_plain_substitution`).
-SUBSTITUTION_CHARS = frozenset(string.ascii_letters + string.digits + "_|*?[]=,:@%+-./~")
+SUBSTITUTION_CHARS = frozenset(string.ascii_letters + string.digits + "_|*?[]=,:@%+-./~;&<>!{}")
 LITERAL_DOLLAR_FOLLOWERS = frozenset(' \t\n"')  # a `$` followed by anything else may expand
 # A word holding one of these unquoted may expand to something else (zsh extendedglob: `^`, `#`,
 # `~`): its value is unknown.
+TEST_BRACKETS = frozenset({"[", "]", "{"})  # the words of `[ -f x ]`, and a group's opener
 GLOB_CHARS = frozenset("*?[{}^#~")
 PATH_GLOB_MARKS = frozenset("*?[")  # what makes a word a path glob, unquoted
 LITERAL_GLOB_MARK = "%"  # stands for a quoted one: no glob, name or word break reads it
@@ -236,6 +237,7 @@ class Word:
     end: int
     raw: str  # the text of the word as written
     value: str | None  # what the shell makes of the word; None when it may expand
+    substitutions: tuple[str, ...] = ()  # the text of each `$(...)` read in it (`substitutions`)
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,11 @@ class _Redirect:
     heredoc: _Heredoc | None
     writes: bool = False  # opens a file for writing
     target: str | None = None  # the value of its target word; None when it may expand
+    # The target as a path: its value, or a plain `~/x` (`program_name`); for `<`, as written
+    # unless a command makes it (`$(...)`).
+    path: str | None = None
+    operator: str = ""
+    span: tuple[int, int] = (0, 0)  # the operator and its target, as written
 
 
 @dataclass(frozen=True)
@@ -258,6 +265,24 @@ class _WordBuilder:
     start: int
     parts: list[str] = field(default_factory=list)
     known: bool = True
+    substitutions: list[str] = field(default_factory=list)
+
+
+def _only_names(text: str) -> bool:
+    """Whether a text holds no backtick or backslash and each `$` in it starts a variable name
+    (`$f`), not `$(`, `${`, `$1` or `$?`: the last two characters of a `$x` may be cut off."""
+    return not set(text) & set("`\\") and all(
+        part[:1].isalpha() or part[:1] == "_" for part in text.split("$")[1:]
+    )
+
+
+def _quoted_names_only(text: str) -> bool:
+    """`_only_names` for the inside of a double-quoted string, where a backslash that does not
+    escape `"`, `\\`, `$`, a backtick or a newline is a plain character (`"a\\|b"`)."""
+    for at, char in enumerate(text):
+        if char == "\\" and text[at + 1 : at + 2] in ('"', "\\", "$", "`", "\n", ""):
+            return False
+    return _only_names(text.replace("\\", ""))
 
 
 def _is_name_char(char: str) -> bool:
@@ -365,6 +390,7 @@ class _Lexer:
 
     def _redirect(self, operator: str) -> None:
         """A redirection and its target word (a heredoc's delimiter, for `<<`)."""
+        start = self.pos - len(operator)
         self.pos = _skip_blanks(self.text, self.pos)
         if self.pos >= len(self.text) or self.text[self.pos] in WORD_BREAKS | {"#"}:
             raise _GiveUp
@@ -378,7 +404,13 @@ class _Lexer:
                 raise _GiveUp
             heredoc = _Heredoc(word.value, operator == "<<-")
             self.pending.append(heredoc)
-        self.tokens.append(_Redirect(heredoc, _redirect_writes(operator, word), word.value))
+        writes = _redirect_writes(operator, word)
+        path = program_name(word)
+        if path is None and operator == "<" and "$(" not in word.raw:
+            path = word.raw  # a file it reads: any name does, but one a command makes
+        self.tokens.append(
+            _Redirect(heredoc, writes, word.value, path, operator, (start, self.pos))
+        )
 
     def _read_bodies(self) -> None:
         """The bodies of the heredocs started on the line that just ended, in order."""
@@ -394,7 +426,10 @@ class _Lexer:
         raw = self.text[word.start : self.pos]
         if self.pending and "\n" in raw:
             raise _GiveUp  # where a heredoc body starts is unclear: do not guess
-        return Word(word.start, self.pos, raw, "".join(word.parts) if word.known else None)
+        value = "".join(word.parts) if word.known else None
+        if self.substitutions and raw in TEST_BRACKETS:
+            value = raw  # `[ -f x ]`, `{ ls; }`: no pattern, so no glob
+        return Word(word.start, self.pos, raw, value, tuple(word.substitutions))
 
     def _word_part(self, word: _WordBuilder) -> None:
         char = self.text[self.pos]
@@ -470,10 +505,10 @@ class _Lexer:
 
     def _dollar(self, word: _WordBuilder, *, in_double_quotes: bool) -> None:
         following = self.text[self.pos + 1 : self.pos + 2]
+        if following == "(" and self.substitutions and self._plain_substitution(word):
+            return
         if following == "(" and in_double_quotes:
             word.parts.append(self._cat_heredoc_substitution())
-        elif following == "(" and self.substitutions and not in_double_quotes:
-            self._plain_substitution(word)
         elif following in ("(", "{"):
             raise _GiveUp
         elif not in_double_quotes and following in ("'", '"'):
@@ -486,11 +521,12 @@ class _Lexer:
             word.parts.append("$")
             self.pos += 1
 
-    def _plain_substitution(self, word: _WordBuilder) -> None:
-        """An unquoted `$(...)` whose text is only names, blanks, `|`, `*?[]`, `=,:@%+-./~` and
-        quoted strings with no `$`, backtick or backslash in them: a pipeline of plain commands.
-        The word keeps its text and its value is unknown. Anything else (`;`, `&`, a redirection,
-        a nested substitution, a comment, a heredoc, a backslash, a case pattern) gives up."""
+    def _plain_substitution(self, word: _WordBuilder) -> bool:
+        """Read a `$(...)` at the current position as part of the word when its text has no
+        parenthesis, backtick, backslash, comment or heredoc in it, no `$` but of a variable name
+        (`$f`), and its quotes pair up (`SUBSTITUTION_CHARS`, blanks and quoted strings): the word keeps the text, its value is
+        unknown and `Word.substitutions` lists the text for the caller to judge. False for any
+        other `$(...)`, which the caller reads as before."""
         end = self.pos + 2
         while True:
             char = self.text[end] if end < len(self.text) else ""
@@ -498,15 +534,24 @@ class _Lexer:
                 break
             if char in ("'", '"'):
                 close = self.text.find(char, end + 1)
-                if close == -1 or (char == '"' and set(self.text[end:close]) & set("$`\\")):
-                    raise _GiveUp
+                inside = self.text[end:close]
+                if close == -1 or (char == '"' and not _quoted_names_only(inside)):
+                    return False
                 end = close
+            elif char == "$":
+                if not _only_names(self.text[end : end + 2]):
+                    return False
             elif not char or not (char in SUBSTITUTION_CHARS or char in BLANKS):
-                raise _GiveUp
+                return False
             end += 1
+        inner = self.text[self.pos + 2 : end]
+        if "<<" in inner:
+            return False
         word.parts.append(self.text[self.pos : end + 1])
+        word.substitutions.append(inner)
         word.known = False
         self.pos = end + 1
+        return True
 
     def _cat_heredoc_substitution(self) -> str:
         """The value of `$(cat <<'X'`, body, `X`, `)` at the current position (Claude Code's own
@@ -592,13 +637,25 @@ class Command:
     words: list[Word] = field(default_factory=list)
     heredocs: list[_Heredoc] = field(default_factory=list)
     redirect_targets: list[str | None] = field(default_factory=list)  # the files it writes to
-    # The targets of its other redirections but heredocs: `<` and `<<<` input, `2>&1`'s `1`.
+    # The same files by `_Redirect.path`: a plain `~/x` is named, not unknown.
+    write_paths: list[str | None] = field(default_factory=list)
+    # The files it reads with `<`, and the targets of its other redirections that write no file
+    # and are no heredoc: `<<<` input, `2>&1`'s `1`.
+    input_files: list[str | None] = field(default_factory=list)
     redirect_inputs: list[str | None] = field(default_factory=list)
+    argument_writes: list[str | None] = field(default_factory=list)  # tee's files, `sort -o` ...
+    start: int = -1  # where its first word, redirection or heredoc body starts ...
+    end: int = 0  # ... and where the last one ends, as written
     writes: bool = False
     writes_run_later: bool = False
     redirected: bool = False
     in_pipeline: bool = False
     after_pipe: bool = False  # a pipe joins it to the command before it
+
+    def extend(self, start: int, end: int) -> None:
+        """Make `start` and `end` part of the command's span."""
+        self.start = start if self.start < 0 else min(self.start, start)
+        self.end = max(self.end, end)
 
     def add_write(self, target: str | None, *, cwd_moved: bool) -> None:
         """Record a written file. After a cd earlier on the line, a relative target's place is
@@ -615,8 +672,9 @@ def _changes_dir(words: Sequence[Word]) -> bool:
     return bool(words) and words[0].value in CHANGE_DIRS
 
 
-def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
-    """The simple commands of a token list, and whether the line has a pipe anywhere."""
+def _commands(tokens: Sequence[_Token], *, exports: bool = False) -> tuple[list[Command], bool]:
+    """The simple commands of a token list, and whether the line has a pipe anywhere. With
+    `exports`, an `export` of assignments is a command like another (`_check_first_word`)."""
     commands = [Command()]
     piped = False
     previous: _Token | None = None
@@ -624,12 +682,18 @@ def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
         if isinstance(token, Word):
             _check_word(token)
             commands[-1].words.append(token)
+            commands[-1].extend(token.start, token.end)
         elif isinstance(token, _Redirect):
             commands[-1].redirected = True
+            commands[-1].extend(*token.span)
             if token.heredoc is not None:
                 commands[-1].heredocs.append(token.heredoc)
+                commands[-1].extend(*token.heredoc.body)
             if token.writes:
                 commands[-1].redirect_targets.append(token.target)
+                commands[-1].write_paths.append(token.path)
+            elif token.operator == "<":
+                commands[-1].input_files.append(token.path)
             elif token.heredoc is None:
                 commands[-1].redirect_inputs.append(token.target)
         else:
@@ -641,8 +705,9 @@ def _commands(tokens: Sequence[_Token]) -> tuple[list[Command], bool]:
         previous = token
     cwd_moved = False
     for command in commands:
-        _check_first_word(command.words)
-        for target in [*command.redirect_targets, *_written_by_argument(command.words)]:
+        _check_first_word(command.words, exports=exports)
+        command.argument_writes = _written_by_argument(command.words)
+        for target in [*command.redirect_targets, *command.argument_writes]:
             command.add_write(target, cwd_moved=cwd_moved)
         cwd_moved = cwd_moved or _changes_dir(command.words)
     return commands, piped
@@ -762,13 +827,16 @@ def _is_assignment(word: Word) -> bool:
     return bool(equals) and name.rstrip("+").isidentifier()
 
 
-def _check_first_word(words: Sequence[Word]) -> None:
+def _check_first_word(words: Sequence[Word], *, exports: bool = False) -> None:
     """Give up when the command proper (after `if`, `command`, `X=1`, ...) is a redefiner, or one
     whose name is not known but for a program by its path under the home folder
-    (`home_program`)."""
-    for word in words:
+    (`home_program`). Not for an `export` of assignments only, when `exports`: the caller judges
+    the names (a PATH or LD_PRELOAD changes what later commands do)."""
+    for at, word in enumerate(words):
         if word.raw in LEADING_WORDS or word.value in LEADING_WORDS or _is_assignment(word):
             continue
+        if exports and word.value == "export" and all(map(_is_assignment, words[at + 1 :])):
+            return
         if word.value is not None and word.value.startswith("-"):
             continue  # an option of `command` or `time`
         if word.value is None and home_program(word.raw):
@@ -1052,14 +1120,49 @@ def simple_commands(command: str, *, substitutions: bool = False) -> list[Comman
     """The simple commands of `command`, in line order, comments read as comments (some come back
     without words: a separator ends one); None when the scanner cannot follow the command. With
     `substitutions`, a plain `$(...)` (`_plain_substitution`) stays in its word instead of
-    stopping the scanner: the caller reads its text."""
+    stopping the scanner (the caller reads its text), a lone `[` or `]` is a word of its own, not
+    a glob, and an `export` of assignments is no reason to give up (the caller judges its names)."""
     try:
         commands, _piped = _commands(
-            _Lexer(command, comments=True, substitutions=substitutions).tokenize()
+            _Lexer(command, comments=True, substitutions=substitutions).tokenize(),
+            exports=substitutions,
         )
     except _GiveUp:
         return None
     return commands
+
+
+def _bound_word(word: Word, paths: Mapping[str, str]) -> Word:
+    """The word, when it is `$NAME` or `$NAME/rest` (maybe in double quotes) for a NAME of `paths`,
+    written as that path (`~/x` for a `$HOME/x`): it is then one word that starts with `/` or `~`.
+    Any other word as it is."""
+    quoted = len(word.raw) > 1 and word.raw[0] == word.raw[-1] == '"'
+    body = word.raw[1:-1] if quoted else word.raw
+    if not body.startswith("$"):
+        return word
+    end = 1
+    while end < len(body) and _is_name_char(body[end]):
+        end += 1
+    rest = body[end:]
+    if (
+        body[1:end] not in paths
+        or body[1:2].isdigit()
+        or not all(char.isalnum() or char in HOME_PATH_MARKS for char in rest)
+        or rest[:1] not in ("", "/")
+    ):
+        return word
+    path = paths[body[1:end]]
+    path = "~/" + path.removeprefix("$HOME/") if path.startswith("$HOME/") else path
+    return replace(word, raw=path + rest, value=None if path.startswith("~") else path + rest)
+
+
+def bind_names(commands: Sequence[Command], paths: Mapping[str, str]) -> list[Command]:
+    """The commands with every word that is a name of `paths` (`$NAME`, `"$NAME/rest"`) read as
+    its path: for a caller that has found the names bound once, to a plain path, and nowhere set
+    in any other way. Offsets, redirections and heredocs stay as they were."""
+    return [
+        replace(each, words=[_bound_word(word, paths) for word in each.words]) for each in commands
+    ]
 
 
 def program_name(word: Word) -> str | None:

@@ -4118,7 +4118,21 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "loop-redirect-after-done": bash("for f in ~/.claude/a; do ls; done > ~/.claude/out"),
         "loop-write-after-read": bash('for f in ~/.claude/a; do ls "$f"; rm -rf "$f"; done'),
         "loop-piped-to-shell": bash('for f in ~/.claude/a; do cat "$f" | sh; done'),
-        "loop-nested": bash("for f in ~/.claude/a; do for g in ~/.claude/b; do ls; done; done"),
+        "loop-nested": bash(
+            "for f in ~/.claude/a; do for g in ~/.claude/b; do rm -rf $g; done; done"
+        ),
+        "bound-name-assigned-twice-then-rm": bash(
+            "J=~/.claude/x; n=$(grep -c x $J); n=$(grep -c y $J); rm -rf $n"
+        ),
+        "bound-name-assigned-twice-second-writes": bash(
+            "J=~/.claude/x; n=$(grep -c x $J); n=$(rm -rf $J); echo $n"
+        ),
+        "backslash-substitution-writes": bash(
+            'for f in ~/.claude/a; do n=$(grep -c "a\\|b" "$f"; rm -rf ~/.claude/x); done'
+        ),
+        "group-rm": bash("ls ~/.claude && { rm -rf ~/.claude/a; }"),
+        "group-redirect": bash("ls && { echo a; } > ~/.claude/out"),
+        "group-redirect-in-body": bash("ls && { echo a > ~/.claude/out; }"),
         "loop-over-path-variable": bash("for PATH in ~/.claude/x; do ls; done"),
         "loop-without-words": bash('cd ~/.claude && for f; do rm -rf "$f"; done'),
         "loop-then-write": bash("for f in ~/.claude/a; do ls; done; rm -rf ~/.claude/a"),
@@ -4153,6 +4167,12 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-unknown-rm-json": bash('cd "$X" && rm .claude.json'),
         "cwd-in-folder": bash("rm -rf skills", cwd=str(folder)),
         "cwd-in-folder-redirect": bash("echo x > CLAUDE.md", cwd=str(folder / "skills")),
+        "cwd-in-folder-read-then-rm": bash("ls skills; rm -rf skills", cwd=str(folder)),
+        "cwd-in-folder-cp-in": bash("cp CLAUDE.md CLAUDE.bak", cwd=str(folder)),
+        "cwd-in-folder-copy-relative-out": bash("cp CLAUDE.md out", cwd=str(folder)),
+        "cwd-in-folder-sed-i": bash("sed -i s/a/b/ CLAUDE.md", cwd=str(folder)),
+        "cwd-in-folder-tee": bash("ls | tee CLAUDE.md", cwd=str(folder)),
+        "cwd-in-folder-script": bash('python3 -c \'open("x", "w")\'', cwd=str(folder)),
         "glob-dotted": bash("rm -rf ~/.cl*"),
         "glob-folder-contents": bash("rm -rf ~/.claude/*"),
         "glob-name": bash("rm -rf ~/.claude/sk*"),
@@ -4163,9 +4183,65 @@ def folder_calls(user: Path, folder: Path) -> dict[str, Payload]:
         "cp-json": bash("cp /tmp/c.json ~/.claude.json"),
         "glob-json": bash("rm ~/.claude.js*"),
         "cd-home-rm-json": bash("cd ~ && rm .claude.json"),
+        "pipe-into-xargs": bash("grep -l x ~/.claude/p/*.jsonl | xargs rm"),
+        "sort-output-file": bash("sort -o ~/.claude/a ~/.claude/b"),
+        "sort-output-long-option": bash("ls ~/.claude | sort --output=~/.claude/x"),
+        "uniq-second-operand": bash("uniq ~/.claude/a ~/.claude/b"),
+        "read-redirected-into-it": bash("grep x ~/.claude/a > ~/.claude/out"),
+        "read-appended-into-it": bash("grep x ~/.claude/a | sort >> ~/.claude/out"),
+        "cd-read-redirected-to-relative": bash("cd ~/.claude && grep x a | sort > out"),
+        "env-chdir-write": bash("env -C ~/.claude touch x"),
+        "timeout-rm": bash("timeout 5 rm ~/.claude/x"),
+        "environment-rm": bash("LC_ALL=C rm ~/.claude/x"),
+        "reader-by-writable-path": bash("/tmp/bin/grep x ~/.claude/a"),
+        "reader-by-local-bin": bash("/usr/local/bin/grep x ~/.claude/a"),
+        "cd-cp-into-it": bash("cd ~/.claude && cp /tmp/x relfile"),
+        "cp-into-it": bash("cp /tmp/x ~/.claude/y"),
+        "cd-cp-then-rm": bash("cd ~/.claude && cp a /tmp/b; rm a"),
+        "find-fprint": bash("find ~/.claude -fprint ~/.claude/x"),
+        "find-fprintf": bash("find ~/.claude -fprintf ~/.claude/x '%p'"),
+        "find-fls": bash("find ~/.claude -fls ~/.claude/x"),
+        "find-delete-iname": bash("find ~/.claude -iname '*.tmp' -delete"),
+        "find-exec-semicolon": bash("find ~/.claude -name x -exec rm {} ;"),
+        "find-execdir": bash("find ~/.claude -name x -execdir rm {} ;"),
+        "find-ok": bash("find ~/.claude -name x -ok rm {} ;"),
+        "find-okdir": bash("find ~/.claude -name x -okdir rm {} ;"),
+        "read-loop-rm": bash('while read f; do rm "$f"; done < ~/.claude/list'),
+        "find-loop-rm": bash('find ~/.claude/p | while read f; do rm "$f"; done'),
+        "substitution-name-rm": bash('f=$(grep -l k ~/.claude/p/*.jsonl | head -1); rm "$f"'),
+        "substitution-in-reader-writes": bash("ls -la $(rm ~/.claude/x)"),
+        "substitution-assignment-writes": bash('n=$(rm ~/.claude/x); [ "$n" != 0 ]'),
+        "sed-range-writes": bash("sed -n '/x/,$w ~/.claude/o' ~/.claude/a"),
+        "heredoc-cat-into-it": bash("cat > ~/.claude/x <<'EOF'\ntext\nEOF"),
+        "heredoc-tee-into-it": bash("tee ~/.claude/x <<'EOF'\ntext\nEOF"),
+        "heredoc-cat-relative-after-cd": bash("cd ~/.claude && cat > x <<'EOF'\ntext\nEOF"),
+        "heredoc-unquoted-substitution": bash("cat > /tmp/f <<EOF\n$(rm ~/.claude/x)\nEOF"),
+        "bound-name-rm": bash("F=~/.claude/a; sed -n 1p $F; rm $F"),
+        "bound-name-read-into": bash("F=~/.claude/a; read F; sed -n p $F"),
+        "bound-name-rebound": bash("F=~/.claude/a; F=-i; sed -n p $F x"),
+        "bash-c-writes": bash("bash -c 'rm ~/.claude/x'"),
+        "bash-c-with-arguments": bash("bash -c 'cat ~/.claude/a' x"),
+        "bash-c-redirected-into-it": bash("bash -c 'cat ~/.claude/a' > ~/.claude/b"),
+        "sleep-then-rm": bash("sleep 1; rm ~/.claude/x"),
+        "command-rm": bash("command rm ~/.claude/x"),
+        "cd-then-unknown-program": bash("cd ~/.claude && ls; mytool x"),
+        "cd-away-then-home-glob-rm": bash(
+            "cd /tmp/x && git log --grep 'a.*b'; cd ~ && rm -rf .cl*"
+        ),
+        "node-reads-it": bash("node -e \"require('fs').readFileSync('~/.claude/a')\""),
+        "perl-reads-it": bash("perl -e 'open F, \"~/.claude/a\"'"),
+        "ruby-reads-it": bash("ruby -e 'File.read(\"~/.claude/a\")'"),
+        "awk-reads-it": bash("awk '{print}' ~/.claude/a"),
+        "sqlite-reads-it": bash("sqlite3 ~/.claude/a.db 'select 1'"),
+        "python-heredoc-piped": bash("cat <<'E' | python3 -\nopen('~/.claude/a')\nE"),
+        "python-home-lookup": bash(
+            "python3 -c \"import os; open(os.path.expanduser('~/.claude/a'))\""
+        ),
         "rg-pre": bash("rg --pre sh x ~/.claude"),
         "rg-pre-equals": bash("rg --pre=sh x ~/.claude/skills"),
         "rg-pre-glob": bash("rg --pre-glob '*.gz' --pre sh x ~/.claude"),
+        "rg-relative-glob-after-cd": bash("cd ~/.claude && rg -l x *.md"),
+        "rg-loop-variable": bash("for f in $(ls ~/.claude/p/*.jsonl); do rg -c x $f; done"),
         "write": tool("Write", file_path=f"{folder}/agents/x.md", content="x"),
         "write-json": tool("Write", file_path=f"{user}/.claude.json", content="{}"),
         "edit": tool("Edit", file_path=f"{folder}/CLAUDE.md", old_string="a", new_string="b"),
@@ -4247,6 +4323,7 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "rg": bash("rg foo ~/.claude/skills"),
         "rg-options": bash("rg -n -i --glob '*.md' foo ~/.claude/agents"),
         "rg-files": bash("rg --files ~/.claude/skills"),
+        "rg-absolute-glob": bash(f"rg -o 'x[^\"]{{0,40}}' {folder}/p/*.jsonl | sort -u"),
         "grep": bash("grep -r x ~/.claude/agents"),
         "find": bash("find ~/.claude/skills -name '*.md'"),
         "find-print": bash("find ~/.claude -maxdepth 2 -type d -print"),
@@ -4302,6 +4379,76 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "cd-config-dir-variable-ls": bash("cd $CLAUDE_CONFIG_DIR && ls skills"),
         "cd-home-variable-ls": bash("cd $HOME/.claude && ls skills"),
         "cd-find": bash("cd ~/.claude && find skills -name '*.md'"),
+        "environment-reader": bash("LC_ALL=C grep -c x ~/.claude/a.jsonl"),
+        "timeout-reader": bash("timeout 30 grep x ~/.claude/a"),
+        "nice-reader": bash("nice -n 5 rg x ~/.claude/a"),
+        "env-unset-reader": bash("env -u X grep x ~/.claude/a"),
+        "reader-by-system-path": bash("/usr/bin/grep x ~/.claude/a"),
+        "reader-in-bin": bash("/bin/ls ~/.claude"),
+        "filters": bash(
+            "grep -l k ~/.claude/p/*.jsonl | sort -u | uniq -c | cut -d: -f1 | tr a b"
+            " | column -t | basename -a $(head -1) | wc -l"
+        ),
+        "filter-sed-jq": bash("cat ~/.claude/a.jsonl | sed -n 2p | jq .type | tail -1"),
+        "read-to-file-outside": bash("grep x ~/.claude/a > /tmp/out"),
+        "read-appended-outside": bash("grep x ~/.claude/a >> /tmp/out"),
+        "read-sorted-to-file-outside": bash("ls ~/.claude/p | sort > /tmp/x"),
+        "input-redirect-wc": bash("wc -l < ~/.claude/a.jsonl"),
+        "input-redirect-grep": bash("grep x < ~/.claude/a.jsonl"),
+        "read-loop-over-file": bash('while read f; do wc -l "$f"; done < ~/.claude/list.txt'),
+        "find-loop": bash(
+            'find ~/.claude/p -name "*.jsonl" | while read f; do grep -c x "$f"; done'
+        ),
+        "substitution-after-cd": bash(
+            "cd ~/.claude/projects/p && ls -la $(grep -l k *.jsonl | head -5)"
+        ),
+        "substitution-name": bash('f=$(grep -l k ~/.claude/p/*.jsonl | head -1); grep -o x "$f"'),
+        "substitution-count-test": bash(
+            'cd ~/.claude && n=$(grep -c x a.jsonl); [ "$n" != "0" ] && echo hit'
+        ),
+        "test-after-cd": bash("cd ~/.claude && [ -f CLAUDE.md ] && ls skills"),
+        "test-command": bash("test -d ~/.claude/skills && ls ~/.claude/skills"),
+        "find-tests": bash(
+            "find ~/.claude -maxdepth 3 -iname '*.md' -newermt 2026-01-01 -size +1k"
+            " -not -path '*/x/*' -ipath '*s*' -printf '%p\\n'"
+        ),
+        "sed-range-to-end": bash("sed -n '/start/,$p' ~/.claude/a.md"),
+        "cd-cp-out": bash("cd ~/.claude && cp CLAUDE.md /tmp/x.md"),
+        "cd-cp-several-out": bash("cd ~/.claude && cp -p a b /var/tmp/"),
+        "heredoc-text-to-cat": bash("cat > /tmp/n.md <<'EOF'\nsee ~/.claude/CLAUDE.md\nEOF"),
+        "heredoc-text-to-tee": bash("tee /tmp/n.md <<'EOF'\nsee ~/.claude/CLAUDE.md\nEOF"),
+        "bound-name": bash("F=~/.claude/p/a.jsonl; sed -n '/a/,/b/p' \"$F\" | head -3"),
+        "bound-name-test": bash('J=~/.claude/x.jsonl; [ -f "$J" ] && grep -c x $J'),
+        "bound-name-in-text-with-other-commands": bash(
+            "docker ps; F=~/.claude/a.txt; sed -n 1p $F | cut -c1-20; git log -1"
+        ),
+        "bound-name-assigned-twice": bash(
+            'J=~/.claude/x.jsonl; n=$(grep -c x $J); [ "$n" -ge 2 ] || { n=$(grep -c y $J); echo $n; }'
+        ),
+        "bound-name-folder-listing": bash(
+            'W=~/.claude/w; ls $W | tail -2; for f in $W/a-*; do wc -l < "$f"; done'
+        ),
+        "sleep-until": bash(
+            'until [ "$(grep -c x ~/.claude/p/j.jsonl)" -ge 2 ]; do sleep 5; done; echo ok'
+        ),
+        "command-wrapper": bash("command sleep 1; ls ~/.claude"),
+        "cwd-in-folder-reads": bash(
+            "ls skills | head -3; grep -c x CLAUDE.md; find . -name '*.md' | sort | wc -l",
+            cwd=str(folder),
+        ),
+        "cwd-in-folder-copy-out": bash("cp CLAUDE.md /var/tmp/out", cwd=str(folder)),
+        "backslash-in-quoted-pattern-of-substitution": bash(
+            "cd ~/.claude/projects && find . -maxdepth 1 -name '*.jsonl' -newermt '2026-09-11'"
+            ' | while read f; do n=$(grep -c "a\\|b" "$f"); echo "$(stat -c %y "$f") $n"; done'
+            " | sort"
+        ),
+        "group-reads": bash(
+            'n=$(grep -c x ~/.claude/p/j.jsonl); [ "$n" -gt 0 ] && { echo found $n; exit 0; }'
+        ),
+        "bash-c-reads": bash("bash -c 'grep -c x ~/.claude/a.jsonl | head -1'"),
+        "cd-away-quoted-glob": bash(
+            "cd /tmp/x && git log --grep 'a.*b' | head -3; cat ~/.claude/a"
+        ),
         "read-tool": tool("Read", file_path=f"{folder}/CLAUDE.md"),
         "read-tool-json": tool("Read", file_path=f"{user}/.claude.json"),
         "grep-tool": tool("Grep", pattern="x", path=f"{folder}/agents"),

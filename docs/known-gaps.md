@@ -145,17 +145,31 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   (`ls '.*' $d`, `ls '.*'; git status`).
 - The user folder (`~/.claude`, CLAUDE_CONFIG_DIR, `~/.claude.json`) is a zone with no `.claude`
   token, so a PM may write in a repo's own `.claude/worktrees/`, where Claude Code keeps its
-  worktrees. It refuses, and a PM asks the GM: a Bash call whose working folder is inside the user
-  folder, a relative glob with a `.claude` component after a `cd` (`cd ~/proj && rm -rf
-  .claude/worktrees/x/*`: write the path out), a read with a command outside the read list, `rg`
-  by an unquoted `$VAR` path (write `~/...`), `git -C ~/.claude log`, a copy with an option that
-  links or names a folder (`cp -l`, `cp -t`, `tar --remove-files`) or whose source is a glob or a
-  variable, a `cd` or a `for` loop in the folder beside a command that is not a plain reader or
-  that redirects into a file (`2>/dev/null` and `2>&1` are fine), a loop inside a loop, a loop
-  over a variable named in capitals, a loop word with a `$(...)` that is quoted, holds a `;` or
-  `&&`, or runs anything but readers, `python3`, `node`, `perl`, `awk` and `sqlite3` reading the
-  folder (their code could write there too), and any MCP call that names a path in it, a read
-  included.
+  worktrees. A PM may read it in Bash with the readers (`cat`, `ls`, `grep`, `rg`, `find` without
+  actions, `jq`, `sed -n`, `sort`, `uniq`, `cut`, `tr`, `column`, `wc`, `head`, `tail`, `[`...), behind
+  `env VAR=x`, `timeout`, `nice` and `command`, in pipes between them, with output to `/dev/null`
+  or to a file outside the folder, with input from a file, in `$(...)` that only reads, in a loop
+  or an `if` that only reads, and with `cp` out of it. It refuses, and a PM asks the GM: any
+  write into it, a program in it run under `env VAR=`, `git -C ~/.claude log`, an unknown program
+  after a `cd` into it (`cd ~/.claude && othertool store cat x`), `xargs` (even `ls ~/.claude/p/*
+  | xargs -n1 basename`), a sed script held in a variable (`sed -E "$S"`), `rg` with an operand
+  that is a variable (`rg x $f` in a loop), a path built from a loop variable
+  (`f=~/.claude/skills/$s/SKILL.md`), `${...}`, `$((...))`, `<(...)` and `$'...'` in the text
+  (the scanner gives up), an escaped backtick in a pattern, a copy with an option that links or
+  names a folder (`cp -l`, `cp -t`, `tar --remove-files`), a `cp` into it, and any MCP call that
+  names a path in it, a read included. A `rg` operand that is a glob stays a read only when it
+  starts with `/` or `~`.
+- The user folder's code rule: python, `node`, `perl`, `ruby`, `awk`, `sqlite3` and the like are
+  not readers of it. Their code is refused when it names the folder or looks up the home folder
+  (`expanduser`, `HOME`), when it comes from a heredoc, and when a read of the folder is piped
+  into it; `awk` with a file of the folder as operand is refused too, since `awk '{print >
+  FILENAME}'` writes it without naming it. Running a script that sits in the folder stays a read
+  of that file.
+- Not a read of the folder, but refused all the same, since the guard cannot tell: a quoted word
+  like `.*` or `s/.*//` inside an `ssh host '...'`, `docker run ... sh -c '...'` or `python3 -c`
+  text that has a `cd` word, which may glob the folder when the `cd` goes home. A write into
+  `~/.claude/jobs/` (a PM's scratch files) is refused like any write into the folder; whether it
+  should be allowed is a separate decision, not taken here.
 - Also a false positive, kept on purpose: glob-like text in a heredoc body (markdown `**x**`, a
   regex `[a-z]+x`) on a line that also names `.claude` or `.config`, even when python or `cat`
   reads the body. Python can hand such a word to a shell (`os.system`), and a copied script can

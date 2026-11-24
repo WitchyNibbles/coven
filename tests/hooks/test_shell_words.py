@@ -693,7 +693,8 @@ def test_simple_commands_sort_the_redirections_a_command_has():
     commands = module.simple_commands("ls >a 2>/dev/null 2>&1 <b <<< x")
     (command,) = (c for c in commands if c.words)
     assert command.redirect_targets == ["a", "/dev/null"]
-    assert command.redirect_inputs == ["1", "b", "x"]
+    assert command.input_files == ["b"]
+    assert command.redirect_inputs == ["1", "x"]
     assert command.heredocs == []
 
 
@@ -706,15 +707,85 @@ def test_simple_commands_read_a_plain_substitution_only_when_asked():
     assert first[3].value is None
 
 
+def test_simple_commands_keep_the_text_of_each_plain_substitution_for_the_caller_to_judge():
+    """The scanner only finds where one ends: `;`, `&&` and a redirection are the caller's to
+    read, in the text it gets back, and a double-quoted one comes through the same way."""
+    (command, *_) = module.simple_commands(
+        'cat f=$(ls; rm x) g="$(ls > o | head)" "a$(cd d && ls)b"', substitutions=True
+    )
+    words = command.words
+    assert [word.substitutions for word in words] == [
+        (),
+        ("ls; rm x",),
+        ("ls > o | head",),
+        ("cd d && ls",),
+    ]
+
+
+def test_simple_commands_read_a_variable_name_inside_a_plain_substitution():
+    (command, *_) = module.simple_commands(
+        'cat $(wc -l $D/j) "$(grep -c x "$f" 2>/dev/null)"', substitutions=True
+    )
+    assert [word.substitutions for word in command.words] == [
+        (),
+        ("wc -l $D/j",),
+        ('grep -c x "$f" 2>/dev/null',),
+    ]
+
+
+def test_simple_commands_read_a_backslash_that_is_literal_in_a_quoted_string_of_a_substitution():
+    (command, *_) = module.simple_commands('n=$(grep -c "a\\|b\\.c" "$f")', substitutions=True)
+    assert command.words[0].substitutions == ('grep -c "a\\|b\\.c" "$f"',)
+
+
+def test_simple_commands_read_a_lone_bracket_as_a_word_only_when_asked():
+    command = "[ -f x ] && ls"
+    assert module.simple_commands(command) is None
+    first, _ = (c for c in module.simple_commands(command, substitutions=True) if c.words)
+    assert [word.value for word in first.words] == ["[", "-f", "x", "]"]
+
+
+def test_simple_commands_read_the_word_that_opens_a_group_as_a_word_only_when_asked():
+    command = "ls && { echo a; }"
+    first, group, *_ = (c for c in module.simple_commands(command, substitutions=True) if c.words)
+    assert [word.value for word in group.words] == ["{", "echo", "a"]
+    (_, group, *_) = (c for c in module.simple_commands(command) if c.words)
+    assert group.words[0].value is None
+
+
+def test_simple_commands_give_a_plain_home_target_and_an_input_file_as_written():
+    (command, *_) = module.simple_commands("cat < ~/a < $f > ~/b > $g", substitutions=True)
+    assert command.input_files == ["~/a", "$f"]
+    assert command.write_paths == ["~/b", None]
+    (command, *_) = module.simple_commands("cat < $(ls)", substitutions=True)
+    assert command.input_files == [None]
+
+
+def test_bind_names_reads_each_word_of_a_name_as_its_path():
+    commands = module.simple_commands('cat $F "$F/x" $G "$F$G"', substitutions=True)
+    bound = module.bind_names(commands, {"F": "$HOME/d", "G": "/e"})
+    assert [(w.raw, w.value) for w in bound[0].words[1:]] == [
+        ("~/d", None),
+        ("~/d/x", None),
+        ("/e", "/e"),
+        ('"$F$G"', None),
+    ]
+    assert [w.raw for w in commands[0].words][1] == "$F"
+
+
 @pytest.mark.parametrize(
     "command",
     [
-        "for f in $(ls; rm x); do :; done",
-        "for f in $(ls && rm x); do :; done",
-        "for f in $(ls > x); do :; done",
         "for f in $(ls $(rm x)); do :; done",
         "for f in $(ls `rm x`); do :; done",
-        'for f in $(ls "$x"); do :; done',
+        "for f in $(ls ${x}); do :; done",
+        "for f in $(ls $1); do :; done",
+        'for f in $(ls "$"); do :; done',
+        'for f in $(ls "$(x)"); do :; done',
+        'for f in $(ls "a\\"b"); do :; done',
+        'for f in $(ls "a\\\\"); do :; done',
+        'for f in $(ls "a\\$x"); do :; done',
+        'for f in $(ls "a\\`x`"); do :; done',
         "for f in $(ls \\; rm x); do :; done",
         "for f in $(ls # x); do :; done",
         "for f in $(cat <<EOF); do :; done",
