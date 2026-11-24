@@ -5489,6 +5489,35 @@ def test_a_test_or_expansion_that_evaluates_nothing_still_reads(
     assert proc.returncode == 0, proc.stderr
 
 
+# --- uniq's operands after `--`: the second one is where it writes ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/.claude/projects && uniq /tmp/e -- -tmp-proj/memory/MEMORY.md",
+        "cd ~/.claude/skills && uniq -c -- /tmp/e -SKILL.md",
+    ],
+    ids=["after-cd", "counted"],
+)
+def test_a_uniq_with_an_output_after_a_double_dash_is_no_read(
+    run: Run, store: Path, command: str
+) -> None:
+    payload = bash(command)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["uniq -c ~/.claude/a.txt", "uniq -- ~/.claude/a.txt", "cat ~/.claude/a.txt | sort | uniq -c"],
+    ids=["count", "double-dash-one-file", "piped"],
+)
+def test_a_uniq_of_one_file_in_the_user_folder_reads(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative

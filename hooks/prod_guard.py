@@ -3953,8 +3953,9 @@ def _sort_reads(args: Sequence[_ShellWord]) -> bool:
 
 
 def _uniq_reads(args: Sequence[_ShellWord]) -> bool:
-    """Whether `uniq` has at most one operand (the second one is where it writes)."""
-    operands = [word for word in args if not _unquoted(word.raw).startswith("-")]
+    """Whether `uniq` has at most one operand (the second one is where it writes), every word
+    after a `--` one (`uniq a -- -out`)."""
+    operands = _operands([_unquoted(word.raw) for word in args])
     return len(operands) <= 1 and not _expands_to_option(args)
 
 
