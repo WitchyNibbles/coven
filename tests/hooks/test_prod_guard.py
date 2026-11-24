@@ -5629,6 +5629,41 @@ def test_a_copy_beside_reads_only_still_reads(run: Run, store: Path, command: st
     assert proc.returncode == 0, proc.stderr
 
 
+# --- an MCP tool's relative path or `file://` URL: its folder is the tool's own, unknown ---
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".claude/CLAUDE.md",
+        ".claude.json",
+        ".claude/skills/x/SKILL.md",
+        "../.claude/CLAUDE.md",
+        "file://{home}/.claude/CLAUDE.md",
+        "file://localhost{home}/.claude/%43LAUDE.md",
+    ],
+    ids=["folder-file", "json", "skill", "climbing", "file-url", "file-url-host"],
+)
+def test_an_mcp_relative_path_or_file_url_into_the_folder_is_refused(
+    run: Run, store: Path, path: str
+) -> None:
+    payload = tool("mcp__fs__write_file", path=path.format(home=home()), content="x")
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["notes/CLAUDE.md", "src/claude.py", "file:///tmp/CLAUDE.md"],
+    ids=["other-folder", "like-named", "file-url-far"],
+)
+def test_an_mcp_relative_path_outside_the_folder_is_allowed(
+    run: Run, store: Path, path: str
+) -> None:
+    proc = run(tool("mcp__fs__write_file", path=path, content="x"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
