@@ -34,7 +34,14 @@
   `~/$N`, `{.,}./x`, `~-`, `$OLDPWD`, a climb from a variable's folder), a write through `/proc`
   or `/dev`, a read in a text that exports what its programs read (`TAR_OPTIONS`), a file naming
   the folder written beside a command that is not a reader (`git commit`, `crontab`, `at`), and a
-  copy or unpacking into the session folder itself are refused there too (#PR).
+  copy or unpacking into the session folder itself are refused there too. A word with a brace
+  expansion (`{a,b}`, `{1..3}`, nested, up to 64 words) is now read as each word it makes, for
+  the memory store, coven's config, the settings and plugins as well as the user folder, so a
+  `rm -rf ~/.cl{a,}ude/skills` is refused everywhere; this only adds refusals. A `printf -vNAME`,
+  a read that may evaluate a value as a name or number (`test -v`, `-eq`, `${!x}`, `%d`), a
+  `uniq a -- b`, and zsh's `NULLCMD`, `READNULLCMD`, prompt and hook names keep a text from
+  counting as a read of the folder, and a relative write after zsh's `cd old new` is refused
+  (#PR).
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).

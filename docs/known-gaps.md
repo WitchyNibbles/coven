@@ -137,6 +137,13 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   - a file that names the user folder, written in one call and run by a later one (a git hook,
     a crontab, an npm script): the same gap as a script written in one call and run in a later
     one;
+  - a file run with no mention of the user folder in the text (`sh /tmp/s`, zsh's
+    `READNULLCMD=sh; < /tmp/s`), when an earlier call wrote that file: the same gap as a script
+    written in one call and run in a later one; a zle widget (`zle -N x`) runs only in an
+    interactive shell;
+  - a brace expansion with more than 64 words, or a range the guard cannot work out, that makes
+    a path of the memory store, coven's config, the settings or plugins: those zones read the word
+    as it is written there;
   - a write through `/proc` or `/dev/fd` to a repo's own `.claude/settings.json`
     (`cd ~/proj/.claude && echo {} > /proc/self/cwd/settings.json`): the `/proc` rule covers only
     Claude Code's user folder.
@@ -179,12 +186,21 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   expansion right under home or `/` (`~/$N/x`, `/$X`), reads the current, last or a stacked folder
   it cannot pin (`$OLDPWD`, `~-`, `~1`) or a zone variable with an operator (`${HOME%/}`,
   `${CLAUDE_CONFIG_DIR:-x}`), or climbs from a folder an expansion names (`$X/..`, `{.,}./x`); a
-  `cd` to such a word before a write counts the same. A leading `$PWD` or `~+` is read as the
+  `cd` to such a word before a write counts the same. A word with a brace expansion is read as
+  each word the shell makes of it (`{a,b}`, `{1..3}`, `{a..c}`, nested), for every zone, up to 64
+  words; past that, or for a range the guard cannot work out (`{a..$X}`), a write is refused for
+  the user folder only, and the other zones read the word as it is written. A read stops being one
+  when a command may read a value as a variable name or a number and the guard cannot tell the
+  value is a number (`test -v "$D"`, `[ "$n" -eq 1 ]`, `${!D}`, `$((D))`, a printf `%d`, zsh's
+  `exit "$n"`): a subscript in it runs its `$(...)`. A count (`$(grep -c x f)`, `$(... | wc -l)`),
+  an integer and a variable the text sets only to one of these are numbers. A `cd` or `pushd` with
+  two operands (zsh's `cd old new`) is not followed: a relative write after it is refused. A leading `$PWD` or `~+` is read as the
   folder the session is in. Any write under `/proc` or `/dev` is refused (`/proc/self/cwd` is the
   shell's folder), but `/dev/null`, `/dev/stdout`, `/dev/stderr` and `/dev/tty`. A read stops
   being one when the text exports a name (`export TAR_OPTIONS=--remove-files`), sets one the
   hook's environment holds or any after `set -a`, sets one by `printf -v`, or puts one in front of
-  the reader (`RIPGREP_CONFIG_PATH=x rg`), but the locale, time zone, terminal, width and colour
+  the reader (`RIPGREP_CONFIG_PATH=x rg`), sets one zsh runs (`NULLCMD`, `READNULLCMD`, a prompt,
+  `precmd_functions` and the other hook arrays, `ZDOTDIR`), but the locale, time zone, terminal, width and colour
   names (`LC_ALL`, `LANG`, `TZ`, `TERM`, `COLUMNS`, `NO_COLOR`...). A text that writes a file with
   text keeps its reads only when every other command only reads: beside `git`, `crontab`, `at`,
   `npm`, `make`, `uv run`, `chmod` or any other command the file the text wrote may run, so the
