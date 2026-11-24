@@ -5768,6 +5768,50 @@ def test_a_folder_write_with_more_braces_than_the_cap_is_refused(run: Run, store
     assert run(payload).returncode == 0
 
 
+# --- a quoted word holds no command: `$(` or a backtick in quotes is text, unless a shell runs it ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -o 'a[^`]*b' ~/.claude/projects/p/s.jsonl | head -2",
+        'rg -o "x\\`y" ~/.claude/projects/p/s.jsonl',
+        "grep -c 'a$(b)' ~/.claude/projects/p/s.jsonl",
+        "timeout 5 grep 'a`b' ~/.claude/CLAUDE.md",
+        "bash -c 'f=$(ls ~/.claude/projects | head -1); echo \"$f\"'",
+    ],
+    ids=["backtick-in-single-quotes", "escaped-backtick", "dollar-paren", "wrapped", "shell-reads"],
+)
+def test_a_quoted_command_text_in_a_read_is_only_text(run: Run, store: Path, command: str) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+QUOTED_RUNS: dict[str, str] = {
+    "bash-c": "bash -c 'rm -rf ~/.claude/skills'",
+    "eval": "eval 'rm -rf ~/.claude/skills'",
+    "sh-c-substitution": "sh -c \"$(printf 'rm -rf ~/.claude/x')\"",
+    "bash-c-backtick": "bash -c 'echo `rm -rf ~/.claude/skills`'",
+    "bash-c-escaped-backtick": 'bash -c "cat \\`rm -rf ~/.claude/skills\\`"',
+    "eval-reader": "eval cat '$(rm -rf ~/.claude/skills)'",
+    "watch-reader": "watch -n1 cat '$(rm -rf ~/.claude/skills)'",
+    "env-shell": "env bash -c 'cat ~/.claude/a; rm -rf ~/.claude/skills'",
+    "shell-extra-argument": "bash -c 'cat ~/.claude/a' '$(rm -rf ~/.claude/skills)'",
+    "xargs-shell": "echo x | xargs sh -c 'rm -rf ~/.claude/skills'",
+    "find-exec-shell": "find ~/.claude -name x -exec sh -c 'rm -rf \"$1\"' _ {} \\;",
+    "test-subscript": "[ -v 'a[$(rm -rf ~/.claude/skills)]' ]",
+    "printf-number": "printf '%d' 'a[$(rm -rf ~/.claude/skills)]'",
+    "rg-pre": "rg --pre 'sh -c $(rm -rf ~/.claude/skills)' x ~/.claude",
+}
+
+
+@pytest.mark.parametrize("name", list(QUOTED_RUNS))
+def test_a_quoted_command_text_a_shell_may_run_is_refused(run: Run, store: Path, name: str) -> None:
+    payload = bash(QUOTED_RUNS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative

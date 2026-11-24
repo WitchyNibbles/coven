@@ -538,6 +538,16 @@ CLAUDE_FOLDER_READERS = frozenset(
     }
 )
 PROGRAM_READERS = frozenset({"rg"})
+# Readers that read every word as a pattern, a name or text to print, never as a command or a number
+# (not `test`, `printf` or `exit`): a `$(` or a backtick quoted in one of their words runs nothing.
+QUOTED_TEXT_READERS = frozenset(
+    {
+        *("cat", "head", "tail", "wc", "ls", "stat", "grep", "egrep", "fgrep", "diff", "cmp"),
+        *("du", "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "tac", "nl"),
+        *("basename", "dirname", "rg", "jq", "echo", "sort", "uniq", "cut", "tr", "column"),
+        *("find", "sed"),
+    }
+)
 PROGRAM_OPTIONS = ("--pre", "--hostname-bin")
 # The options of `cp` that neither link, name a folder nor take a value, and of `tar` that create
 # an archive of its operands: `cp -a SRC DEST` and `tar -cf ARCHIVE SRC` read their sources.
@@ -4309,13 +4319,32 @@ def _text_reads(text: str, zone: _Zone, cwd: str) -> bool:
     )
 
 
-def _substitutions_read(word: _ShellWord, zone: _Zone, cwd: str) -> bool:
+def _substitutions_read(
+    word: _ShellWord, zone: _Zone, cwd: str, *, quoted_text: bool = False
+) -> bool:
     """Whether a word runs no command (RUNS_COMMAND) but plain `$(...)` that the scanner read
-    whole, whose texts only read (`_text_reads`)."""
+    whole, whose texts only read (`_text_reads`). With `quoted_text`, a word the scanner reads as
+    a literal (`'a$(b)'`, `"x\\`y"`: a value, no substitution) runs nothing either."""
     if not RUNS_COMMAND.search(word.raw):
+        return True
+    if quoted_text and word.value is not None and not word.substitutions:
         return True
     whole = word.raw.count("$(") == len(word.substitutions) and not re.search(r"`|[<>]\(", word.raw)
     return whole and all(_text_reads(inner, zone, cwd) for inner in word.substitutions)
+
+
+def _runs_no_quoted_text(words: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
+    """Whether a command, for a zone with `shell_reads`, runs no command text its quoted words
+    hold: after its wrappers (`_unwrap`, which re-read no word: not `eval` or `watch`) it is a
+    reader of QUOTED_TEXT_READERS, or a shell whose `-c` text only reads (`_shell_string_reads`
+    reads that text's own commands)."""
+    if not zone.shell_reads:
+        return False
+    words = _unwrap(words, zone)
+    name = _program_name(words[0], zone)
+    if name in SHELL_STRING_RUNNERS:
+        return _shell_string_reads(words[1:], zone, cwd)
+    return name in QUOTED_TEXT_READERS
 
 
 def _loop_header(words: Sequence[_ShellWord], zone: _Zone, cwd: str) -> bool:
@@ -4394,7 +4423,8 @@ def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
     words = _proper_words(each.words)
     if not words:  # zsh runs NULLCMD or READNULLCMD for a bare redirection
         return not (zone.shell_reads and any(name in os.environ for name in NULL_COMMANDS))
-    if not all(_substitutions_read(word, zone, cwd) for word in words):
+    quoted_text = _runs_no_quoted_text(words, zone, cwd)
+    if not all(_substitutions_read(word, zone, cwd, quoted_text=quoted_text) for word in words):
         return False
     if zone.shell_reads and _sets_for_programs(words, exported=False):
         return False
