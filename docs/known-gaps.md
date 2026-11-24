@@ -137,11 +137,9 @@ store and the approvals in it.
   - on a case-insensitive file system (macOS by default), a path that spells a zone in other
     letters (`rm -rf ~/.CLAUDE/skills`, `~/.Claude/settings.json`, `~/.CLAUDE.JSON`, the Write
     tool too): every zone compares names as written, as it did before;
-  - a job folder set by a builtin the guard does not read as an assignment, or split apart:
-    zsh's `zstyle -s :x y CLAUDE_JOB_DIR` and `zformat -f CLAUDE_JOB_DIR ...`, bash's
-    `compgen -V CLAUDE_JOB_DIR`, and `IFS=/; rm -rf $CLAUDE_JOB_DIR/x` in bash (its pieces
-    `home`, `.claude`... become words, relative to the folder the call is in). The guard still
-    writes out the hook's CLAUDE_JOB_DIR there;
+  - a job folder set by a builtin the guard does not read as an assignment: zsh's
+    `zstyle -s :x y CLAUDE_JOB_DIR` and `zformat -f CLAUDE_JOB_DIR ...`, bash's
+    `compgen -V CLAUDE_JOB_DIR`. The guard still writes out the hook's CLAUDE_JOB_DIR there;
   - a name a read may not set that only the user's shell startup files export, not the hook's
     environment: a lone `X=...` before a read of the user folder is then handed to its programs;
   - a file that names the user folder, written in one call and run by a later one (a git hook,
@@ -239,7 +237,9 @@ store and the approvals in it.
   only a `$CLAUDE_JOB_DIR` or `${CLAUDE_JOB_DIR}` that starts a word and that the shell expands (not
   in single quotes, after a backslash, glued to a word or with a zsh modifier like `:h`); any other
   mention of the name in what a text writes is refused (`${CLAUDE_JOB_DIR%/*}`), and a text that may
-  set the name (an assignment, `export`, `read`, `eval`, a loop) gets no job folder. A link that
+  set the name (an assignment, `export`, `read`, `eval`, a loop) or change how its value splits
+  into words (`IFS=/`, `unset IFS`, zsh's `setopt shwordsplit`, `emulate sh`) gets no job folder:
+  `cd ~; IFS=/; rm -rf $CLAUDE_JOB_DIR/x` would remove `.claude` in bash. A link that
   already exists is followed, so one out of a scratch folder is refused; a link the same call makes
   some other way than `ln` (`cp -a` of a link, `tar x`) is not seen. MCP tools get no scratch
   folder.

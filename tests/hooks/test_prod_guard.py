@@ -5664,6 +5664,47 @@ def test_an_mcp_relative_path_outside_the_folder_is_allowed(
     assert proc.returncode == 0, proc.stderr
 
 
+# --- a text that changes how words split gets no job folder: its pieces may be the folder ---
+
+SPLIT_JOB_WRITES: dict[str, str] = {
+    "ifs-assigned": "cd ~; IFS=/; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-exported": "cd ~; export IFS=/; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-declared": "cd ~; declare IFS=/; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-read": "cd ~; IFS=/ read -r a; rm -rf $CLAUDE_JOB_DIR/x",
+    "ifs-unset": "cd ~; unset IFS; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-word-split": "cd ~; setopt shwordsplit; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-word-split-underscored": "cd ~; setopt SH_WORD_SPLIT; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-emulate-sh": "cd ~; emulate sh; rm -rf $CLAUDE_JOB_DIR/x",
+    "zsh-emulate-ksh-local": "cd ~; emulate -L ksh; rm -rf $CLAUDE_JOB_DIR/x",
+}
+SPLIT_JOB_IDS = list(SPLIT_JOB_WRITES)
+
+
+@pytest.mark.parametrize("name", SPLIT_JOB_IDS)
+def test_a_job_folder_write_in_a_text_that_changes_word_splitting_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(bash(SPLIT_JOB_WRITES[name]))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~; rm -rf $CLAUDE_JOB_DIR/x",
+        'echo x > "$CLAUDE_JOB_DIR/out.txt"',
+        "rm${IFS}-f $CLAUDE_JOB_DIR/x",
+    ],
+    ids=["after-cd-home", "quoted", "ifs-only-read"],
+)
+def test_a_job_folder_write_that_leaves_word_splitting_alone_is_allowed(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(in_session(bash(command)), role="pm", env=job_env())
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative

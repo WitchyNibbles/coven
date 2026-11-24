@@ -663,6 +663,10 @@ CHANGES_OPERANDS = frozenset(
     {"rm", "rmdir", "unlink", "mv", "ln", "chmod", "chown", "chgrp", "truncate", "shred", "tee"}
 )
 CHANGES_DESTINATION = frozenset({"cp", "install", "rsync"})
+# IFS named other than in an expansion (`$IFS`, `${IFS}`), and zsh's ways to split words as sh does.
+IFS_NAMED = re.compile(r"(?<![\w$\{])IFS\b")
+WORD_SPLIT_OPTION = re.compile(r"shwordsplit")
+SPLITTING_EMULATION = re.compile(r"\bemulate\b(?:\s+-\S+)*\s+(?:sh|ksh)\b")
 STANDARD_INPUT = re.compile(r"-|/dev/stdin|/dev/fd/0|/proc/[^/]+/fd/0")
 # A `file://` URL, its host left out: the path is what an MCP tool opens.
 FILE_URL = re.compile(r"file://(?:localhost)?(/[^\s'\"]*)")
@@ -2486,7 +2490,23 @@ def _job_variable_kept(command: str) -> bool:
     word (NAME_SETTERS: `read`, `export`, `eval`...)."""
     if not any(JOB_NAME.search(text) for text in (command, _unquoted(command))):
         return True
+    if _changes_word_splitting(command):
+        return False
     return not _odd_job_mention(command) and not NAME_SETTERS.intersection(_words_of(command))
+
+
+def _changes_word_splitting(command: str) -> bool:
+    """Whether a Bash text may change how the shell splits an unquoted expansion: it names IFS
+    other than by expanding it (`IFS=/`, `unset IFS`, `local IFS`), or turns on zsh's
+    SH_WORD_SPLIT (`setopt shwordsplit`, any case, `_` ignored) or a mode that has it
+    (`emulate sh`, `emulate -L ksh`). `$CLAUDE_JOB_DIR` then splits into words that are no job
+    folder (`cd ~; IFS=/; rm -rf $CLAUDE_JOB_DIR/x` removes `.claude`)."""
+    text = _unquoted(command)
+    return bool(
+        IFS_NAMED.search(text)
+        or WORD_SPLIT_OPTION.search(text.replace("_", "").lower())
+        or SPLITTING_EMULATION.search(text)
+    )
 
 
 def _with_own(zone: _Zone, call: Call) -> _Zone:
