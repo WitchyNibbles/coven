@@ -426,6 +426,7 @@ NAME_SETTERS = frozenset(
     {
         "read",
         "printf",
+        "print",
         "mapfile",
         "readarray",
         "getopts",
@@ -3902,14 +3903,14 @@ def _find_reads(args: Sequence[_ShellWord]) -> list[_ShellWord]:
 def _reader_acts(name: str, args: Sequence[_ShellWord]) -> bool:
     """Whether a reader of a zone's `readers` may write a file or run a program given these
     arguments: `sort` with an option that names a file or a program (`-o`, `--compress-program`),
-    `uniq` with two operands (the second is its output), `printf -v` (it sets a variable), or
-    `_runs_program`."""
+    `uniq` with two operands (the second is its output), `printf -v NAME` or `-vNAME` (it sets a
+    variable: `_printed_names`), or `_runs_program`."""
     if name == "sort":
         return not _sort_reads(args)
     if name == "uniq":
         return not _uniq_reads(args)
-    if name == "printf":
-        return any(word.value == "-v" for word in args)
+    if name in VARIABLE_PRINTERS:
+        return bool(_printed_names(args))
     return _runs_program(name, args)
 
 
@@ -4544,12 +4545,13 @@ def _plain_assignment(word: _ShellWord) -> bool:
 
 def _binds_or_moves(each: _SimpleCommand) -> bool:
     """Whether a simple command sets a variable or changes the folder (`cd`, `pushd`, `for`,
-    `read`, an assignment), after the words that open a command in a compound one. Reading what
-    such a command names does not make the rest of the text free of it: a name bound there is
-    used later, and a `cd` moves where the relative words point."""
+    `read`, `printf -v`, an assignment), after the words that open a command in a compound one.
+    Reading what such a command names does not make the rest of the text free of it: a name bound
+    there is used later, and a `cd` moves where the relative words point."""
     words = _proper_words(each.words)
     return not words or (
         words[0].value in {*CHANGE_DIR, "for", "read"}
+        or (words[0].value in VARIABLE_PRINTERS and bool(_printed_names(words[1:])))
         or all(BINDING.match(word.raw) for word in words)
     )
 

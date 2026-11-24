@@ -5377,6 +5377,44 @@ def test_a_brace_expansion_that_makes_the_store_is_refused_in_a_restricted_sessi
     assert run(bash(command)).returncode == 0
 
 
+# --- a printf that sets a variable is no read ---
+
+# `printf -v NAME` and `printf -vNAME` set NAME to the path: a later write by `$NAME` goes there.
+PRINTED_VARIABLES: dict[str, str] = {
+    "glued-rm": 'printf -vD %s ~/.claude/skills; rm -rf "$D"',
+    "glued-cd": 'printf -vD %s ~/.claude; cd "$D" && rm -rf skills',
+    "glued-redirect": 'printf -vD %s ~/.claude/CLAUDE.md; cat /tmp/e > "$D"',
+    "spaced-rm": 'printf -v D %s ~/.claude/skills; rm -rf "$D"',
+}
+
+PRINTED_IDS = list(PRINTED_VARIABLES)
+
+
+@pytest.mark.parametrize("name", PRINTED_IDS)
+def test_a_printf_that_sets_a_variable_to_the_user_folder_is_no_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(PRINTED_VARIABLES[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "printf '%s\\n' ~/.claude/skills",
+        'D=~/.claude/skills; ls "$D"',
+        'printf -vD %s /srv/x; rm -rf "$D"',
+    ],
+    ids=["printf-prints", "assigned-then-read", "printf-sets-far"],
+)
+def test_a_printf_that_prints_the_user_folder_or_sets_a_far_path_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
