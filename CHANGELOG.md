@@ -40,8 +40,9 @@
   `rm -rf ~/.cl{a,}ude/skills` is refused everywhere; this only adds refusals. A `printf -vNAME`,
   a read that may evaluate a value as a name or number (`test -v`, `-eq`, `${!x}`, `%d`), a
   `uniq a -- b`, and zsh's `NULLCMD`, `READNULLCMD`, prompt and hook names keep a text from
-  counting as a read of the folder, and a relative write after zsh's `cd old new` is refused
-  (#PR).
+  counting as a read of the folder, and a relative write after zsh's `cd old new` is refused.
+  So are `uniq - out`, a script copied from a heredoc or stdin (`cp /dev/stdin /tmp/s <<E`) and
+  run in the same call, and an MCP tool's relative path or `file://` URL into the folder (#PR).
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).

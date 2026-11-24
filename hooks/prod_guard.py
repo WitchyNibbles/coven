@@ -111,11 +111,10 @@ a read and stays allowed. The zone variables (`$HOME`, `$CLAUDE_CONFIG_DIR`, `$X
 `$CLAUDE_PLUGIN_ROOT`, plain, quoted or braced) are read with the hook's value and with their
 default, since the command may run under others.
 
-Known limits of the restricted rules: a path built from strings or variables
-(`python3 -c "...'~/cov'+'en-memory'"`, `d=coven-mem; ... ~/${d}ory`, `for d in ~/.claude; do rm
--rf $d; done`, `echo ~/.claude | xargs rm -rf`) is not read; in the user folder's zone a written
-`${...}`, `$X` or `$(...)` that may lead there fails closed (`_writes_unpinned`), but a plain
-`$D/x` stays allowed.
+Known limits of the restricted rules: a path built in code (`python3 -c "...'~/cov'+'en-memory'"`)
+is not read; in the user folder's zone a written `${...}`, `$X` or `$(...)` that may lead there
+fails closed (`_writes_unpinned`), as do a loop and an `xargs` over it, but a plain `$D/x` stays
+allowed (`D=$(echo ~/.cla)ude; rm -rf $D/skills` gets through).
 
 Limits. The whole check has a deadline of DEADLINE seconds and each git call a timeout; past either,
 the call is refused. The guard is best effort against a session that follows its role: its rules are

@@ -102,8 +102,9 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
 
 ## Production guard
 
-The production guard (`hooks/prod_guard.py`, entered through `hooks/prod_guard_gate.py`) is best effort against a PM that follows its role.
-Its rules are public. Its boundary is the committed store and the approvals in it.
+The production guard (`hooks/prod_guard.py`, entered through `hooks/prod_guard_gate.py`) is
+best effort against a PM that follows its role. Its rules are public. Its boundary is the committed
+store and the approvals in it.
 
 - The hook is registered with a PreToolUse `*` matcher that covers every tool, MCP tools and a
   subagent's calls included. That was checked from the docs, not live: no session refused a call
@@ -130,8 +131,17 @@ Its rules are public. Its boundary is the committed store and the approvals in i
     `rg` whose `--pre` program comes from a config file (`RIPGREP_CONFIG_PATH`) or a variable, and
     what a script inside the folder does once a PM runs it;
   - for the user folder, a write to a word with a plain variable at its start and nothing after
-    it that names or climbs toward the folder (`rm -rf $D/skills`, with D set in an earlier call or
-    by `D=$(...)`): the guard cannot tell where `$D` points, and such a word is common;
+    it that names or climbs toward the folder: `D=$(echo ~/.cla)ude; rm -rf $D/skills` deletes the
+    skills folder and is allowed. The guard cannot tell where `$D` points (set by `$(...)`, `read`
+    or an earlier call), and such a word is common;
+  - on a case-insensitive file system (macOS by default), a path that spells a zone in other
+    letters (`rm -rf ~/.CLAUDE/skills`, `~/.Claude/settings.json`, `~/.CLAUDE.JSON`, the Write
+    tool too): every zone compares names as written, as it did before;
+  - a job folder set by a builtin the guard does not read as an assignment, or split apart:
+    zsh's `zstyle -s :x y CLAUDE_JOB_DIR` and `zformat -f CLAUDE_JOB_DIR ...`, bash's
+    `compgen -V CLAUDE_JOB_DIR`, and `IFS=/; rm -rf $CLAUDE_JOB_DIR/x` in bash (its pieces
+    `home`, `.claude`... become words, relative to the folder the call is in). The guard still
+    writes out the hook's CLAUDE_JOB_DIR there;
   - a name a read may not set that only the user's shell startup files export, not the hook's
     environment: a lone `X=...` before a read of the user folder is then handed to its programs;
   - a file that names the user folder, written in one call and run by a later one (a git hook,
@@ -151,9 +161,9 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   block the call.
 - False positives, which fail closed (the call is refused, and the PM asks the GM):
   `cd ~/.config/git && ls co*`, a Bash `cat` of a repo's `.claude/settings.json` (use the Read
-  tool), a symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command outside
-  the read list (`less`, `awk`, `xargs cat`, `jq`), inside a loop or group, or on a line with a
-  `$(...)`, a program by an unquoted `$HOME/...` path (write `"$HOME/..."` or `~/...`), a sed
+  tool), a symlink in `~/projects` that points at `~`, a read of `~/.claude/plugins/` by a command
+  outside the read list (`less`, `awk`, `xargs cat`, `jq`), inside a loop or group, or on a line
+  with a `$(...)`, a program by an unquoted `$HOME/...` path (write `"$HOME/..."` or `~/...`), a sed
   operand by a variable that is not a plain folder assigned once at the start of the line (`CM=~/x;
   sed -n 1p $CM/a`) or on a line with a builtin that sets a variable by name (`read`, `printf`,
   `mapfile`...), a heredoc body read by python or node at a path outside `/usr/bin` and `/bin`
@@ -167,46 +177,46 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   worktrees. A PM may read it in Bash with the readers (`cat`, `ls`, `grep`, `rg`, `find` without
   actions, `jq`, `sed -n`, `sort`, `uniq`, `cut`, `tr`, `column`, `wc`, `head`, `tail`, `[`...),
   behind `env LC_ALL=C`, `timeout`, `nice` and `command`, in pipes between them, with output to
-  `/dev/null`, `/dev/stdout`, `/dev/stderr`, `/dev/tty` or to a file outside the folder, with input from a file, in `$(...)` that only reads,
-  in a loop or an `if` that only reads, with `cp` out of it, and piped into an `xargs` that runs a
-  plain reader (`cat`, `grep`, `wc`, `head`, `basename`...) with options it knows. It refuses, and a
-  PM asks the GM: any write into it (`~/.claude.json`'s backups too), a program in it run under `env
-  VAR=`, `git -C ~/.claude log`, an unknown program after a `cd` into it (`cd ~/.claude && othertool
-  store cat x`), any other `xargs` (`-I`, `-i`, a shell, `env`, `sed`, `sort`, `find`), a read
-  written to a file that the same text runs (`echo 'rm -rf ~/.claude/x' > /tmp/s; sh /tmp/s`, and
-  with it a python script written by `cat > x.py <<EOF` that names the folder and run in the same
-  call), a loop or `read` name that a shell ties to its search path (`PATH`, zsh's `path`,
-  `fpath`...), a sed script held in a variable (`sed -E "$S"`), `rg` with an operand that is a
-  variable (`rg x $f` in a loop), a path built from a loop variable
-  (`f=~/.claude/skills/$s/SKILL.md`), `${...}`, `$((...))`, `<(...)` and `$'...'` in the text (the
-  scanner gives up), an escaped backtick in a pattern, a copy with an option that links or names a
-  folder (`cp -l`, `cp -t`, `tar --remove-files`), a `cp` into it, and any MCP call that names a
-  path in it, a read included. It also refuses a write the guard cannot pin to a path when the
-  word names `.claude` (`$D/.claude/x`, `.cl${X}aude`, `"$(dirname ~/x)/.claude"`), puts an
+  `/dev/null`, `/dev/stdout`, `/dev/stderr`, `/dev/tty` or to a file outside the folder, with input
+  from a file, in `$(...)` that only reads, in a loop or an `if` that only reads, with `cp` out of
+  it, and piped into an `xargs` that runs a plain reader (`cat`, `grep`, `wc`, `head`,
+  `basename`...) with options it knows. It refuses, and a PM asks the GM: any write into it
+  (`~/.claude.json`'s backups too), a program in it run under `env VAR=`, `git -C ~/.claude log`, an
+  unknown program after a `cd` into it (`cd ~/.claude && othertool store cat x`), any other `xargs`
+  (`-I`, `-i`, a shell, `env`, `sed`, `sort`, `find`), a read written to a file that the same text
+  runs (`echo 'rm -rf ~/.claude/x' > /tmp/s; sh /tmp/s`, and with it a python script written by `cat
+  > x.py <<EOF` that names the folder and run in the same call), a loop or `read` name that a shell
+  ties to its search path (`PATH`, zsh's `path`, `fpath`...), a sed script held in a variable (`sed
+  -E "$S"`), `rg` with an operand that is a variable (`rg x $f` in a loop), a path built from a loop
+  variable (`f=~/.claude/skills/$s/SKILL.md`), `${...}`, `$((...))`, `<(...)` and `$'...'` in the
+  text (the scanner gives up), an escaped backtick in a pattern, a copy with an option that links or
+  names a folder (`cp -l`, `cp -t`, `tar --remove-files`), a `cp` into it, and any MCP call that
+  names a path in it, a read included. It also refuses a write the guard cannot pin to a path when
+  the word names `.claude` (`$D/.claude/x`, `.cl${X}aude`, `"$(dirname ~/x)/.claude"`), puts an
   expansion right under home or `/` (`~/$N/x`, `/$X`), reads the current, last or a stacked folder
   it cannot pin (`$OLDPWD`, `~-`, `~1`) or a zone variable with an operator (`${HOME%/}`,
   `${CLAUDE_CONFIG_DIR:-x}`), or climbs from a folder an expansion names (`$X/..`, `{.,}./x`); a
-  `cd` to such a word before a write counts the same. A word with a brace expansion is read as
-  each word the shell makes of it (`{a,b}`, `{1..3}`, `{a..c}`, nested), for every zone, up to 64
-  words; past that, or for a range the guard cannot work out (`{a..$X}`), a write is refused for
-  the user folder only, and the other zones read the word as it is written. A read stops being one
-  when a command may read a value as a variable name or a number and the guard cannot tell the
-  value is a number (`test -v "$D"`, `[ "$n" -eq 1 ]`, `${!D}`, `$((D))`, a printf `%d`, zsh's
-  `exit "$n"`): a subscript in it runs its `$(...)`. A count (`$(grep -c x f)`, `$(... | wc -l)`,
-  `$(grep -c x f || echo 0)`), an integer and a variable the text sets only to one of these are numbers. A `cd` or `pushd` with
-  two operands (zsh's `cd old new`) is not followed: a relative write after it is refused. A leading `$PWD` or `~+` is read as the
-  folder the session is in. Any write under `/proc` or `/dev` is refused (`/proc/self/cwd` is the
-  shell's folder), but `/dev/null`, `/dev/stdout`, `/dev/stderr` and `/dev/tty`. A read stops
-  being one when the text exports a name (`export TAR_OPTIONS=--remove-files`), sets one the
-  hook's environment holds or any after `set -a`, sets one by `printf -v`, or puts one in front of
-  the reader (`RIPGREP_CONFIG_PATH=x rg`), sets one zsh runs (`NULLCMD`, `READNULLCMD`, a prompt,
-  `precmd_functions` and the other hook arrays, `ZDOTDIR`), but the locale, time zone, terminal, width and colour
-  names (`LC_ALL`, `LANG`, `TZ`, `TERM`, `COLUMNS`, `NO_COLOR`...). A text that writes a file with
-  text keeps its reads only when every other command only reads: beside `git`, `crontab`, `at`,
-  `npm`, `make`, `uv run`, `chmod` or any other command the file the text wrote may run, so the
-  call is refused when that text names the folder (`echo see ~/.claude/a > /tmp/n; git status`
-  too). A `rg` operand that is a glob stays a read only when it starts with
-  `/` or `~`.
+  `cd` to such a word before a write counts the same. A word with a brace expansion is read as each
+  word the shell makes of it (`{a,b}`, `{1..3}`, `{a..c}`, nested), for every zone, up to 64 words;
+  past that, or for a range the guard cannot work out (`{a..$X}`), a write is refused for the user
+  folder only, and the other zones read the word as it is written. A read stops being one when a
+  command may read a value as a variable name or a number and the guard cannot tell the value is a
+  number (`test -v "$D"`, `[ "$n" -eq 1 ]`, `${!D}`, `$((D))`, a printf `%d`, zsh's `exit "$n"`): a
+  subscript in it runs its `$(...)`. A count (`$(grep -c x f)`, `$(... | wc -l)`, `$(grep -c x f ||
+  echo 0)`), an integer and a variable the text sets only to one of these are numbers. A `cd` or
+  `pushd` with two operands (zsh's `cd old new`) is not followed: a relative write after it is
+  refused. A leading `$PWD` or `~+` is read as the folder the session is in. Any write under `/proc`
+  or `/dev` is refused (`/proc/self/cwd` is the shell's folder), but `/dev/null`, `/dev/stdout`,
+  `/dev/stderr` and `/dev/tty`. A read stops being one when the text exports a name (`export
+  TAR_OPTIONS=--remove-files`), sets one the hook's environment holds or any after `set -a`, sets
+  one by `printf -v`, or puts one in front of the reader (`RIPGREP_CONFIG_PATH=x rg`), sets one zsh
+  runs (`NULLCMD`, `READNULLCMD`, a prompt, `precmd_functions` and the other hook arrays,
+  `ZDOTDIR`), but the locale, time zone, terminal, width and colour names (`LC_ALL`, `LANG`, `TZ`,
+  `TERM`, `COLUMNS`, `NO_COLOR`...). A text that writes a file with text keeps its reads only when
+  every other command only reads: beside `git`, `crontab`, `at`, `npm`, `make`, `uv run`, `chmod` or
+  any other command the file the text wrote may run, so the call is refused when that text names the
+  folder (`echo see ~/.claude/a > /tmp/n; git status` too). A `rg` operand that is a glob stays a
+  read only when it starts with `/` or `~`.
 - The user folder's code rule: python, `node`, `perl`, `ruby`, `awk`, `sqlite3` and the like are
   not readers of it. Their code is refused when it names the folder or looks up the home folder
   (`expanduser`, `HOME`), when it comes from a heredoc, and when a read of the folder is piped
@@ -219,20 +229,20 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   `cd /c` or `cd /tmp` with a `.*` the scanner cannot follow, since bash before 5.2 matches `..`
   with `.*` and `/` holds the folder. A `.*` that a write is given (`chmod -R 000 .*`) is read
   that way too, so it is refused one folder below home or in `/tmp`.
-- A session's own scratch folders: a PM may write in its own job folder (the hook's
-  CLAUDE_JOB_DIR, when it sits right under the folder's `jobs/`) and its own session folder (the
-  payload's transcript path without `.jsonl`, under `projects/`), but not their `subagents/`, the
-  folders themselves (`rm -rf "$CLAUDE_JOB_DIR"`, `mv`, `chmod`), a copy, sync or unpacking into
-  the session folder itself (`cp -r x <folder>`, `tar -C <folder> -xf`, `unzip -d`, `cp x .` in
-  it: a named file like `cp a <folder>/a.txt` is fine), a link made in one, other jobs and
-  sessions, the transcripts or auto memory. The guard trusts that the shell sees the hook's
-  CLAUDE_JOB_DIR, and writes out only a `$CLAUDE_JOB_DIR` or `${CLAUDE_JOB_DIR}` that starts a
-  word and that the shell expands (not in single quotes, after a backslash, glued to a word or
-  with a zsh modifier like `:h`); any other mention of the name in what a text writes is refused
-  (`${CLAUDE_JOB_DIR%/*}`), and a text that may set the name (an assignment, `export`, `read`,
-  `eval`, a loop) gets no job folder. A link that already exists is followed, so one out of a scratch folder is
-  refused; a link the same call makes some other way than `ln` (`cp -a` of a link, `tar x`) is
-  not seen. MCP tools get no scratch folder.
+- A session's own scratch folders: a PM may write in its own job folder (the hook's CLAUDE_JOB_DIR,
+  when it sits right under the folder's `jobs/`) and its own session folder (the payload's
+  transcript path without `.jsonl`, under `projects/`), but not their `subagents/`, the folders
+  themselves (`rm -rf "$CLAUDE_JOB_DIR"`, `mv`, `chmod`), a copy, sync or unpacking into the session
+  folder itself (`cp -r x <folder>`, `tar -C <folder> -xf`, `unzip -d`, `cp x .` in it: a named file
+  like `cp a <folder>/a.txt` is fine), a link made in one, other jobs and sessions, the transcripts
+  or auto memory. The guard trusts that the shell sees the hook's CLAUDE_JOB_DIR, and writes out
+  only a `$CLAUDE_JOB_DIR` or `${CLAUDE_JOB_DIR}` that starts a word and that the shell expands (not
+  in single quotes, after a backslash, glued to a word or with a zsh modifier like `:h`); any other
+  mention of the name in what a text writes is refused (`${CLAUDE_JOB_DIR%/*}`), and a text that may
+  set the name (an assignment, `export`, `read`, `eval`, a loop) gets no job folder. A link that
+  already exists is followed, so one out of a scratch folder is refused; a link the same call makes
+  some other way than `ln` (`cp -a` of a link, `tar x`) is not seen. MCP tools get no scratch
+  folder.
 - After a `cd` the guard cannot follow (`cd "$X"`, `cd -`), a write to a relative path that may
   name the folder is refused, a repo's own `.claude/worktrees/` included (`cd "$X" && git
   worktree remove .claude/worktrees/x`): use the absolute path.
