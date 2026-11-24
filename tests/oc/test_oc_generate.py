@@ -266,7 +266,7 @@ def test_the_real_plugin_source_copies_every_ts_file(tmp_path: Path):
 
 # content, superpowers and the AGENTS.md tail
 
-NO_STORE = "No shared memory store on this machine (run `coven setup`)."
+NO_STORE = "No shared memory store on this machine (run `coven memory init`)."
 NOT_FOUND = "Superpowers skills not found"
 
 

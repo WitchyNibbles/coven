@@ -8,7 +8,7 @@ from coven import paths
 from coven.errors import CovenError
 from coven.opencode import memory
 
-NO_STORE = "No shared memory store on this machine (run `coven setup`)."
+NO_STORE = "No shared memory store on this machine (run `coven memory init`)."
 
 
 def hook_head() -> tuple[str, ...]:

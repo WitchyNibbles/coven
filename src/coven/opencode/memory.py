@@ -20,7 +20,7 @@ INDEXES: Final = (
     "Read `user/INDEX.md` and `projects/<key>/INDEX.md` in the store, where `<key>` is the "
     "folder name of the repo's main checkout (a worktree uses its parent repo)."
 )
-NO_STORE: Final = "No shared memory store on this machine (run `coven setup`)."
+NO_STORE: Final = "No shared memory store on this machine (run `coven memory init`)."
 
 
 def store_path() -> Path | None:
