@@ -122,7 +122,12 @@ Its rules are public. Its boundary is the committed store and the approvals in i
     reading one, and only the command line is read;
   - a list of `~/.claude/plugins/` written to a file (`find ... > /tmp/l`) and acted on later
     (`xargs rm < /tmp/l`), in the same line or the next call: the same gap as a script written in
-    one call and run in a later one.
+    one call and run in a later one;
+  - the same gaps for the rest of Claude Code's user folder (`~/.claude`, CLAUDE_CONFIG_DIR and
+    `~/.claude.json`), which a PM may read but not write in Bash: a script written in one call and
+    run in a later one, a path built in code (`python3 -c "os.remove(h + '/.claude.json')"`), an
+    `rg` whose `--pre` program comes from a config file (`RIPGREP_CONFIG_PATH`) or a variable, and
+    what a script inside the folder does once a PM runs it.
 - If a hook script is deleted and the hook runs under bash as sh, it exits 127, which does not
   block the call.
 - False positives, which fail closed (the call is refused, and the PM asks the GM):
@@ -138,6 +143,16 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   `s/[/]/x/`), and a quoted glob on a line with any command other than plain data commands (`ls`,
   `grep`, `cat`, a sed whose script runs nothing, `find` without actions...) or with an unquoted `$`
   (`ls '.*' $d`, `ls '.*'; git status`).
+- The user folder (`~/.claude`, CLAUDE_CONFIG_DIR, `~/.claude.json`) is a zone with no `.claude`
+  token, so a PM may write in a repo's own `.claude/worktrees/`, where Claude Code keeps its
+  worktrees. It refuses, and a PM asks the GM: a Bash call whose working folder is inside the user
+  folder, a relative glob with a `.claude` component after a `cd` (`cd ~/proj && rm -rf
+  .claude/worktrees/x/*`: write the path out), a read with a command outside the read list, `rg`
+  by an unquoted `$VAR` path (write `~/...`), `git -C ~/.claude log`, a copy with an option that
+  links or names a folder (`cp -l`, `cp -t`, `tar --remove-files`) or whose source is a glob or a
+  variable, a `cd` into the folder beside a command that is not a plain reader or that has a
+  redirection (`cd ~/.claude && ls 2>/dev/null`), and any MCP call that names a path in it, a
+  read included.
 - Also a false positive, kept on purpose: glob-like text in a heredoc body (markdown `**x**`, a
   regex `[a-z]+x`) on a line that also names `.claude` or `.config`, even when python or `cat`
   reads the body. Python can hand such a word to a shell (`os.system`), and a copied script can

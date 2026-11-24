@@ -16,6 +16,11 @@
   PreToolUse hook refuses any tool call that reaches one unless a live approval names the exact
   command. It also holds project manager sessions off the store, coven's config, Claude Code's
   settings and `plugins/`.
+- The guard now holds project manager sessions off all of Claude Code's user folder
+  (`~/.claude` or CLAUDE_CONFIG_DIR, and `~/.claude.json`), not only `settings*.json` and
+  `plugins/`: a `rm -rf ~/.claude` through broken quoting no longer gets through. Reads stay
+  allowed (`cat`, `ls`, `grep`, `rg`, `find` without actions, the Read, Grep and Glob tools, and
+  `cd ~/.claude && ls skills`), and so do writes in a repo's own `.claude/worktrees/`.
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).
