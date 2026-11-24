@@ -27,7 +27,7 @@ You do not need Claude Code. You need:
 - A gateway that serves an OpenAI-compatible API, and a key for it in an environment variable. Or
   the `opencode` preset, which reads `OPENCODE_API_KEY` (see Commands below).
 
-The steps, as rehearsed on a clean HOME on 2026-11-24:
+The steps, as rehearsed on a clean HOME:
 
 ```sh
 git clone https://github.com/WitchyNibbles/coven.git ~/coven
