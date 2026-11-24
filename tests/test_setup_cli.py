@@ -259,11 +259,23 @@ def write_installed_plugins(data: object) -> None:
     file.write_text(json.dumps(data))
 
 
-def install_fake_plugin(root: Path) -> None:
+def install_fake_plugin(root: Path, label: str = "plugin coven") -> None:
     (root / "bin").mkdir(parents=True)
     script = root / "bin" / "coven"
-    script.write_text('#!/bin/sh\necho "plugin coven got: $@"\n')
+    script.write_text(f'#!/bin/sh\necho "{label} got: $@"\n')
     script.chmod(0o755)
+
+
+@pytest.fixture
+def checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The coven checkout that writes the shim: a test-only folder with no `bin/coven` yet.
+
+    Its name holds a space and a quote, which the shim must carry through.
+    """
+    root = tmp_path / "the clone's dir"
+    root.mkdir()
+    monkeypatch.setattr(paths, "root", lambda: root)
+    return root
 
 
 def run_shim(*args: str) -> subprocess.CompletedProcess[str]:
@@ -303,7 +315,7 @@ def test_shim_reads_the_list_form_of_installed_plugins(tmp_path: Path, store: Pa
     assert done.stdout == "plugin coven got: doctor\n"
 
 
-def test_shim_not_installed_message(store: Path):
+def test_shim_not_installed_message(store: Path, checkout: Path):
     assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
     write_installed_plugins({"version": 2, "plugins": {"other@market": {"installPath": "/x"}}})
 
@@ -313,13 +325,61 @@ def test_shim_not_installed_message(store: Path):
     assert "coven: plugin coven@coven is not installed" in done.stderr
 
 
-def test_shim_with_no_plugins_file_says_not_installed(store: Path):
+def test_shim_with_no_plugins_file_says_not_installed(store: Path, checkout: Path):
     assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
 
     done = run_shim("doctor")
 
     assert done.returncode == 1
     assert "coven: plugin coven@coven is not installed" in done.stderr
+
+
+def test_shim_names_both_when_neither_the_plugin_nor_the_checkout_is_there(
+    store: Path, checkout: Path
+):
+    assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
+
+    done = run_shim("doctor")
+
+    assert done.returncode == 1
+    assert done.stderr == (
+        f"coven: plugin coven@coven is not installed and {checkout}/bin/coven is missing\n"
+    )
+
+
+def test_shim_falls_back_to_the_checkout_that_wrote_it(store: Path, checkout: Path):
+    install_fake_plugin(checkout, "clone")
+    assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
+
+    done = run_shim("memory", "sync", "two words")
+
+    assert done.returncode == 0
+    assert done.stdout == "clone got: memory sync two words\n"
+
+
+def test_shim_runs_the_plugin_before_the_checkout(tmp_path: Path, store: Path, checkout: Path):
+    install_fake_plugin(checkout, "clone")
+    assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
+    plugin = tmp_path / "plugin"
+    install_fake_plugin(plugin)
+    write_installed_plugins({"plugins": {"coven@coven": {"installPath": str(plugin)}}})
+
+    assert run_shim("doctor").stdout == "plugin coven got: doctor\n"
+
+
+def test_a_shim_whose_clone_moved_is_rewritten_by_running_setup_again(
+    tmp_path: Path, store: Path, checkout: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install_fake_plugin(checkout, "clone")
+    assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
+    moved = tmp_path / "moved clone"
+    checkout.rename(moved)
+    assert "is missing" in run_shim("doctor").stderr
+
+    monkeypatch.setattr(paths, "root", lambda: moved)
+    assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
+
+    assert run_shim("doctor").stdout == "clone got: doctor\n"
 
 
 def test_memory_path_that_is_a_file_is_refused_before_any_write(

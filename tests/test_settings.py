@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import os
+import shlex
 import stat
 from pathlib import Path
 
@@ -305,6 +306,95 @@ def test_undo_leaves_a_shim_someone_edited():
 
     assert skipped == [f"{shim_file()}: changed since coven wrote it, left as is"]
     assert shim_file().exists()
+
+
+def at_root(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+    monkeypatch.setattr(paths, "root", lambda: root)
+
+
+def shim_changes() -> list[settings.Change]:
+    return [c for c in settings.plan(choices(shim=True)) if c.file == shim_file()]
+
+
+def write_shim(text: str) -> None:
+    shim_file().parent.mkdir(parents=True, exist_ok=True)
+    shim_file().write_text(text, encoding="utf-8")
+
+
+def test_a_shim_written_from_a_plugin_cache_root_is_the_plugin_only_text(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A plugin-cache root is versioned and gets pruned: baking it in would point at nothing.
+    at_root(monkeypatch, paths.installed_plugins_file().parent / "cache" / "coven" / "0.1.0")
+
+    settings.apply(settings.plan(choices(shim=True)))
+
+    assert shim_file().read_text(encoding="utf-8") == settings.SHIM_TEXT
+
+
+def test_a_shim_written_from_a_clone_bakes_in_the_clone_once_and_quoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    clone = tmp_path / "it's a clone"
+    at_root(monkeypatch, clone)
+
+    settings.apply(settings.plan(choices(shim=True)))
+
+    text = shim_file().read_text(encoding="utf-8")
+    assert text.count(f"\n  checkout={shlex.quote(str(clone))}\n") == 1
+    assert shim_changes() == []
+
+
+def test_todays_shim_text_is_replaced_not_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    write_shim(settings.SHIM_TEXT)
+    at_root(monkeypatch, tmp_path / "clone")
+
+    [change] = shim_changes()
+
+    assert change.before == settings.SHIM_TEXT
+    assert change.previously == (settings.SHIM_TEXT,)
+    assert str(tmp_path / "clone") in str(change.after)
+
+
+def test_a_shim_written_for_another_clone_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    at_root(monkeypatch, tmp_path / "old clone")
+    settings.apply(settings.plan(choices(shim=True)))
+    at_root(monkeypatch, tmp_path / "new clone")
+
+    settings.apply(settings.plan(choices(shim=True)))
+
+    new_text = shim_file().read_text(encoding="utf-8")
+    assert str(tmp_path / "new clone") in new_text
+    assert "old clone" not in new_text
+
+
+def test_undo_removes_a_shim_that_replaced_todays_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    at_root(monkeypatch, paths.installed_plugins_file().parent / "cache" / "coven" / "0.1.0")
+    settings.apply(settings.plan(choices(shim=True)))
+    at_root(monkeypatch, tmp_path / "clone")
+    settings.apply(settings.plan(choices(shim=True)))
+    assert str(tmp_path / "clone") in shim_file().read_text(encoding="utf-8")
+
+    assert settings.undo() == []
+
+    assert not shim_file().exists()
+
+
+def test_undo_removes_a_shim_still_holding_the_text_coven_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    write_shim(settings.SHIM_TEXT)
+    at_root(monkeypatch, tmp_path / "clone")
+    settings.apply(settings.plan(choices(shim=True)))
+    write_shim(settings.SHIM_TEXT)
+
+    assert settings.undo() == []
+
+    assert not shim_file().exists()
 
 
 def test_a_foreign_file_at_the_shim_path_is_not_overwritten():
