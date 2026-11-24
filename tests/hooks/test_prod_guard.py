@@ -4948,6 +4948,73 @@ def test_a_plain_session_writes_in_the_scratch_folders_as_before(
     assert run(payload, env=job_env()).returncode == 0
 
 
+# --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
+
+# Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
+# glob after it (`.*`) names nothing there, though the scanner gives up on the text (`<(...)`) or
+# the cd sits in a quoted ssh or `sh -c` string.
+CLEAR_CD_TEXTS = {
+    "ssh-string": "ssh h 'cd /srv/app && sed -n \"s/.*//p\" f'",
+    "sh-c-string": "docker run img sh -c 'cd /srv/c && ls -d .*'",
+    "process-substitution": "diff <(cd /srv/a && git diff) <(sed 's/.*//' /tmp/f)",
+    "pipe-and-substitution": "cd /srv/app && git log --format='%s' | sed 's/.*//' && cat <(echo x)",
+    "dot-glob-read": "cd /srv/app && cat <(echo x) && ls -d .*",
+    "in-place-sed": "cd /srv/app && cat <(echo x) && sed -i 's/.*//' f",
+    "subshell-piped": "(cd /srv/a && git log) | sed 's/.*//'; cat <(echo)",
+    "double-dash": "cd -- /srv/app && cat <(echo x) && ls -d .*",
+    "pushd": "pushd /srv/app && cat <(echo x) && ls -d .*",
+    "quoted-operand": "cd '/srv/app' && cat <(echo x) && ls -d .*",
+    "two-cds": "cd /srv/a; cd /srv/b && cat <(echo x) && ls -d .*",
+}
+
+
+@pytest.mark.parametrize("name", CLEAR_CD_TEXTS)
+def test_a_cd_clear_of_the_user_folder_keeps_a_relative_glob_out_of_it(
+    run: Run, store: Path, name: str
+) -> None:
+    # The tests' home is under /tmp, so the session starts in /srv, a folder clear of it.
+    proc = run(bash(CLEAR_CD_TEXTS[name], cwd="/srv"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# Not clear: a cd home or to a folder the guard cannot tell, a cd word it cannot read, a `..`.
+UNCLEAR_CD_TEXTS = {
+    "ssh-string-home": "ssh h 'cd ~ && rm -rf .c*'",
+    "quoted-cd-word": "c''d ~; cat <(echo) ; rm -rf .c*",
+    "variable-folder": "cd /tmp/$X && cat <(echo) && rm -rf .c*",
+    "up-path": "cd /tmp && cat <(echo) && rm -rf ../home/*/.c*",
+    "home-later": "cd /srv && cd ~ && cat <(echo) && rm -rf .c*",
+    "bare-pushd": "cd /srv && pushd && cat <(echo) && rm -rf .c*",
+    "popd": "pushd /srv && popd && cat <(echo) && rm -rf .c*",
+    "quoted-tilde": "cd '~/x' && cat <(echo) && rm -rf .c*",
+    # The shell reads `cd <home's parent>/home`: a quote glued to the operand goes on with it.
+    "glued-quote": "sh -c 'cd PARENT/ho'me' && rm -rf .c*'",
+    "operand-with-space": "cd '/srv/a b' && cat <(echo) && rm -rf .c*",
+    "backslash-operand": "cd /srv\\ a && cat <(echo) && rm -rf .c*",
+    "substitution-operand": "cd /srv/$(echo x) && cat <(echo) && rm -rf .c*",
+    "two-operands": "cd /srv ~ && cat <(echo) && rm -rf .c*",
+    # Bash before 5.2 matches `..` with `.*`: a cd one folder below home names the home folder.
+    "dot-glob-climbs-home": "cd ~/proj && cat <(echo) && rm -rf .*/.claude",
+    "dot-glob-climbs-home-scanned": "cd ~/proj && rm -rf .*/.claude",
+    "two-dot-globs-climb": "cd ~/proj/sub && cat <(echo) && rm -rf .*/.*/.claude",
+    # `/` holds the folder: `chmod -R 000 .*` there may change all of it.
+    "dot-glob-climbs-to-root": "docker run img sh -c 'cd /c && chmod -R 000 .*'",
+    "operand-then-more": "sh -c 'cd /srv ~' && cat <(echo) && rm -rf .c*",
+}
+
+
+@pytest.mark.parametrize("name", UNCLEAR_CD_TEXTS)
+def test_a_cd_that_may_lead_near_the_user_folder_keeps_a_relative_glob_strict(
+    store: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """With no other zone, as the settings zone refuses these too."""
+    monkeypatch.setattr(pg, "_zones", lambda _store: (pg._claude_folder_zone(),))
+    command = UNCLEAR_CD_TEXTS[name].replace("PARENT", str(home().parent))
+    message = decide(bash(command, cwd="/srv"), store, "pm")
+    assert message is not None
+    assert FOLDER_REFUSAL in message
+
+
 # --- a quoted glob is literal: in `~`, `.*` matches `.claude` only when the shell expands it ---
 
 QUOTED_GLOBS = {

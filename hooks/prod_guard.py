@@ -289,6 +289,15 @@ DIRECTORY_LAUNCHERS = frozenset({"direnv"})  # `direnv exec <dir> <program>`
 REDIRECT = re.compile(r"\d*(?:<|>|&>)")
 REDIRECT_OPERATOR = re.compile(r"\d*(?:[<>]{1,3}[&|]?|&>{1,2})")
 CHANGE_DIR = frozenset({"cd", "pushd"})
+# A `cd` or `pushd` word of a text, quotes and all, bounded as SHELL_SPLIT bounds a word ...
+CD_WORD = re.compile(r"(?<![^\s;&|<>()`'\"=,{}])(?:cd|pushd)(?![^\s;&|<>()`'\"=,{}])")
+# ... and the one operand it may have for `_written_cds_clear`: a literal path from `/` or `~/`
+# (a quoted `~` is literal: not from `~/`), maybe in quotes, that no other text goes on with and
+# no other operand follows (zsh's `cd old new` swaps a part of the folder) before the command ends.
+CD_OPERAND = re.compile(
+    r"[ \t]+(?:--[ \t]+)?(?:(?P<q>['\"])(?P<quoted>/[\w./@+%:,=-]*)(?P=q)"
+    r"|(?P<bare>[/~][\w./@+%:,=-]*))(?=['\"`]?[ \t]*(?:$|[\n;&|)]))"
+)
 # Characters that continue a name: the store's name counts only as a whole token without them.
 NAME_CHARS = "A-Za-z0-9_.-"
 LOOKUP_OPTIONS = frozenset({"-v", "-V"})  # `command -v claude` only looks claude up
@@ -4133,15 +4142,25 @@ def _clear_cd(each: _SimpleCommand, cwd: str, zone: _Zone) -> bool:
     )
 
 
-def _cds_clear(command: str, cwd: str, zone: _Zone) -> bool:
-    """Whether the folder a Bash command starts in and each `cd` of its text (`_clear_cd`) lead
-    nowhere near the zone, so a relative word after one names no part of it: every `cd` word of
-    the text (`_words_of`: one in a quote or a heredoc counts) is the command word of a `cd` of
-    the scanned text, and no word has a `..` component."""
+def _cds_clear(command: str, cwd: str, zone: _Zone, climb: int) -> bool:
+    """Whether the folder a Bash command starts in and each `cd` of its text lead nowhere near the
+    zone, so a relative word after one names no part of it: by the scanned commands
+    (`_scanned_cds_clear`), or, where the scanner cannot follow the text or a `cd` sits in a
+    quoted string (`ssh h 'cd /x && ...'`), by the text itself with the `climb` folders above
+    each cd's (`_written_cds_clear`, `_glob_climb`)."""
+    if not _clear_folder(os.path.realpath(cwd), zone):
+        return False
+    return _scanned_cds_clear(command, cwd, zone) or _written_cds_clear(command, cwd, zone, climb)
+
+
+def _scanned_cds_clear(command: str, cwd: str, zone: _Zone) -> bool:
+    """Whether each `cd` of a text is clear (`_clear_cd`): every `cd` word of the text
+    (`_words_of`: one in a quote or a heredoc counts) is the command word of a `cd` of the scanned
+    text, and no word has a `..` component."""
     commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
         command, substitutions=True
     )
-    if commands is None or not _clear_folder(os.path.realpath(cwd), zone):
+    if commands is None:
         return False
     if any(UP_PATH.search(_unquoted(word.raw)) for each in commands for word in each.words):
         return False
@@ -4152,6 +4171,49 @@ def _cds_clear(command: str, cwd: str, zone: _Zone) -> bool:
     ]
     named = [word for word in _words_of(command) if word in CHANGE_DIR]
     return len(named) == len(moves) and all(_clear_cd(each, cwd, zone) for each in moves)
+
+
+def _written_cds_clear(command: str, cwd: str, zone: _Zone, climb: int) -> bool:
+    """Whether each `cd` of a text, read from the text as written, is clear: every `cd` or `pushd`
+    word (CD_WORD, as many as `_words_of` finds, so `c''d` is none of them) has one literal
+    operand from `/` or `~/` (CD_OPERAND) whose folder and the ones a glob may climb to
+    (`_glob_climb`) are clear of the zone, there is no `popd`, and no word has a `..` component."""
+    words = _words_of(command)
+    if "popd" in words or any(UP_PATH.search(word) for word in words):
+        return False
+    found = list(CD_WORD.finditer(command))
+    if len(found) != sum(word in CHANGE_DIR for word in words):
+        return False
+    for each in found:
+        operand = CD_OPERAND.match(command, each.end())
+        path = operand and (operand.group("quoted") or operand.group("bare"))
+        if not path or path == "~" or not _clear_up(_resolve(path, cwd), climb, zone):
+            return False
+    return True
+
+
+def _glob_climb(glob_text: str) -> int:
+    """How many folders up a glob of a Bash call's glob text (reads blanked) may climb: bash
+    before 5.2 matches `..` with `.*`, so `.*/.claude` after `cd ~/proj` is `~/.claude`. The most
+    `..`-matching glob components in one word the shell may expand (`_shell_glob_words`)."""
+    return max(
+        (
+            sum(
+                bool(GLOB_CHARS.intersection(part)) and fnmatch.fnmatchcase("..", part)
+                for part in word.split("/")
+            )
+            for word in _shell_glob_words(glob_text)
+        ),
+        default=0,
+    )
+
+
+def _clear_up(folder: str | None, climb: int, zone: _Zone) -> bool:
+    """Whether a folder and the `climb` folders above it are clear of the zone (`_clear_folder`)."""
+    if folder is None:
+        return False
+    path = Path(folder)
+    return all(_clear_folder(str(above), zone) for above in [path, *path.parents][: climb + 1])
 
 
 def _runs_code(each: _SimpleCommand, zone: _Zone) -> bool:
@@ -4225,7 +4287,7 @@ def _bash_touches(call: Call, zone: _Zone) -> bool:
             return True
         spans = _read_spans(bash.command, zone, call.cwd)
         code, glob_code = _blank(code, spans), _blank(glob_code, spans)
-    clear = zone.shell_reads and _cds_clear(bash.command, call.cwd, zone)
+    clear = zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
     return _text_reaches(code, _Where(call.cwd, cds_clear=clear), zone, glob_text=glob_code)
 
 
