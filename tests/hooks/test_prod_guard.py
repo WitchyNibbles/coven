@@ -5494,7 +5494,7 @@ def test_a_test_or_expansion_that_evaluates_nothing_still_reads(
     assert proc.returncode == 0, proc.stderr
 
 
-# --- uniq's operands after `--`: the second one is where it writes ---
+# --- uniq's operands, after `--` and a lone `-` too: the second one is where it writes ---
 
 
 @pytest.mark.parametrize(
@@ -5502,12 +5502,15 @@ def test_a_test_or_expansion_that_evaluates_nothing_still_reads(
     [
         "cd ~/.claude/projects && uniq /tmp/e -- -tmp-proj/memory/MEMORY.md",
         "cd ~/.claude/skills && uniq -c -- /tmp/e -SKILL.md",
+        "echo x | uniq - ~/.claude/CLAUDE.md",
+        "uniq - ~/.claude/.credentials.json < /dev/null",
+        "printf '{}\\n' | uniq - ~/.claude.json",
+        "echo x | uniq -z - ~/.claude/agents/e.md",
+        "cd ~/.claude && echo x | uniq - CLAUDE.md",
     ],
-    ids=["after-cd", "counted"],
+    ids=["after-cd", "counted", "stdin-dash", "dash-redirected", "json", "zero-ended", "dash-cd"],
 )
-def test_a_uniq_with_an_output_after_a_double_dash_is_no_read(
-    run: Run, store: Path, command: str
-) -> None:
+def test_a_uniq_with_a_second_operand_is_no_read(run: Run, store: Path, command: str) -> None:
     payload = bash(command)
     assert run(payload, role="pm").returncode == 2
     assert run(payload).returncode == 0
@@ -5515,8 +5518,13 @@ def test_a_uniq_with_an_output_after_a_double_dash_is_no_read(
 
 @pytest.mark.parametrize(
     "command",
-    ["uniq -c ~/.claude/a.txt", "uniq -- ~/.claude/a.txt", "cat ~/.claude/a.txt | sort | uniq -c"],
-    ids=["count", "double-dash-one-file", "piped"],
+    [
+        "uniq -c ~/.claude/a.txt",
+        "uniq -- ~/.claude/a.txt",
+        "cat ~/.claude/a.txt | sort | uniq -c",
+        "cat ~/.claude/a.txt | uniq -c -",
+    ],
+    ids=["count", "double-dash-one-file", "piped", "stdin-dash-alone"],
 )
 def test_a_uniq_of_one_file_in_the_user_folder_reads(run: Run, store: Path, command: str) -> None:
     proc = run(bash(command), role="pm")

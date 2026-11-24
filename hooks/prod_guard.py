@@ -3153,13 +3153,14 @@ def _expansions(text: str, glob_text: str) -> list[tuple[str, str]]:
 
 
 def _operands(args: Sequence[str]) -> list[str]:
-    """The words that are not options (everything after `--` is an operand)."""
+    """The words that are not options: everything after `--`, and a lone `-` (standard input or
+    output, an operand to every command)."""
     found: list[str] = []
     options = True
     for word in args:
         if options and word == "--":
             options = False
-        elif not options or not word.startswith("-"):
+        elif not options or not word.startswith("-") or word == "-":
             found.append(word)
     return found
 
@@ -3979,7 +3980,7 @@ def _sort_reads(args: Sequence[_ShellWord]) -> bool:
 
 def _uniq_reads(args: Sequence[_ShellWord]) -> bool:
     """Whether `uniq` has at most one operand (the second one is where it writes), every word
-    after a `--` one (`uniq a -- -out`)."""
+    after a `--` and a lone `-` one (`uniq a -- -out`, `uniq - out`)."""
     operands = _operands([_unquoted(word.raw) for word in args])
     return len(operands) <= 1 and not _expands_to_option(args)
 
