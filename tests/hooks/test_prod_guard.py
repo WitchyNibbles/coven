@@ -4700,7 +4700,8 @@ def in_session(payload: Payload, transcript_path: object = None) -> Payload:
 
 
 def job_env(job_dir: str | None = None) -> dict[str, str]:
-    """The hook's own environment, where Claude Code sets CLAUDE_JOB_DIR for a background session."""
+    """The hook's own environment, where Claude Code sets CLAUDE_JOB_DIR for a background
+    session."""
     return {"CLAUDE_JOB_DIR": str(job_folder()) if job_dir is None else job_dir}
 
 

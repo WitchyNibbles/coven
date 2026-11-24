@@ -25,8 +25,12 @@
   `timeout`, `nice` and `command`, in a pipe through `sort`, `uniq`, `cut`, `tr`, `column` and
   the like, with output to a file outside the folder, with input from a file, inside `$(...)`, a
   `{ ...; }` group, `[ ... ]` and `find -printf`, with `cp` out of it, and when the session runs
-  in the folder itself. Code in python, `node`, `perl`, `ruby`, `awk` or `sqlite3` that names the
-  folder, and `xargs`, stay refused.
+  in the folder itself, and through an `xargs` that runs a plain reader. A session may write in
+  its own job folder (CLAUDE_JOB_DIR) and session folder, but not their `subagents/` or the
+  folders themselves. Code in python, `node`, `perl`, `ruby`, `awk` or `sqlite3` that names the
+  folder, a read written to a script the same call runs, and writes to `~/.claude.json`'s
+  backups stay refused; a `cd` is followed for every word, and read from the text when the scanner
+  cannot follow it (#PR).
 - The guard no longer refuses a project manager's quoted globs (`ls '.*'`, `grep -E "\s*"`, a
   quoted-delimiter heredoc) or its reads and script runs in Claude Code's `plugins/` folder;
   writes there are still refused (#24).

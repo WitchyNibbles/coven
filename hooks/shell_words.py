@@ -524,9 +524,9 @@ class _Lexer:
     def _plain_substitution(self, word: _WordBuilder) -> bool:
         """Read a `$(...)` at the current position as part of the word when its text has no
         parenthesis, backtick, backslash, comment or heredoc in it, no `$` but of a variable name
-        (`$f`), and its quotes pair up (`SUBSTITUTION_CHARS`, blanks and quoted strings): the word keeps the text, its value is
-        unknown and `Word.substitutions` lists the text for the caller to judge. False for any
-        other `$(...)`, which the caller reads as before."""
+        (`$f`), and its quotes pair up (`SUBSTITUTION_CHARS`, blanks and quoted strings): the word
+        keeps the text, its value is unknown and `Word.substitutions` lists the text for the caller
+        to judge. False for any other `$(...)`, which the caller reads as before."""
         end = self.pos + 2
         while True:
             char = self.text[end] if end < len(self.text) else ""

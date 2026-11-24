@@ -146,19 +146,24 @@ Its rules are public. Its boundary is the committed store and the approvals in i
 - The user folder (`~/.claude`, CLAUDE_CONFIG_DIR, `~/.claude.json`) is a zone with no `.claude`
   token, so a PM may write in a repo's own `.claude/worktrees/`, where Claude Code keeps its
   worktrees. A PM may read it in Bash with the readers (`cat`, `ls`, `grep`, `rg`, `find` without
-  actions, `jq`, `sed -n`, `sort`, `uniq`, `cut`, `tr`, `column`, `wc`, `head`, `tail`, `[`...), behind
-  `env VAR=x`, `timeout`, `nice` and `command`, in pipes between them, with output to `/dev/null`
-  or to a file outside the folder, with input from a file, in `$(...)` that only reads, in a loop
-  or an `if` that only reads, and with `cp` out of it. It refuses, and a PM asks the GM: any
-  write into it, a program in it run under `env VAR=`, `git -C ~/.claude log`, an unknown program
-  after a `cd` into it (`cd ~/.claude && othertool store cat x`), `xargs` (even `ls ~/.claude/p/*
-  | xargs -n1 basename`), a sed script held in a variable (`sed -E "$S"`), `rg` with an operand
-  that is a variable (`rg x $f` in a loop), a path built from a loop variable
-  (`f=~/.claude/skills/$s/SKILL.md`), `${...}`, `$((...))`, `<(...)` and `$'...'` in the text
-  (the scanner gives up), an escaped backtick in a pattern, a copy with an option that links or
-  names a folder (`cp -l`, `cp -t`, `tar --remove-files`), a `cp` into it, and any MCP call that
-  names a path in it, a read included. A `rg` operand that is a glob stays a read only when it
-  starts with `/` or `~`.
+  actions, `jq`, `sed -n`, `sort`, `uniq`, `cut`, `tr`, `column`, `wc`, `head`, `tail`, `[`...),
+  behind `env VAR=x`, `timeout`, `nice` and `command`, in pipes between them, with output to
+  `/dev/null` or to a file outside the folder, with input from a file, in `$(...)` that only reads,
+  in a loop or an `if` that only reads, with `cp` out of it, and piped into an `xargs` that runs a
+  plain reader (`cat`, `grep`, `wc`, `head`, `basename`...) with options it knows. It refuses, and a
+  PM asks the GM: any write into it (`~/.claude.json`'s backups too), a program in it run under `env
+  VAR=`, `git -C ~/.claude log`, an unknown program after a `cd` into it (`cd ~/.claude && othertool
+  store cat x`), any other `xargs` (`-I`, `-i`, a shell, `env`, `sed`, `sort`, `find`), a read
+  written to a file that the same text runs (`echo 'rm -rf ~/.claude/x' > /tmp/s; sh /tmp/s`, and
+  with it a python script written by `cat > x.py <<EOF` that names the folder and run in the same
+  call), a loop or `read` name that a shell ties to its search path (`PATH`, zsh's `path`,
+  `fpath`...), a sed script held in a variable (`sed -E "$S"`), `rg` with an operand that is a
+  variable (`rg x $f` in a loop), a path built from a loop variable
+  (`f=~/.claude/skills/$s/SKILL.md`), `${...}`, `$((...))`, `<(...)` and `$'...'` in the text (the
+  scanner gives up), an escaped backtick in a pattern, a copy with an option that links or names a
+  folder (`cp -l`, `cp -t`, `tar --remove-files`), a `cp` into it, and any MCP call that names a
+  path in it, a read included. A `rg` operand that is a glob stays a read only when it starts with
+  `/` or `~`.
 - The user folder's code rule: python, `node`, `perl`, `ruby`, `awk`, `sqlite3` and the like are
   not readers of it. Their code is refused when it names the folder or looks up the home folder
   (`expanduser`, `HOME`), when it comes from a heredoc, and when a read of the folder is piped
@@ -166,10 +171,25 @@ Its rules are public. Its boundary is the committed store and the approvals in i
   FILENAME}'` writes it without naming it. Running a script that sits in the folder stays a read
   of that file.
 - Not a read of the folder, but refused all the same, since the guard cannot tell: a quoted word
-  like `.*` or `s/.*//` inside an `ssh host '...'`, `docker run ... sh -c '...'` or `python3 -c`
-  text that has a `cd` word, which may glob the folder when the `cd` goes home. A write into
-  `~/.claude/jobs/` (a PM's scratch files) is refused like any write into the folder; whether it
-  should be allowed is a separate decision, not taken here.
+  like `.*` or `s/.*//` in a text with a `cd` whose folder the guard cannot read from the text
+  (`cd "$W"`, `cd $D`), or that may lead near the folder: `cd ~/proj` one level below home, and
+  `cd /c` or `cd /tmp` with a `.*` the scanner cannot follow, since bash before 5.2 matches `..`
+  with `.*` and `/` holds the folder. A `.*` that a write is given (`chmod -R 000 .*`) is read
+  that way too, so it is refused one folder below home or in `/tmp`.
+- A session's own scratch folders: a PM may write in its own job folder (the hook's
+  CLAUDE_JOB_DIR, when it sits right under the folder's `jobs/`) and its own session folder (the
+  payload's transcript path without `.jsonl`, under `projects/`), but not their `subagents/`, the
+  folders themselves (`rm -rf "$CLAUDE_JOB_DIR"`, `mv`, `chmod`), a link made in one, other jobs
+  and sessions, the transcripts or auto memory. The guard trusts that the shell sees the hook's
+  CLAUDE_JOB_DIR; a text that may set the name (an assignment, `export`, `read`, `eval`, a loop)
+  gets no job folder. A link that already exists is followed, so one out of a scratch folder is
+  refused; a link the same call makes some other way than `ln` (`cp -a` of a link, `tar x`) is
+  not seen. MCP tools get no scratch folder.
+- After a `cd` the guard cannot follow (`cd "$X"`, `cd -`), a write to a relative path that may
+  name the folder is refused, a repo's own `.claude/worktrees/` included (`cd "$X" && git
+  worktree remove .claude/worktrees/x`): use the absolute path.
+- A write through a glob that starts with `*` (`rm ~/*.bak`) counts as one that may match
+  `~/.claude.json`'s backups, though bash skips dot files there.
 - Also a false positive, kept on purpose: glob-like text in a heredoc body (markdown `**x**`, a
   regex `[a-z]+x`) on a line that also names `.claude` or `.config`, even when python or `cat`
   reads the body. Python can hand such a word to a shell (`os.system`), and a copied script can

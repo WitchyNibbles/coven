@@ -8,12 +8,13 @@ validates a file with the same rules before it is committed: it prints `ok: N ta
 or prints the reason and exits 1; it never reads stdin.
 
 When it acts. The hook reads coven's config (`~/.config/coven/config.json`, as plain JSON, the way
-memory-context does) for `memory_path` (default `~/coven-memory`, and it must be absolute) and `guard`, whose only valid value
-is `"required"`. It is off, and exits 0 at once with no git call and no subprocess, when there is no
-`"guard": "required"` and either no store folder or no `systems/guard.json` in its working tree. With
-the latch a missing store folder is not off: Bash and MCP tools are refused for every session, since
-the store held a guard.json once. With no config file the store is the default one, so deleting the file does not
-switch off a store that holds a guard.json. It is on otherwise. A config that exists but cannot be read or is invalid
+memory-context does) for `memory_path` (default `~/coven-memory`, and it must be absolute) and
+`guard`, whose only valid value is `"required"`. It is off, and exits 0 at once with no git call and
+no subprocess, when there is no `"guard": "required"` and either no store folder or no
+`systems/guard.json` in its working tree. With the latch a missing store folder is not off: Bash
+and MCP tools are refused for every session, since the store held a guard.json once. With no
+config file the store is the default one, so deleting the file does not switch off a store that
+holds a guard.json. It is on otherwise. A config that exists but cannot be read or is invalid
 refuses Bash and MCP tools in a restricted session (the message points to `coven doctor`) and
 leaves any other session as if the guard were off.
 
@@ -28,38 +29,44 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   Write, Edit, MultiEdit and NotebookEdit under any of them, any MCP input that names one, and any
   Bash command that runs in one or whose text reaches it, by name, by a path that resolves into it
   (`~`, `$HOME`, symlinks), by a glob that can match it, or, after a `cd`, `env -C`, `git -C` or
-  `find` in its holding folder, by its plain name. A glob character in quotes or after a backslash is literal (`ls '.*'`, `grep
-  -E "[0-9]*"`), but only on a line of plain data commands (GLOB_LITERAL_COMMANDS, `find` without
-  actions, a `sed` whose script, read command by command in each way a sed may, runs and writes
-  nothing) with no unquoted `$`; a heredoc body copied by `cat` or read by python or node (by name
-  or from /usr/bin or /bin) with no glob call is read only for words at a fixed place. The user
-  folder has no token (a `.claude` token would refuse writes in a repo's own `.claude/worktrees/`,
-  where Claude Code keeps its worktrees); it is found by path, glob, a `cd` into it or a holder
-  write (`rm -rf ~`), and it is checked last, so a settings or plugins refusal names its own zone.
-  In Bash the `plugins/` folder and the user folder may be read and their scripts run
-  (READ_COMMANDS, `find` without actions, a printing `sed` and its
-  operands by a folder variable bound at the start of the line, `bash` or python with a script, a
-  program by its path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS
-  or a sed that only prints); any other use of it counts as a write. For the user folder only
+  `find` in its holding folder, by its plain name. A glob character in quotes or after a backslash
+  is literal (`ls '.*'`, `grep -E "[0-9]*"`), but only on a line of plain data commands
+  (GLOB_LITERAL_COMMANDS, `find` without actions, a `sed` whose script, read command by command in
+  each way a sed may, runs and writes nothing) with no unquoted `$`; a heredoc body copied by `cat`
+  or read by python or node (by name or from /usr/bin or /bin) with no glob call is read only for
+  words at a fixed place. The user folder has no token (a `.claude` token would refuse writes in a
+  repo's own `.claude/worktrees/`, where Claude Code keeps its worktrees); it is found by path,
+  glob, a `cd` into it or a holder write (`rm -rf ~`), and it is checked last, so a settings or
+  plugins refusal names its own zone. In Bash the `plugins/` folder and the user folder may be read
+  and their scripts run (READ_COMMANDS, `find` without actions, a printing `sed` and its operands by
+  a folder variable bound at the start of the line, `bash` or python with a script, a program by its
+  path, `~/...` included, a lone `S=<dir>` used only there, a pipe into PIPE_FILTERS or a sed that
+  only prints); any other use of it counts as a write. For the user folder only
   (CLAUDE_FOLDER_READERS, `_Zone.copy_reads`, `_Zone.cd_reads`, `_Zone.loop_reads`,
   `_Zone.shell_reads`): `rg` without `--pre` or `--hostname-bin`, `jq`, `echo`, `printf`, `sleep`,
-  `sort` (not `-o`), `uniq`, `cut`, `tr`, `column`, `[` and `test` read too; the sources of
-  `cp -a SRC DEST` and `tar -cf ARCHIVE SRC` are reads (the destination and the archive are not),
-  and so is `cp` to a place outside it; and a text where every command only reads writes nothing
-  wherever a `cd` goes (or wherever the session runs), so it is allowed whole
-  (`_only_reads_text`): in it a command may sit behind `env`, `timeout`, `nice`, `command`, an
-  assignment of a plain name or a reader's path in /usr/bin or /bin; a pipe joins readers and
-  filters; a redirection may go to `/dev/null`, a file descriptor or a file outside the zone
-  (`> /var/tmp/x`), or read from a file (`wc -l < f`, `while read f; do ...; done < f`); a
-  `$(...)` of readers may stand in an argument or a plain assignment; a loop, an `if`, a `{ ...; }`
-  group, `break`, `exit` and `sh -c 'STRING'` of such a text read too. The commands that are left
-  when the reads are blanked (`_read_spans`) are checked for a way to the folder, a name bound to
-  a path in the folder by a lone assignment included (`F=~/.claude/x; cat $F`). A heredoc fed to
-  `cat > FILE` or `tee FILE`, FILE outside the zone and the body quoted, is file content. Code
-  that an interpreter (INTERPRETERS, python) runs from a word, standard input or a heredoc is a
-  read of nothing: when it names the folder, or looks up the home folder, the call is refused
-  (`_interpreter_names_zone`); so is `xargs`. `cd ~/.claude && ls skills` runs, `cd ~/.claude &&
-  rm -rf skills` does not. Read, Grep and Glob stay allowed;
+  `sort` (not `-o`), `uniq`, `cut`, `tr`, `column`, `[` and `test` read too; the sources of `cp -a
+  SRC DEST` and `tar -cf ARCHIVE SRC` are reads (the destination and the archive are not), and so is
+  `cp` to a place outside it; and a text where every command only reads writes nothing wherever a
+  `cd` goes (or wherever the session runs), so it is allowed whole (`_only_reads_text`): in it a
+  command may sit behind `env`, `timeout`, `nice`, `command`, an assignment of a plain name or a
+  reader's path in /usr/bin or /bin; a pipe joins readers and filters; a redirection may go to
+  `/dev/null`, a file descriptor or a file outside the zone (`> /var/tmp/x`), or read from a file
+  (`wc -l < f`, `while read f; do ...; done < f`); a `$(...)` of readers may stand in an argument or
+  a plain assignment; a loop, an `if`, a `{ ...; }` group, `break`, `exit` and `sh -c 'STRING'` of
+  such a text read too. The commands that are left when the reads are blanked (`_read_spans`) are
+  checked for a way to the folder, a name bound to a path in the folder by a lone assignment
+  included (`F=~/.claude/x; cat $F`). A heredoc fed to `cat > FILE` or `tee FILE`, FILE outside the
+  zone and the body quoted, is file content. Code that an interpreter (INTERPRETERS, python) runs
+  from a word, standard input or a heredoc is a read of nothing: when it names the folder, or looks
+  up the home folder, the call is refused (`_interpreter_names_zone`); so is an `xargs` that runs
+  more than a reader (`_xargs_prints_only`), and a read that writes a file the same text may run
+  (`_feeds_code`). After a `cd` every word left is read from its folder (`_names_inside`), and a
+  `cd` the scanner cannot follow is read from the text (`_written_cds_clear`). `~/.claude.json`'s
+  siblings (`.backup`) are in the folder's zone. `cd ~/.claude && ls skills` runs, `cd ~/.claude &&
+  rm -rf skills` does not. A restricted session may write in its own scratch folders there
+  (`_with_own`): its job folder, the hook's own CLAUDE_JOB_DIR right under `jobs/`, and its session
+  folder beside the payload's transcript, but not that one's `subagents/`, nor the folders
+  themselves. Read, Grep and Glob stay allowed;
 - change COVEN_SESSION_ROLE (the lone `printenv COVEN_SESSION_ROLE` self-check stays allowed);
 - start `claude` (`claude --version` and `claude -v` alone excepted) or run its package;
 - run `coven approve`, `coven setup`, `coven memory adopt|init|sync`, or `coven` with a
@@ -503,7 +510,8 @@ COPY_OPTIONS = frozenset("arRpvfniuPHxdT")
 ARCHIVE_OPTIONS = frozenset("czjJvfpPha")
 RUNS_COMMAND = re.compile(r"\$\(|`|[<>]\(")  # a command substitution or a process substitution
 # Commands whose code is a word, a file's body or standard input: the guard cannot tell what that
-# code writes, so a zone with `shell_reads` refuses it when it names the zone (python by PYTHON_NAME).
+# code writes, so a zone with `shell_reads` refuses it when it names the zone (python by
+# PYTHON_NAME).
 INTERPRETERS = frozenset(
     {*("node", "perl", "ruby", "awk", "gawk", "mawk", "nawk", "sqlite3", "php", "lua", "deno")}
 )
@@ -3542,8 +3550,9 @@ def _command_reads(
     """The words of one simple command that only read or run a file: a program run by its path
     (`./x`, `"/abs/x"`, `~/x`), every argument of READ_COMMANDS and of the zone's `readers` that
     write and run no program (`_reader_acts`), of `find` without actions and the files of a
-    printing `sed` (`_sed_files`, given `folders`; for a zone with `shell_reads`, `_sed_reads`), the script a shell, python or node runs (`_script_word`),
-    and for a zone with `copy_reads` the sources of a copy or an archive (`_copy_sources`). A zone
+    printing `sed` (`_sed_files`, given `folders`; for a zone with `shell_reads`, `_sed_reads`),
+    the script a shell, python or node runs (`_script_word`), and for a zone with `copy_reads` the
+    sources of a copy or an archive (`_copy_sources`). A zone
     with `shell_reads` reads past the wrappers in front of the command (`_unwrap`). The arguments
     of a program that is run are never among them, nor an assignment (`X+=/a/b`)."""
     words = _unwrap(words, zone)
@@ -3853,8 +3862,8 @@ def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
     """Whether a simple command writes and runs nothing, whatever its operands: after the words
     that open a command in a compound one (COMMAND_OPENERS), a closer of one, a `for` header
     (`_loop_header`), a lone assignment, maybe after `export`, of a plain name (`_plain_name`), or
-    a program that only reads (`_program_only_reads`). No word may run a command but a plain `$(...)` that only reads
-    (`_substitutions_read`)."""
+    a program that only reads (`_program_only_reads`). No word may run a command but a plain
+    `$(...)` that only reads (`_substitutions_read`)."""
     words = _proper_words(each.words)
     if not words:
         return True
