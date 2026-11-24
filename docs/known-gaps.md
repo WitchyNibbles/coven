@@ -198,34 +198,44 @@ store and the approvals in it.
   ties to its search path (`PATH`, zsh's `path`, `fpath`...), a sed script held in a variable (`sed
   -E "$S"`), `rg` with an operand that is a variable (`rg x $f` in a loop), a path built from a loop
   variable (`f=~/.claude/skills/$s/SKILL.md`), `${...}`, `$((...))`, `<(...)` and `$'...'` in the
-  text (the scanner gives up), an escaped backtick in a pattern, a copy with an option that links or
-  names a folder (`cp -l`, `cp -t`, `tar --remove-files`), a `cp` into it, and any MCP call that
-  names a path in it, a read included. It also refuses a write the guard cannot pin to a path when
-  the word names `.claude` (`$D/.claude/x`, `.cl${X}aude`, `"$(dirname ~/x)/.claude"`), puts an
-  expansion right under home or `/` (`~/$N/x`, `/$X`), reads the current, last or a stacked folder
-  it cannot pin (`$OLDPWD`, `~-`, `~1`) or a zone variable with an operator (`${HOME%/}`,
-  `${CLAUDE_CONFIG_DIR:-x}`), or climbs from a folder an expansion names (`$X/..`, `{.,}./x`); a
-  `cd` to such a word before a write counts the same. A word with a brace expansion is read as each
-  word the shell makes of it (`{a,b}`, `{1..3}`, `{a..c}`, nested), for every zone, up to 64 words;
-  past that, or for a range the guard cannot work out (`{a..$X}`), a write is refused for the user
-  folder only, and the other zones read the word as it is written. A read stops being one when a
-  command may read a value as a variable name or a number and the guard cannot tell the value is a
-  number (`test -v "$D"`, `[ "$n" -eq 1 ]`, `${!D}`, `$((D))`, a printf `%d`, zsh's `exit "$n"`): a
-  subscript in it runs its `$(...)`. A count (`$(grep -c x f)`, `$(... | wc -l)`, `$(grep -c x f ||
-  echo 0)`), an integer and a variable the text sets only to one of these are numbers. A `cd` or
-  `pushd` with two operands (zsh's `cd old new`) is not followed: a relative write after it is
-  refused. A leading `$PWD` or `~+` is read as the folder the session is in. Any write under `/proc`
-  or `/dev` is refused (`/proc/self/cwd` is the shell's folder), but `/dev/null`, `/dev/stdout`,
-  `/dev/stderr` and `/dev/tty`. A read stops being one when the text exports a name (`export
-  TAR_OPTIONS=--remove-files`), sets one the hook's environment holds or any after `set -a`, sets
-  one by `printf -v`, or puts one in front of the reader (`RIPGREP_CONFIG_PATH=x rg`), sets one zsh
-  runs (`NULLCMD`, `READNULLCMD`, a prompt, `precmd_functions` and the other hook arrays,
-  `ZDOTDIR`), but the locale, time zone, terminal, width and colour names (`LC_ALL`, `LANG`, `TZ`,
-  `TERM`, `COLUMNS`, `NO_COLOR`...). A text that writes a file with text keeps its reads only when
-  every other command only reads: beside `git`, `crontab`, `at`, `npm`, `make`, `uv run`, `chmod` or
-  any other command the file the text wrote may run, so the call is refused when that text names the
-  folder (`echo see ~/.claude/a > /tmp/n; git status` too). A `rg` operand that is a glob stays a
-  read only when it starts with `/` or `~`.
+  text (the scanner gives up), a copy with an option that links or names a folder (`cp -l`, `cp -t`,
+  `tar --remove-files`), a `cp` into it, and any MCP call that names a path in it, a read included.
+  It also refuses a write the guard cannot pin to a path when the word names `.claude`
+  (`$D/.claude/x`, `.cl${X}aude`, `"$(dirname ~/x)/.claude"`), puts an expansion right under home or
+  `/` (`~/$N/x`, `/$X`), reads the current, last or a stacked folder it cannot pin (`$OLDPWD`, `~-`,
+  `~1`) or a zone variable with an operator (`${HOME%/}`, `${CLAUDE_CONFIG_DIR:-x}`), or climbs from
+  a folder an expansion names (`$X/..`, `{.,}./x`); a `cd` to such a word before a write counts the
+  same. A word with a brace expansion is read as each word the shell makes of it (`{a,b}`, `{1..3}`,
+  `{a..c}`, nested), for every zone, up to 64 words; past that, or for a range the guard cannot work
+  out (`{a..$X}`), a write is refused for the user folder only, and the other zones read the word as
+  it is written. A read stops being one when a command may read a value as a variable name or a
+  number and the guard cannot tell the value is a number (`test -v "$D"`, `[ "$n" -eq 1 ]`, `${!D}`,
+  `$((D))`, a printf `%d`, zsh's `exit "$n"`): a subscript in it runs its `$(...)`. A count (`$(grep
+  -c x f)`, `$(... | wc -l)`, `$(grep -c x f || echo 0)`), an integer and a variable the text sets
+  only to one of these are numbers. A `cd` or `pushd` with two operands (zsh's `cd old new`) is not
+  followed: a relative write after it is refused. A redirect is no operand of it (`cd x 2>/dev/null`
+  has one) unless the command holds a quote or a backslash, where `'>x'` may be a name, and a write
+  to `/dev/null` or another stream after a `cd` the guard cannot follow is no write. A leading
+  `$PWD` or `~+` is read as the folder the session is in. Any write under `/proc` or `/dev/fd`, or
+  to `/dev/stdin`, is refused (`/proc/self/cwd` is the shell's folder, `/dev/fd/1` may be a file in
+  the folder); the rest of `/dev` is read as any folder (`/dev/shm` is a tmpfs, `/dev/tcp/HOST/PORT`
+  a bash socket). A `$(` or a backtick quoted as text in a word (``grep -o 'a[^`]*b'``, ``rg
+  "x\`y"``) runs nothing when the command reads every word as a pattern, a name or text (`grep`,
+  `rg`, `cat`, `echo`, `jq`, `sed`, `find`...) or is a shell whose `-c` text only reads; given to
+  `eval`, `watch`, `test`, `printf`, a shell's text that writes, `xargs` or `find -exec` it is
+  refused. The variable of a `for` loop over literal words (`for f in a/b.py c/d.py`: no `~`, `..`,
+  glob, quote or expansion) is read as each word in turn when the text sets it no other way (`f=`,
+  `read`, `printf -v`, a second loop over it...), holds no heredoc and no `IFS`, and uses it only as
+  a plain `$f` inside the loop; up to 64 ways, past that it is read as before. A read stops being
+  one when the text exports a name (`export TAR_OPTIONS=--remove-files`), sets one the hook's
+  environment holds or any after `set -a`, sets one by `printf -v`, or puts one in front of the
+  reader (`RIPGREP_CONFIG_PATH=x rg`), sets one zsh runs (`NULLCMD`, `READNULLCMD`, a prompt,
+  `precmd_functions` and the other hook arrays, `ZDOTDIR`), but the locale, time zone, terminal,
+  width and colour names (`LC_ALL`, `LANG`, `TZ`, `TERM`, `COLUMNS`, `NO_COLOR`...). A text that
+  writes a file with text keeps its reads only when every other command only reads: beside `git`,
+  `crontab`, `at`, `npm`, `make`, `uv run`, `chmod` or any other command the file the text wrote may
+  run, so the call is refused when that text names the folder (`echo see ~/.claude/a > /tmp/n; git
+  status` too). A `rg` operand that is a glob stays a read only when it starts with `/` or `~`.
 - The user folder's code rule: python, `node`, `perl`, `ruby`, `awk`, `sqlite3` and the like are
   not readers of it. Their code is refused when it names the folder or looks up the home folder
   (`expanduser`, `HOME`), when it comes from a heredoc, and when a read of the folder is piped
