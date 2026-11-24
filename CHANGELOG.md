@@ -14,6 +14,10 @@
   check.
 - `coven opencode setup` makes `shell` and `webfetch` ask before they run, for every agent. A
   headless `opencode run` rejects the ask, so shell is for the TUI.
+- `coven opencode setup --limit ID=CONTEXT[:OUTPUT]` (litellm preset) writes a model's token window
+  into the config, so OpenCode compacts before a smaller-window gateway model overflows instead of
+  assuming 200000 tokens. Setup warns about a model with no limit; `coven opencode doctor` adds a
+  `limits` warning and checks the written limits in `config`.
 - A production guard: name your live systems in the memory store (`systems/guard.json`), and a
   PreToolUse hook refuses any tool call that reaches one unless a live approval names the exact
   command. It also holds project manager sessions off the store, coven's config, Claude Code's
