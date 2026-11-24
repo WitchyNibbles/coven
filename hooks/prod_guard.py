@@ -507,6 +507,8 @@ RUNS_COMMAND = re.compile(r"\$\(|`|[<>]\(")  # a command substitution or a proce
 INTERPRETERS = frozenset(
     {*("node", "perl", "ruby", "awk", "gawk", "mawk", "nawk", "sqlite3", "php", "lua", "deno")}
 )
+# Commands that make the paths they are given, outside CHANGES_OPERANDS.
+PATH_CREATORS = frozenset({"touch", "mkdir"})
 # What an `xargs` that only prints may run, for the user folder zone: readers that no option or
 # operand xargs appends makes write or run anything (not sed, sort, find, whose options GNU reads
 # anywhere: an appended `-i`, `-o x` or `-delete`) ...
@@ -2426,6 +2428,27 @@ def _glob_hits(word: str, base: str, zone: _Zone, roots: Sequence[tuple[str, ...
     return reaches and not _glob_in_own(word, base, zone)
 
 
+def _climbed(word: str) -> str:
+    """A glob word with each component that can match `..` read as `..`: bash before 5.2 matches
+    it with `.*`, so `.*/.claude` in `~/proj` is `~/.claude`. Only a component that starts with a
+    literal dot can, as only such a glob matches a name that starts with one."""
+    return "/".join(
+        ".." if part.startswith(".") and _climbs(part) else part for part in word.split("/")
+    )
+
+
+def _climbs(part: str) -> bool:
+    return bool(GLOB_CHARS.intersection(part)) and fnmatch.fnmatchcase("..", part)
+
+
+def _climbing_hits(word: str, base: str, zone: _Zone) -> bool:
+    """Whether a glob word that is written, as it climbs (`_climbed`), reaches the zone
+    (`_glob_hits`), for a zone with `writes_inside`."""
+    climbed = _climbed(word)
+    roots = [root.parts for root in zone.roots]
+    return zone.writes_inside and climbed != word and _glob_hits(climbed, base, zone, roots)
+
+
 def _glob_reaches_sibling(word: str, base: str, zone: _Zone) -> bool:
     """Whether a glob word can match a sibling of a zone file (`~/.claude.json.*`), or a path
     inside one: its folder parts match the file's folder and the next part can start with the
@@ -3184,9 +3207,22 @@ def _changes_zone_holder(text: str, cwd: str, zone: _Zone) -> bool:
             return True
         if zone.writes_inside and any(_names_inside(word, current, zone) for word in step.words):
             return True
+        if zone.writes_inside and current and _creates_climbing(step, current, zone):
+            return True
         if step.moves:
             current = _after_cd(current, step.folder)
     return False
+
+
+def _creates_climbing(step: _Step, current: str, zone: _Zone) -> bool:
+    """Whether a `touch` or `mkdir` (PATH_CREATORS) makes a path through a glob that, as it climbs
+    (`_climbing_hits`), reaches the zone: `touch .*/.claude/x` one folder below home."""
+    words = step.words
+    return (
+        bool(words)
+        and _basename(words[0]) in PATH_CREATORS
+        and any(_climbing_hits(word, current, zone) for word in _operands(words[1:]))
+    )
 
 
 def _word_paths(word: str) -> list[str]:
@@ -3240,7 +3276,7 @@ def _changes_holder(target: str, current: str | None, zone: _Zone) -> bool:
     base = current or os.sep
     if GLOB_CHARS.intersection(target):
         roots = [root.parts for root in zone.roots]
-        return _glob_hits(target, base, zone, roots)
+        return _glob_hits(target, base, zone, roots) or _climbing_hits(target, base, zone)
     resolved = _resolve(target, base)
     return resolved is not None and (
         _is_root_or_parent(resolved, zone) or (zone.writes_inside and _in_zone(resolved, zone))
@@ -4254,15 +4290,9 @@ def _written_cds_clear(command: str, cwd: str, zone: _Zone, climb: int) -> bool:
 def _glob_climb(glob_text: str) -> int:
     """How many folders up a glob of a Bash call's glob text (reads blanked) may climb: bash
     before 5.2 matches `..` with `.*`, so `.*/.claude` after `cd ~/proj` is `~/.claude`. The most
-    `..`-matching glob components in one word the shell may expand (`_shell_glob_words`)."""
+    components in one word the shell may expand (`_shell_glob_words`) that climb (`_climbed`)."""
     return max(
-        (
-            sum(
-                bool(GLOB_CHARS.intersection(part)) and fnmatch.fnmatchcase("..", part)
-                for part in word.split("/")
-            )
-            for word in _shell_glob_words(glob_text)
-        ),
+        (_climbed(word).split("/").count("..") for word in _shell_glob_words(glob_text)),
         default=0,
     )
 

@@ -4991,6 +4991,9 @@ CLEAR_CD_TEXTS = {
     "pushd": "pushd /srv/app && cat <(echo x) && ls -d .*",
     "quoted-operand": "cd '/srv/app' && cat <(echo x) && ls -d .*",
     "two-cds": "cd /srv/a; cd /srv/b && cat <(echo x) && ls -d .*",
+    "below-home-sed-script": "cd HOME/proj && sed -i 's/.*//' f",
+    "below-home-glob-in-place": "cd HOME/proj && rm -f *.tmp .*.swp",
+    "below-home-read-dot-glob": "cd HOME/proj && ls -d .*",
 }
 
 
@@ -4999,7 +5002,8 @@ def test_a_cd_clear_of_the_user_folder_keeps_a_relative_glob_out_of_it(
     run: Run, store: Path, name: str
 ) -> None:
     # The tests' home is under /tmp, so the session starts in /srv, a folder clear of it.
-    proc = run(bash(CLEAR_CD_TEXTS[name], cwd="/srv"), role="pm")
+    command = CLEAR_CD_TEXTS[name].replace("HOME", str(home()))
+    proc = run(bash(command, cwd="/srv"), role="pm")
     assert proc.returncode == 0, proc.stderr
 
 
@@ -5026,6 +5030,10 @@ UNCLEAR_CD_TEXTS = {
     # `/` holds the folder: `chmod -R 000 .*` there may change all of it.
     "dot-glob-climbs-to-root": "docker run img sh -c 'cd /c && chmod -R 000 .*'",
     "operand-then-more": "sh -c 'cd /srv ~' && cat <(echo) && rm -rf .c*",
+    # The same climb where the scanner follows the text and the cd names home by its path.
+    "scanned-dot-glob-chmod": "cd HOME/proj && chmod -R 000 .*",
+    "scanned-dot-glob-touch": "cd HOME/proj && touch .*/.claude/x",
+    "scanned-dot-glob-rm": "cd HOME/proj && rm -rf .*/.claude",
 }
 
 
@@ -5036,6 +5044,7 @@ def test_a_cd_that_may_lead_near_the_user_folder_keeps_a_relative_glob_strict(
     """With no other zone, as the settings zone refuses these too."""
     monkeypatch.setattr(pg, "_zones", lambda _store: (pg._claude_folder_zone(),))
     command = UNCLEAR_CD_TEXTS[name].replace("PARENT", str(home().parent))
+    command = command.replace("HOME", str(home()))
     message = decide(bash(command, cwd="/srv"), store, "pm")
     assert message is not None
     assert FOLDER_REFUSAL in message
