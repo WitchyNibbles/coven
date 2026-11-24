@@ -120,6 +120,9 @@ export async function makeWorld(
         "COVEN_E2E_KEY",
         "--model",
         "lead=fake",
+        // A limit makes the real binary load a model `limit` block, and keeps doctor all ok.
+        "--limit",
+        "fake=64000:8000",
       ],
       { cwd: work, env, timeoutMs: SETUP_TIMEOUT_MS },
     );
