@@ -586,11 +586,11 @@ BLOCKED_PREFIXES = (
     "XDG_",
     "SHELLOPTS",
 )
-# What a read may set in front of a command: its language and its output width, nothing a program
-# runs by (`LC_ALL=C grep`).
-READ_ENVIRONMENT = re.compile(
-    r"(?:LC_[A-Z]+|LANG|LANGUAGE|TZ|COLUMNS|LINES|NO_COLOR|TERM|GREP_COLORS?)=[\w.@:+-]*"
-)
+# What a read may set or export for the programs it runs: their language, time zone, terminal,
+# output width and colours, nothing a program runs by (`TAR_OPTIONS`, `RIPGREP_CONFIG_PATH`,
+# `LESSOPEN`); and in front of a command, with a plain value (`LC_ALL=C grep`).
+READ_NAME = re.compile(r"LC_[A-Z]+|LANG|LANGUAGE|TZ|COLUMNS|LINES|NO_COLOR|TERM|GREP_COLORS?")
+READ_ENVIRONMENT = re.compile(rf"(?:{READ_NAME.pattern})=[\w.@:+-]*")
 # The options of `sort` that name no file or program, and of `read` that only change how it reads.
 SORT_OPTION = re.compile(r"-(?:[bdfghiMnRrsuVzcCm]+|[kt]\S*|S\S*)|--(?:reverse|unique|stable)")
 READ_OPTIONS = frozenset("rs")
@@ -4110,6 +4110,8 @@ def _command_only_reads(each: _SimpleCommand, zone: _Zone, cwd: str) -> bool:
         return True
     if not all(_substitutions_read(word, zone, cwd) for word in words):
         return False
+    if zone.shell_reads and _sets_for_programs(words, exported=False):
+        return False
     head = words[0].value
     if head in COMPOUND_CLOSERS:
         return len(words) == 1
@@ -4191,15 +4193,75 @@ def _reads_only(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bo
 def _only_reads_text(command: str, zone: _Zone, cwd: str) -> bool:
     """Whether a Bash command, for a zone with `cd_reads` or `loop_reads`, only reads
     (`_reads_only`): it writes nothing wherever it goes, so it reaches the zone by no write. Not
-    when a read writes a file that code of the text may run (`_feeds_code`)."""
+    when a read writes a file that code of the text may run (`_feeds_code`), nor when the text
+    sets what its programs read (`_arms_reads`)."""
     if not (zone.cd_reads or zone.loop_reads):
         return False
     commands: list[_SimpleCommand] | None = _shell_words().simple_commands(
         command, substitutions=True
     )
     return (
-        commands is not None and not _feeds_code(commands, zone) and _text_reads(command, zone, cwd)
+        commands is not None
+        and not _feeds_code(commands, zone)
+        and not _arms_reads(commands, zone)
+        and _text_reads(command, zone, cwd)
     )
+
+
+def _arms_reads(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
+    """Whether a text, for a zone with `shell_reads`, sets a variable its programs may read
+    (`_sets_for_programs`), every lone assignment exported after `set -a` or `set -o allexport`:
+    `export TAR_OPTIONS=--remove-files` makes `tar -c` delete what it reads."""
+    if not zone.shell_reads:
+        return False
+    every = any(_exports_all(_proper_words(each.words)) for each in commands)
+    return any(_sets_for_programs(_proper_words(each.words), exported=every) for each in commands)
+
+
+def _exports_all(words: Sequence[_ShellWord]) -> bool:
+    """Whether a command is `set` with `-a` or `-o allexport`: each later assignment is exported."""
+    if not words or words[0].value != "set":
+        return False
+    values = [word.value or "" for word in words[1:]]
+    return "allexport" in values or any("a" in (_option_letters(w) or "") for w in words[1:])
+
+
+def _sets_for_programs(words: Sequence[_ShellWord], *, exported: bool) -> bool:
+    """Whether a command sets a name a program may read (`_arms_programs`): by an assignment
+    alone, maybe after `export`, or by `printf -v NAME` (`-vNAME` too)."""
+    if not words:
+        return False
+    head = words[0].value
+    if head == "export":
+        exported, words = True, words[1:]
+    if words and all(BINDING.match(word.raw) for word in words):
+        names = [match[1] for word in words if (match := BINDING.match(word.raw))]
+    elif head in VARIABLE_PRINTERS:
+        names = _printed_names(words[1:])
+    else:
+        return False
+    return any(_arms_programs(name, exported=exported) for name in names)
+
+
+def _printed_names(args: Sequence[_ShellWord]) -> list[str]:
+    """The names `printf -v NAME` and `printf -vNAME` set."""
+    found: list[str] = []
+    for index, word in enumerate(args):
+        value = word.value or ""
+        if value == PRINTF_VARIABLE:
+            found += [next_word.value or "" for next_word in args[index + 1 : index + 2]]
+        elif value.startswith(PRINTF_VARIABLE):
+            found.append(value.removeprefix(PRINTF_VARIABLE))
+    return found
+
+
+def _arms_programs(name: str, *, exported: bool) -> bool:
+    """Whether setting `name` may change what a program does, not only how it prints (READ_NAME):
+    when it is exported, set in the hook's environment (the shell then hands on the new value),
+    or no name a read may set (`_plain_name`)."""
+    if READ_NAME.fullmatch(name):
+        return False
+    return exported or name in os.environ or not _plain_name(name)
 
 
 def _runs_code_from_file(each: _SimpleCommand, zone: _Zone) -> bool:
@@ -4337,6 +4399,8 @@ def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
     feeding = _feeds_code(commands, zone)
     if feeding and any(_writes_for_many(each) for each in commands):
         return []
+    if _arms_reads(commands, zone):
+        return []  # a read may then write: `export TAR_OPTIONS=--remove-files; tar -c ~/x`
     lone = [
         word
         for word in _lone_assignments(commands)

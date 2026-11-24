@@ -5112,6 +5112,73 @@ def test_a_read_of_the_user_folder_may_print_to_a_terminal_device(
     assert proc.returncode == 0, proc.stderr
 
 
+# What a read sets for the programs it runs: an option variable turns a read into a write.
+ARMED_READS: dict[str, str] = {
+    "export-tar-options": "export TAR_OPTIONS=--remove-files; tar -cf /tmp/x.tar ~/.claude/skills",
+    "export-tar-options-and": (
+        "export TAR_OPTIONS=--remove-files && tar -cf /tmp/x.tar ~/.claude/skills"
+    ),
+    "export-tar-checkpoint": (
+        "export TAR_OPTIONS=--checkpoint-action=exec=sh; tar -cf /tmp/x.tar ~/.claude/a"
+    ),
+    "prefix-tar-options": "TAR_OPTIONS=--remove-files tar -cf /tmp/x.tar ~/.claude/skills",
+    "prefix-ripgrep-config": "RIPGREP_CONFIG_PATH=/tmp/rc rg x ~/.claude",
+    "env-ripgrep-config": "env RIPGREP_CONFIG_PATH=/tmp/rc rg x ~/.claude",
+    "export-ripgrep-config": (
+        "printf -- '--pre=/tmp/x\\n' > /tmp/rc; export RIPGREP_CONFIG_PATH=/tmp/rc; rg x ~/.claude"
+    ),
+    "prefix-lessopen": "LESSOPEN='|/tmp/x %s' cat ~/.claude/a",
+    "declare-exported": "declare -x TAR_OPTIONS=--remove-files; tar -cf /tmp/x ~/.claude/a",
+    "all-export": "set -a; TAR_OPTIONS=--remove-files; tar -cf /tmp/x ~/.claude/a",
+    "export-later": "TAR_OPTIONS=--remove-files; export TAR_OPTIONS; tar -cf /tmp/x ~/.claude/a",
+    "printf-to-variable": (
+        "printf -vTAR_OPTIONS %s --remove-files; export TAR_OPTIONS; tar -cf /tmp/x ~/.claude/a"
+    ),
+    "printf-to-path": (
+        "mkdir -p /tmp/b; echo 'rm -rf ~/.claude/skills' > /tmp/b/cat; chmod +x /tmp/b/cat;"
+        " printf -vPATH %s /tmp/b; cat /x"
+    ),
+}
+
+ARMED_IDS = list(ARMED_READS)
+
+
+@pytest.mark.parametrize("name", ARMED_IDS)
+def test_a_read_of_the_user_folder_is_no_read_once_the_text_sets_what_programs_read(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = bash(ARMED_READS[name])
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "LC_ALL=C grep -c x ~/.claude/a.jsonl",
+        "export LANG=C.UTF-8; cat ~/.claude/CLAUDE.md",
+        "TZ=UTC ls -l ~/.claude",
+        "COLUMNS=200 NO_COLOR=1 ls ~/.claude",
+        "export TERM=xterm-256color; ls --color=always ~/.claude",
+        "J=~/.claude/x.jsonl; grep -c x $J",
+    ],
+    ids=["lc-all", "export-lang", "tz", "columns-no-color", "export-term", "lone-name"],
+)
+def test_a_read_of_the_user_folder_may_set_what_only_changes_its_output(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_lone_assignment_of_a_name_the_environment_holds_turns_a_read_off(
+    run: Run, store: Path
+) -> None:
+    """The shell hands an exported name's new value to every program it runs."""
+    payload = bash("TAR_OPTIONS=--remove-files; tar -cf /tmp/x.tar ~/.claude/skills")
+    assert run(payload, role="pm", env={"TAR_OPTIONS": "-v"}).returncode == 2
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
