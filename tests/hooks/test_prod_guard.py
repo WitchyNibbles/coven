@@ -4499,7 +4499,6 @@ def folder_reads(user: Path, folder: Path) -> dict[str, Payload]:
         "read-to-file-then-count": bash("grep x ~/.claude/a > /tmp/out; wc -l /tmp/out"),
         "read-word-naming-a-shell": bash("grep -c bash ~/.claude/a > /tmp/n"),
         "script-output-to-file": bash("bash ~/.claude/skills/x/run.sh > /tmp/log"),
-        "echo-to-file-then-git": bash("echo see ~/.claude/a > /tmp/n.md; git status"),
         "read-to-file-then-assign": bash("tr -d x < ~/.claude/a > /tmp/b; F=/tmp/b; wc -l $F"),
         "read-to-file-then-dot-pattern": bash("cut -c1-9 ~/.claude/a > /tmp/b; grep -c . /tmp/b"),
         "note-written-then-script-reads-elsewhere": bash(
@@ -5177,6 +5176,82 @@ def test_a_lone_assignment_of_a_name_the_environment_holds_turns_a_read_off(
     """The shell hands an exported name's new value to every program it runs."""
     payload = bash("TAR_OPTIONS=--remove-files; tar -cf /tmp/x.tar ~/.claude/skills")
     assert run(payload, role="pm", env={"TAR_OPTIONS": "-v"}).returncode == 2
+
+
+# A file written with words that name the folder, in a text that runs more than readers.
+SAME_CALL_RUNS: dict[str, tuple[str, str]] = {
+    "git-hook": (
+        "printf '#!/bin/sh\\nrm -rf ~/.claude/skills\\n' > /tmp/r/.git/hooks/pre-commit;"
+        " chmod +x /tmp/r/.git/hooks/pre-commit; git -C /tmp/r commit --allow-empty -m x",
+        "/tmp",
+    ),
+    "heredoc-git-hook": (
+        "cat > .git/hooks/pre-commit <<'E'\n#!/bin/sh\nrm -rf ~/.claude/skills\nE\n"
+        "chmod +x .git/hooks/pre-commit && git commit -m x",
+        "{H}/proj",
+    ),
+    "git-alias": (
+        "printf '[alias]\\n\\tx = !rm -rf ~/.claude/skills\\n' > /tmp/gc;"
+        " git -c include.path=/tmp/gc x",
+        "/tmp",
+    ),
+    "npm-script": (
+        'echo \'{"scripts":{"x":"rm -rf ~/.claude/skills"}}\' > /tmp/p/package.json;'
+        " npm --prefix /tmp/p run x",
+        "/tmp",
+    ),
+    "pytest-conftest": (
+        "echo 'import shutil; shutil.rmtree(\"{C}/skills\")' > /tmp/t/conftest.py; pytest /tmp/t",
+        "/tmp",
+    ),
+    "uv-run": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; uv run sh /tmp/s", "/tmp"),
+    "busybox": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; busybox sh /tmp/s", "/tmp"),
+    "unshare": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; unshare -r sh /tmp/s", "/tmp"),
+    "setpriv": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; setpriv sh /tmp/s", "/tmp"),
+    "at-file": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; at -f /tmp/s now", "/tmp"),
+    "at-input": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; at now < /tmp/s", "/tmp"),
+    "batch-input": ("echo 'rm -rf ~/.claude/skills' > /tmp/s; batch < /tmp/s", "/tmp"),
+    "crontab-heredoc": (
+        "cat > /tmp/c <<'E'\n* * * * * rm -rf ~/.claude/skills\nE\ncrontab /tmp/c",
+        "/tmp",
+    ),
+    "crontab-printf": (
+        "printf '* * * * * rm -rf ~/.claude/skills\\n' > /tmp/c; crontab /tmp/c",
+        "/tmp",
+    ),
+    "make": ("printf 'all:\\n\\trm -rf ~/.claude/skills\\n' > /tmp/M; make -f /tmp/M", "/tmp"),
+    "echo-then-git": ("echo see ~/.claude/a > /tmp/n.md; git status", "/tmp"),
+    "tee-then-tool": ("echo 'rm -rf ~/.claude/x' | tee /tmp/s >/dev/null; mytool /tmp/s", "/tmp"),
+}
+
+SAME_CALL_IDS = list(SAME_CALL_RUNS)
+
+
+@pytest.mark.parametrize("name", SAME_CALL_IDS)
+def test_a_file_naming_the_user_folder_is_refused_beside_a_command_that_is_no_reader(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in SAME_CALL_RUNS[name])
+    payload = bash(command, cwd=cwd)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat > /tmp/notes.md <<'EOF'\nthe skills live in ~/.claude/skills\nEOF",
+        "echo 'see ~/.claude/skills' > /tmp/n; cat /tmp/n",
+        "grep x ~/.claude/p/a.jsonl > /tmp/out; wc -l /tmp/out",
+        "printf '%s\\n' ~/.claude/a > /tmp/l; sort /tmp/l | uniq",
+    ],
+    ids=["heredoc-alone", "echo-then-cat", "grep-then-count", "printf-then-sort"],
+)
+def test_a_file_naming_the_user_folder_may_be_written_beside_readers(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
 
 
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---

@@ -4202,7 +4202,7 @@ def _only_reads_text(command: str, zone: _Zone, cwd: str) -> bool:
     )
     return (
         commands is not None
-        and not _feeds_code(commands, zone)
+        and not _feeds_code(commands, zone, cwd)
         and not _arms_reads(commands, zone)
         and _text_reads(command, zone, cwd)
     )
@@ -4301,14 +4301,19 @@ def _writes_for_many(each: _SimpleCommand) -> bool:
     return each.writes and (not words or words[0] in GROUP_CLOSERS or words == ["exec"])
 
 
-def _feeds_code(commands: Sequence[_SimpleCommand], zone: _Zone) -> bool:
+def _feeds_code(commands: Sequence[_SimpleCommand], zone: _Zone, cwd: str) -> bool:
     """Whether a text, for a zone with `shell_reads`, writes a file with text (`_writes_text`) and
-    runs code that may run that file (`_runs_code_from_file`): what a read prints there may become
-    a script (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
+    runs a command that may run that file: code (`_runs_code_from_file`), or any command that
+    does not only read (`_command_only_reads`: `git commit` runs a hook, `crontab`, `at` and
+    `npm run` a file's lines). What a read prints there, or a text names, may become a script
+    (`ls -d ~/.claude/* | sed 's/^/rm -rf /' > /tmp/s; sh /tmp/s`)."""
     return (
         zone.shell_reads
         and any(_writes_text(each, zone) for each in commands)
-        and any(_runs_code_from_file(each, zone) for each in commands)
+        and any(
+            _runs_code_from_file(each, zone) or not _command_only_reads(each, zone, cwd)
+            for each in commands
+        )
     )
 
 
@@ -4396,7 +4401,7 @@ def _read_spans(command: str, zone: _Zone, cwd: str) -> list[tuple[int, int]]:
         for each in commands
     ):
         return []
-    feeding = _feeds_code(commands, zone)
+    feeding = _feeds_code(commands, zone, cwd)
     if feeding and any(_writes_for_many(each) for each in commands):
         return []
     if _arms_reads(commands, zone):
