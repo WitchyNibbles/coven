@@ -520,7 +520,9 @@ DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
 # (`_brace_members`), a range's text, and a word of a text that holds a brace.
 BRACE_MEMBERS = 64
 BRACE_RANGE = re.compile(r"(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?|(\D)\.\.(\D)(?:\.\.(-?\d+))?")
-BRACE_WORD = re.compile(r"[^\s;&|()<>`]*\{[^\s;&|()<>`]*")
+# A word that holds a `{`, matched only from its start: a long word is scanned once.
+BRACE_WORD = re.compile(r"(?<![^\s;&|()<>`])[^\s;&|()<>`]*\{[^\s;&|()<>`]*")
+BRACE_OPENER = re.compile(r"(?<!\$)\{")
 # What `_glued_expansions` keeps in an expansion's word: blanks, separators, parentheses, braces
 # and backticks, as private-use characters.
 GLUED = str.maketrans({char: chr(0xE000 + at) for at, char in enumerate(" \t\n;&|(){}`<>")})
@@ -3582,7 +3584,10 @@ def _range_members(match: re.Match[str]) -> tuple[str, ...] | None:
 def _brace_members(word: str) -> list[str] | None:
     """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
     `abd acd`, `{1..3}` is `1 2 3`, nested lists too); `[word]` when it has none. None when they
-    are more than BRACE_MEMBERS or one cannot be told (`_brace_group`)."""
+    are more than BRACE_MEMBERS, or one cannot be told (`_brace_group`), or the word holds more
+    braces than BRACE_MEMBERS words could (minified JSON): each list or range is one `{`."""
+    if len(BRACE_OPENER.findall(word)) > BRACE_MEMBERS:
+        return None
     group = _brace_group(word)
     if group is None:
         return [word]

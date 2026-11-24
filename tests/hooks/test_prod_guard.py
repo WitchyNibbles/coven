@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -5703,6 +5704,41 @@ def test_a_job_folder_write_that_leaves_word_splitting_alone_is_allowed(
 ) -> None:
     proc = run(in_session(bash(command)), role="pm", env=job_env())
     assert proc.returncode == 0, proc.stderr
+
+
+# --- long words and many braces: decided fast, as words the guard cannot expand ---
+
+# Loose enough for a loaded machine; the quadratic scan took minutes on these.
+FAST_DECISION_SECONDS = 10.0
+LONG_WORD = "A" * 100_000
+MANY_BRACES = "{a,b}" * 1500
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bash("ls ~/.claude; echo " + LONG_WORD),
+        bash("ls ~/.claude; echo " + LONG_WORD[:50_000] + "{" + LONG_WORD[:50_000]),
+        tool("mcp__x__send", body=LONG_WORD),
+        tool("mcp__x__send", body=LONG_WORD[:50_000] + "{" + LONG_WORD[:50_000]),
+        tool("mcp__x__send", body="[" + ",".join(['{"a":1,"b":2}'] * 1500) + "]"),
+        bash("touch /tmp/" + MANY_BRACES),
+    ],
+    ids=["bash-no-brace", "bash-one-brace", "mcp-no-brace", "mcp-one-brace", "mcp-json", "far"],
+)
+def test_a_long_word_or_many_braces_is_decided_fast_and_allowed(
+    run: Run, store: Path, payload: Payload
+) -> None:
+    started = time.monotonic()
+    proc = run(payload, role="pm")
+    assert proc.returncode == 0, proc.stderr
+    assert time.monotonic() - started < FAST_DECISION_SECONDS
+
+
+def test_a_folder_write_with_more_braces_than_the_cap_is_refused(run: Run, store: Path) -> None:
+    payload = bash("rm -rf ~/.cl{a,b}ude" + MANY_BRACES)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
 
 
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
