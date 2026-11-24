@@ -189,7 +189,7 @@ def _check_base_url(url: str, *, announce: bool = True) -> str:
 
 def _whole_number(text: str, what: str) -> int:
     """The digits of `text` as a number; the range is checked later, for stored limits too."""
-    if not (text.isascii() and text.isdigit()):
+    if not (text.isascii() and text.isdigit()) or len(text) > len(str(MAX_LIMIT)):
         raise OpencodeError(_size_rule(what))
     return int(text)
 

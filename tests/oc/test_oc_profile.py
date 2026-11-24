@@ -329,6 +329,8 @@ def test_a_model_id_may_hold_a_colon_or_an_equals_sign():
         (["big=1000:"], "positive whole number"),
         (["big=1000:10:5"], "positive whole number"),
         (["big=10000001"], "at most 10000000"),
+        (["big=" + "9" * 5000], "at most 10000000"),
+        (["big=1000:" + "9" * 5000], "at most 10000000"),
         (["big=1000:1000"], "output must be smaller than context"),
         (["big=1000:2000"], "output must be smaller than context"),
         (["big=1000", "big=2000"], "given twice"),
@@ -399,6 +401,17 @@ def test_a_bad_stored_limit_is_refused_like_the_other_fields(tmp_path: Path, lim
     message = str(loading(tmp_path, {**GOOD_LITELLM, "limits": limits}))
     assert str(Layout(tmp_path).profile_file) in message
     assert "re-run coven opencode setup" in message
+
+
+def test_a_stored_limit_of_thousands_of_digits_is_refused_like_the_other_fields(tmp_path: Path):
+    lay = Layout(tmp_path)
+    document = json.dumps(GOOD_LITELLM)[:-1]  # json.dumps cannot write the huge number itself
+    huge = ', "limits": {"big": {"context": ' + "9" * 5000 + "}}}"
+    lay.profile_file.write_text(document + huge)
+    with pytest.raises(OpencodeError) as caught:
+        profile.load_profile(lay)
+    assert str(lay.profile_file) in str(caught.value)
+    assert "re-run coven opencode setup" in str(caught.value)
 
 
 def test_stored_limits_with_the_opencode_preset_are_refused(tmp_path: Path):
