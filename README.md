@@ -306,8 +306,7 @@ It reads `coven pm status` and writes only `~/.cache/aquelarre/`. See
 coven's skills, the four role agents, the routing, the deny-secrets guard and the `await_agents`
 tool (a lead agent waits in it for its subagents' reports).
 
-Not on OpenCode yet: the GM/PM hierarchy and the production guard, which are planned for it. Aquelarre
-is not there either.
+Not on OpenCode yet: the GM/PM hierarchy (planned), the production guard and aquelarre.
 
 You do not need Claude Code for this. The one thing that comes from it is the superpowers skills,
 which setup copies from Claude Code's superpowers plugin. The install steps, and what happens

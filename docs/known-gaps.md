@@ -359,8 +359,8 @@ What `coven opencode` does not do, or does not know. The install steps are in
   `coven opencode setup` in opencode/README.md); otherwise use models with at least that window.
 - Every `shell` and `webfetch` call asks. A headless `opencode run` rejects the ask, so it cannot
   use shell.
-- The GM/PM hierarchy does not run on OpenCode yet, and neither does the production guard; both are
-  planned for it. Only the deny-secrets guard runs: the plugin layer and the `.env` rules.
+- The GM/PM hierarchy does not run on OpenCode yet (it is planned), and neither does the production
+  guard. Only the deny-secrets guard runs: the plugin layer and the `.env` rules.
 - The copied superpowers skills keep Claude Code's tool names in their text.
 - Superpowers skills come only from Claude Code's superpowers plugin. Without it, a step that loads
   one is skipped.
