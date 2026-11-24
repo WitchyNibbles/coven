@@ -2469,7 +2469,8 @@ def test_pm_cannot_feed_claude_to_a_shell(run: Run, store: Path, command: str) -
     [
         "rg -l 'claude' | xargs sed -n 1p",
         PYTHON_READS_CLAUDE,
-        # `.claude` is not claude
+        # `.claude` is not claude. Relative on purpose: a read of `~/.claude` piped into a shell is
+        # refused by the user folder zone, and this case is about the word, not the folder.
         "ls .claude | sh",
         "echo claude | grep -c sh",
         "echo claude | xargs",
@@ -4003,6 +4004,7 @@ def test_a_custom_claude_config_dir_is_guarded_where_it_is(
         tool("Glob", pattern="*.json", path="CLAUDE"),
         tool("Write", file_path="/tmp/settings.json", content="{}"),
         tool("Write", file_path="/tmp/n.md", content="see ~/.claude/settings.json"),
+        # No write elsewhere in CLAUDE: the whole user folder is a zone now, so one is refused.
         bash("git status"),
         bash("ls .claude-plugin"),
         bash("echo 'edit ~/.claude/settings.json by hand' >> notes.md"),
