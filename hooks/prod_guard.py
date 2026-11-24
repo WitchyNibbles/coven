@@ -64,11 +64,11 @@ in RESTRICTED_RULES first, and no approval lifts one. It may not:
   programs read (`_arms_reads`: `export TAR_OPTIONS=...`). A written word the guard cannot pin to
   a path fails closed when it may lead to the folder (`_writes_unpinned`: `${HOME%/}/.claude`,
   `~/$N`, `$X/..`), and so does any write under /proc, /dev/fd or to /dev/stdin, which stand for
-  other files (`_through_alias`). After a `cd` every word left is read from its folder
+  other files (`_through_alias`); the variable of a `for` loop over literal words is written as
+  each word in turn (`_literal_loops`). After a `cd` every word left is read from its folder
   (`_names_inside`), and a `cd` the scanner cannot follow is read from the text
-  (`_written_cds_clear`). `~/.claude.json`'s
-  siblings (`.backup`) are in the folder's zone. `cd ~/.claude && ls skills` runs, `cd ~/.claude &&
-  rm -rf skills` does not. A restricted session may write in its own scratch folders there
+  (`_written_cds_clear`). `~/.claude.json`'s siblings (`.backup`) are in the folder's zone.
+  `cd ~/.claude && ls skills` runs, `cd ~/.claude && rm -rf skills` does not. A restricted session may write in its own scratch folders there
   (`_with_own`): its job folder, the hook's own CLAUDE_JOB_DIR right under `jobs/`, and its session
   folder beside the payload's transcript, but not that one's `subagents/`, nor the folders
   themselves, nor a copy or unpacking into the session folder itself. Read, Grep and Glob stay
@@ -130,7 +130,9 @@ import fnmatch
 import functools
 import importlib
 import ipaddress
+import itertools
 import logging
+import math
 import os
 import re
 import signal
@@ -657,6 +659,24 @@ COMMAND_OPENERS = frozenset(
     {"if", "then", "elif", "else", "do", "while", "until", "!", "{", "time"}
 )
 COMPOUND_CLOSERS = frozenset({"done", "fi", "}", "esac"})
+# A `for` loop over literal words (`_literal_loops`): the names its variable may have (lowercase,
+# none the shell sets itself, as zsh does `reply` or `match`), the words the guard writes in for it
+# (no expansion, glob, quote, blank or `~`, and no `..` component), the loops it counts to find
+# where one ends, and the builtins that may set a variable besides `NAME=` (NAME_SETTERS, zsh's own,
+# and those that change how a value expands).
+LOOP_NAME = re.compile(r"[a-z][a-z0-9_]*")
+SHELL_SET_NAMES = frozenset({"reply", "match", "mbegin", "mend", "status", "pipestatus", "argv"})
+LOOP_VALUE = re.compile(r"[\w./@+:,%=-]+")
+LOOP_OPENERS = frozenset({LOOP, "while", "until", "select"})
+LOOP_END = "done"
+# A lone `[` (test's other name: never a glob, no `]` in its word), which the scanner gives up on
+# unless it is written `\[`, as the shell reads it; `[[` stays unread.
+LONE_BRACKET = re.compile(r"(?<![^\s;&|(])\[(?=\s)")
+LOOP_SETTERS = NAME_SETTERS | {
+    *("select", "trap", "alias", "vared", "zparseopts", "zstat", "sysread", "zformat"),
+    *("zregexparse", "pcre_match", "strftime", "ztcp", "zsocket", "zselect", "integer", "float"),
+    *("private", "emulate", "setopt", "enable", "zmodload", "autoload", "functions"),
+}
 # Variables that can name a zone, and what a session may have set them to instead of the hook's
 # own value: the default of each (the plugin root is a folder under the plugins folder).
 ZONE_VARIABLES = ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_PLUGIN_ROOT", "XDG_CONFIG_HOME")
@@ -5284,7 +5304,116 @@ def _bash_touches(call: Call, zone: _Zone) -> bool:
     if zone.writes_inside and _odd_job_mention(code):
         return True  # CLAUDE_JOB_DIR used otherwise than as written out: where it goes is unknown
     clear = zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
-    return _text_reaches(code, _Where(call.cwd, cds_clear=clear), zone, glob_text=glob_code)
+    where = _Where(call.cwd, cds_clear=clear)
+    variants = _loop_variants(bash.command, code, glob_code) if zone.writes_inside else []
+    return any(
+        _text_reaches(text, where, zone, glob_text=globbing)
+        for text, globbing in variants or [(code, glob_code)]
+    )
+
+
+def _loop_variants(command: str, code: str, glob_code: str) -> list[tuple[str, str]]:
+    """The code and glob texts with the variable of each loop over literal words
+    (`_literal_loops`) written as each of its words in turn; none when there is no such loop or
+    more than BRACE_MEMBERS ways to write them."""
+    loops = _literal_loops(command)
+    if not loops or math.prod(map(len, loops.values())) > BRACE_MEMBERS:
+        return []
+    variants: list[tuple[str, str]] = []
+    for values in itertools.product(*loops.values()):
+        texts = (code, glob_code)
+        for name, value in zip(loops, values, strict=True):
+            reference = _loop_reference(name)
+            texts = (reference.sub(value, texts[0]), reference.sub(value, texts[1]))
+        variants.append(texts)
+    return variants
+
+
+def _literal_loops(command: str) -> dict[str, list[str]]:
+    """The variables of a Bash text's `for NAME in WORDS` loops whose every value the guard can
+    write in, with those words: each word is literal (LOOP_VALUE), NAME is a LOOP_NAME the text
+    names in no other word and sets no other way (`NAME=`, LOOP_SETTERS), and every mention of it
+    is a plain `$NAME` the shell expands inside the loop's body (`_mentions_in_body`). None in a
+    text with a heredoc, whose quoting `_live_dollars` does not read, or one that may change how a
+    value splits (`_changes_word_splitting`). The scanner reads no `${...}`; a LONE_BRACKET is
+    read as `\\[`."""
+    command = LONE_BRACKET.sub(r"\\[", command)
+    commands = _shell_words().simple_commands(command)
+    if (
+        commands is None
+        or "<<" in command
+        or LOOP_SETTERS.intersection(_words_of(command))
+        or _changes_word_splitting(command)
+    ):
+        return {}
+    named = Counter(word.value for each in commands for word in each.words)
+    loops: dict[str, list[str]] = {}
+    for at, each in enumerate(commands):
+        words = each.words
+        if len(words) < 4 or words[0].value != LOOP or words[2].value != "in":
+            continue
+        name, end = words[1].raw, _loop_end(commands, at)
+        values = [_loop_value(word) for word in words[3:]]
+        literal = [value for value in values if value is not None]
+        if len(literal) < len(values) or end is None or named[name] != 1:
+            continue
+        if _loop_name_kept(command, name) and _mentions_in_body(
+            command, name, (words[-1].end, end)
+        ):
+            loops[name] = literal
+    return loops
+
+
+def _loop_name_kept(command: str, name: str) -> bool:
+    """Whether a loop variable's name is a LOOP_NAME the shell sets no value of itself, which a
+    Bash text assigns nowhere (`NAME=`, `NAME+=`, `NAME[1]=`)."""
+    assigned = re.search(rf"(?<![\w$]){name}(?:\[[^\]]*\])?\+?=", command)
+    return bool(LOOP_NAME.fullmatch(name)) and name not in SHELL_SET_NAMES and not assigned
+
+
+def _loop_value(word: _ShellWord) -> str | None:
+    """A loop word the guard can write in for its variable: a literal LOOP_VALUE with no `..`
+    component."""
+    value = word.value
+    if value is None or word.substitutions or not LOOP_VALUE.fullmatch(value):
+        return None
+    return None if ".." in value.split("/") else value
+
+
+def _loop_end(commands: Sequence[_SimpleCommand], header: int) -> int | None:
+    """Where the `done` that closes the loop of the command at `header` starts, counting the loops
+    opened in its body (LOOP_OPENERS, after any COMMAND_OPENERS but those); None when the text
+    does not close it."""
+    depth = 0
+    for each in commands[header + 1 :]:
+        words = [word.value for word in each.words]
+        if words[:1] == [LOOP_END]:
+            if depth == 0:
+                return each.words[0].start
+            depth -= 1
+        lead = next((word for word in words if word not in COMMAND_OPENERS - LOOP_OPENERS), None)
+        depth += lead in LOOP_OPENERS
+    return None
+
+
+def _loop_reference(name: str) -> re.Pattern[str]:
+    """`$NAME`, not glued to a word character, nor zsh's `$NAME[1]` or `$NAME:h`."""
+    return re.compile(rf"\${name}(?![\w\[:])")
+
+
+def _mentions_in_body(command: str, name: str, body: tuple[int, int]) -> bool:
+    """Whether every `$NAME` of a Bash text is a `_loop_reference` (not zsh's `$NAME[1]`) the shell
+    expands (`_live_dollars`) between the `body` offsets. Any other form (`$=NAME`, `$#NAME`) is
+    left as an expansion the guard does not follow."""
+    live = _live_dollars(command)
+    mentions = re.finditer(rf"\${name}(?!\w)", command)
+    plain = _loop_reference(name)
+    return all(
+        plain.match(command, mention.start())
+        and mention.start() in live
+        and body[0] <= mention.start() < body[1]
+        for mention in mentions
+    )
 
 
 def _is_zone_path(text: str, cwd: str, zone: _Zone) -> bool:

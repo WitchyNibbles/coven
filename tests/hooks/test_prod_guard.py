@@ -5902,6 +5902,77 @@ def test_a_cd_with_a_redirect_still_follows_its_writes(run: Run, store: Path, co
     assert run(payload).returncode == 0
 
 
+# --- a loop over literal words: its variable is each word in turn ---
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'for f in a/b.py c/d.py; do cp "$f" ".claude/worktrees/w/$f"; done',
+        'cd /srv/repo && for f in a/b.py c/d.py; do if [ -f "$f" ]; then cp "$f"'
+        ' ".claude/worktrees/w/$f" && echo "copied $f"; fi; done; echo "--- check ---";'
+        " cd .claude/worktrees/w && git status --short | head",
+        'for f in a/b.py; do test -f "$f" && cp "$f" ".claude/worktrees/w/$f"; done',
+    ],
+    ids=["copy", "copy-checked", "copy-tested"],
+)
+def test_a_write_of_a_literal_loop_variable_outside_the_folder_runs(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command, cwd="/srv/repo"), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+# The bypasses a loop's variable could hide, each written into a repo's own `.claude` from inside
+# home, where enough `..` reach the user folder: none is a literal the guard may read.
+LOOP_WRITES: dict[str, tuple[str, str]] = {
+    "climbs": ('for f in ../../.claude/x; do rm -rf "$f"; done', "{H}/a/b"),
+    "home-word": ("for f in ~/.claude; do rm -rf $f/x; done", "{H}/repo"),
+    "substitution": ('for f in $(ls); do rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "rebound": ('for f in a; do f=../../..; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "names-the-folder": ("for f in .claude; do rm -rf ../$f/skills; done", "{H}/repo"),
+    "tested-names-the-folder": (
+        'for f in .claude; do if [ -d "../$f" ]; then rm -rf ../$f/skills; fi; done',
+        "{H}/repo",
+    ),
+    "before-the-loop": ('rm -rf ".claude/w/$f"; for f in a; do :; done', "{H}/repo"),
+    "single-quotes": ("for f in a; do bash -c 'rm -rf \".claude/w/$f\"'; done", "{H}/repo"),
+    "operator": ('for f in a; do rm -rf ".claude/w/${f/a/../../..}"; done', "{H}/repo"),
+    "split": ("IFS=x; for f in ax..xb; do rm -rf .claude/w/$f; done", "{H}/repo"),
+    "blank": ('for f in "a .."; do rm -rf .claude/w/$f; done', "{H}/repo"),
+    "read": ('for f in a; do read f < /tmp/n; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "unset": ('for f in a; do unset f; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "nameref": (
+        'declare -n g=f; for f in a; do g=../../..; rm -rf ".claude/w/$f"; done',
+        "{H}/repo",
+    ),
+    "trap": ("trap 'f=../../..' DEBUG; for f in a; do rm -rf \".claude/w/$f\"; done", "{H}/repo"),
+    "eval": ('for f in a; do eval "f=../../.."; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "zsh-subscript": ('for f in a..b; do rm -rf ".claude/w/$f[2,3]/.."; done', "{H}/repo"),
+    "nested": (
+        'for f in a; do for f in ../../..; do rm -rf ".claude/w/$f"; done; done',
+        "{H}/repo",
+    ),
+    "printf-glued": ('for f in a; do printf -vf ../../..; rm -rf ".claude/w/$f"; done', "{H}/repo"),
+    "quoted-heredoc": ("for f in a; do bash <<'E'\nrm -rf \".claude/w/$f\"\nE\ndone", "{H}/repo"),
+    "after-a-subshell": ('(for f in a; do :; done); rm -rf ".claude/w/$f"', "{H}/repo"),
+    "second-loop": (
+        'for f in a; do :; done; for f in $(cat /tmp/n); do rm -rf ".claude/w/$f"; done',
+        "{H}/repo",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(LOOP_WRITES))
+def test_a_loop_variable_the_guard_cannot_read_as_a_literal_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    command, cwd = (pinned(text) for text in LOOP_WRITES[name])
+    payload = bash(command, cwd=cwd)
+    assert run(payload, role="pm").returncode == 2
+    assert run(payload).returncode == 0
+
+
 # --- a cd clear of the folder, read from the text when the scanner cannot follow it ---
 
 # Each `cd` has one literal operand from `/` or `~/` that is clear of the user folder, so a relative
