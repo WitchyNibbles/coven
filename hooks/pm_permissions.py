@@ -919,6 +919,17 @@ def _check_gh(arguments: Sequence[str], cwd: str, directories: Sequence[str]) ->
         raise Unsupported(TITLE_REASON)
 
 
+def _chain_after(
+    separator: str, possible: list[str], chained: list[str] | None
+) -> list[str] | None:
+    """Where an `&&` segment runs, given the separator before the segment: the first segment and
+    one after `;` run wherever any earlier one may have; `||`, `|` and parentheses taint the list
+    (None) until the next `;`; `&&` keeps the chain."""
+    if separator in ("", ";"):
+        return possible
+    return None if separator in TAINTING else chained
+
+
 def _plan(command: str, cwd: str) -> list[GitStep]:
     """The git steps of a command made only of `cd`, gh pr segments, git segments and a last
     `| tail`/`| head`. Every cd and gh segment is checked here; the git steps are returned."""
@@ -927,10 +938,7 @@ def _plan(command: str, cwd: str) -> list[GitStep]:
     steps: list[GitStep] = []
     segments = _segments(_tokens(command))
     for index, segment in enumerate(segments):
-        if segment.after in ("", ";"):
-            chained = possible
-        elif segment.after in TAINTING:
-            chained = None
+        chained = _chain_after(segment.after, possible, chained)
         directories = possible if chained is None else chained
         words, _ = _without_merge(segment.words)
         if words[0] != "gh" and any(TITLE_WORD in word for word in words):

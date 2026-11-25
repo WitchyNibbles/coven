@@ -622,9 +622,7 @@ def test_git_dash_c_a_feature_worktree_from_main_is_allowed(on_main, worktree):
     assert verdict(f"git -C {worktree} push", on_main)["behavior"] == "allow"
 
 
-@pytest.mark.parametrize(
-    "command", ["cd {wt} && git push", "cd {wt} && git push 2>&1 | tail -n 2"]
-)
+@pytest.mark.parametrize("command", ["cd {wt} && git push", "cd {wt} && git push 2>&1 | tail -n 2"])
 def test_cd_and_push_from_main_to_a_feature_worktree_is_allowed(on_main, worktree, command):
     assert verdict(command.format(wt=worktree), on_main)["behavior"] == "allow"
 
@@ -671,9 +669,10 @@ def test_a_relative_cd_resolves_against_the_payload_cwd(on_main, worktree):
 
 
 def test_a_cd_and_a_git_dash_c_move_on_together(on_main, worktree):
-    assert verdict(f"cd {worktree.parent} && git -C {worktree.name} push", on_main)[
-        "behavior"
-    ] == "allow"
+    assert (
+        verdict(f"cd {worktree.parent} && git -C {worktree.name} push", on_main)["behavior"]
+        == "allow"
+    )
 
 
 def test_gh_after_a_cd_is_still_checked_in_the_old_directory_too(repo, tmp_path):
@@ -686,7 +685,6 @@ def test_gh_after_a_cd_is_still_checked_in_the_old_directory_too(repo, tmp_path)
     for command in ("cd {o} && gh pr view --repo acme/two", "cd {o}; gh pr view --repo acme/two"):
         assert "another repository" in denied(command.format(o=other), repo)
     assert verdict(f"cd {repo} && gh pr view --repo acme/one", repo)["behavior"] == "allow"
-
 
 
 @pytest.mark.parametrize(
