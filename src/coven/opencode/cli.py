@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from coven import paths
-from coven.opencode import checks, generate, install, runtime, superpowers
+from coven.opencode import checks, generate, install, runtime, serve, superpowers
 from coven.opencode.checkout import needs_checkout
 from coven.opencode.profile import (
     ASSUMED_CONTEXT,
@@ -88,7 +88,13 @@ def run_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+RUN_REFUSED = "a coven server is running; use `coven opencode gm`"
+
+
 def run_run(args: argparse.Namespace) -> int:
+    # `run` and the server share the profile's database; two OpenCode processes writing it is unsafe.
+    if serve.running(layout()) is not None:
+        raise OpencodeError(RUN_REFUSED)
     passed = args.opencode_args
     return runtime.run(passed[1:] if passed[:1] == ["--"] else passed, exec_fn=os.execve)
 
@@ -104,6 +110,43 @@ def run_doctor_command(_args: argparse.Namespace) -> int:
     for line in checks.render(results):
         print(line)
     return checks.exit_code(results)
+
+
+def run_serve_start(args: argparse.Namespace) -> int:
+    home = layout()
+    profile = load_profile(home)
+    if profile is None:
+        raise OpencodeError(runtime.NO_PROFILE)
+    info = serve.start(home, profile, args.port)
+    print(f"running pid {info.pid} port {info.port}")
+    return 0
+
+
+def run_serve_stop(_args: argparse.Namespace) -> int:
+    print("stopped" if serve.stop(layout()) else "no server was running")
+    return 0
+
+
+def run_serve_status(_args: argparse.Namespace) -> int:
+    for line in serve.status(layout()):
+        print(line)
+    return 0
+
+
+def _register_serve(commands: Any) -> None:
+    parser = commands.add_parser(
+        "serve", help="start, stop and look at coven's long-lived OpenCode server"
+    )
+    actions = parser.add_subparsers(dest="serve_command", required=True, metavar="ACTION")
+    start = actions.add_parser(
+        "start", help="start the server (127.0.0.1, password in the profile)"
+    )
+    start.add_argument("--port", type=int, metavar="N", help="a fixed port; default: any free one")
+    start.set_defaults(handler=needs_checkout(run_serve_start))
+    stop = actions.add_parser("stop", help="stop the server, keep its password")
+    stop.set_defaults(handler=needs_checkout(run_serve_stop))
+    status = actions.add_parser("status", help="say whether it runs, with the PM sessions")
+    status.set_defaults(handler=needs_checkout(run_serve_status))
 
 
 def register(subparsers: Any) -> None:
@@ -151,3 +194,4 @@ def register(subparsers: Any) -> None:
         "doctor", help="check the runtime, the profile's isolation and coven's plugin"
     )
     doctor.set_defaults(handler=needs_checkout(run_doctor_command))
+    _register_serve(commands)
