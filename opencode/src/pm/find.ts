@@ -9,6 +9,20 @@ export function covenOf(session: SessionLike): Record<string, unknown> {
   return isPlainObject(coven) ? coven : {};
 }
 
+/**
+ * The session's metadata with the given `coven` entries set (an `undefined` value removes the
+ * entry), every other `coven` entry and every other metadata key kept. `update` replaces the
+ * whole metadata, so a caller passes this, built from a fresh `get`.
+ */
+export function withCoven(
+  session: SessionLike,
+  changes: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const coven = { ...covenOf(session), ...changes };
+  const kept = Object.entries(coven).filter(([, value]) => value !== undefined);
+  return { ...session.metadata, coven: Object.fromEntries(kept) };
+}
+
 export interface PmRoot {
   session: SessionLike;
   code: string;

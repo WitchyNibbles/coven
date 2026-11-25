@@ -57,15 +57,15 @@ export interface SessionPromptInput {
 
 /**
  * What `ctx.session.update` changes (`PATCH /api/session/{id}`); it resolves to nothing (204).
- * 2.3.2's plugin side applies `title`, `metadata` and `permissions` and ignores `archived`
- * (only the HTTP route archives), so a caller reads the session back (`time.archived`).
+ * 2.3.2's plugin side applies `title`, `metadata` and `permissions` and has no `archived`: only
+ * the HTTP route archives a session, so the plugin hides a PM with a metadata flag instead.
+ * `metadata` replaces the whole object.
  */
 export interface SessionUpdateInput {
   sessionID: string;
   title?: string;
   metadata?: Record<string, unknown>;
   permissions?: readonly PermissionRule[];
-  archived?: boolean;
 }
 
 /**

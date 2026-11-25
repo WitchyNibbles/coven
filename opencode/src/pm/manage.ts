@@ -7,7 +7,7 @@ import {
   show,
 } from "../join/fields.ts";
 import { busyIds, listAll } from "./busy.ts";
-import { findPm, pmRootsIn } from "./find.ts";
+import { covenOf, findPm, pmRootsIn, withCoven } from "./find.ts";
 import type { PmRoot } from "./find.ts";
 import { sharedState } from "./state.ts";
 import { ToolError, asToolError, requireGm } from "./tools.ts";
@@ -105,7 +105,7 @@ async function describe(
   pm: PmRoot,
 ): Promise<string> {
   const { id } = pm.session;
-  const who = `pm-${pm.code}  ${id}`;
+  const who = `pm-${pm.code}  ${id}${isHidden(pm.session) ? "  archived" : ""}`;
   const got = await fetched(deps, id);
   if (got === "missing") {
     return `${who}  missing`;
@@ -136,30 +136,9 @@ async function watched(status: PmStatus, id: string): Promise<string[]> {
   return parts;
 }
 
-export function pmListTool(deps: ListDeps): ToolDefinition {
-  return {
-    name: "coven_pm_list",
-    description:
-      "Lists the live PM sessions, one line each: code, session id, busy or idle, the last " +
-      "outcome, any waiting ask (ASK WAITING (bug) with its request id), a child busy for " +
-      "30 minutes or more, and the head of the last message. A PM whose session is gone " +
-      "shows as missing.",
-    input: { type: "object", properties: {}, additionalProperties: false },
-    options: { codemode: false },
-    execute: (_raw, context) =>
-      asToolError(async () => {
-        await requireGm(deps, context.sessionID, "coven_pm_list");
-        // one listing gives both the PM roots and who is working
-        const live = await listAll(deps.session, { archived: false });
-        const busy = busyIds(live);
-        const lines = await Promise.all(
-          pmRootsIn(live).map((pm) => describe(deps, busy, pm)),
-        );
-        return {
-          content: lines.length === 0 ? "no PM sessions" : lines.join("\n"),
-        };
-      }),
-  };
+/** Whether `coven_pm_stop` hid the PM from the list (`coven.archived`). */
+function isHidden(session: SessionLike): boolean {
+  return covenOf(session)["archived"] === true;
 }
 
 function object(raw: unknown): Record<string, unknown> {
@@ -167,6 +146,59 @@ function object(raw: unknown): Record<string, unknown> {
     throw new ToolError(`input must be an object, got ${show(raw)}`);
   }
   return raw;
+}
+
+/** An optional true or false input; false when it is missing. */
+function flag(input: Record<string, unknown>, name: string): boolean {
+  const value = input[name];
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new ToolError(`${name} must be true or false, got ${show(value)}`);
+  }
+  return value === true;
+}
+
+/** The lines of the PMs archived in OpenCode, which the live listing leaves out. */
+async function archivedLines(deps: ToolDeps): Promise<string[]> {
+  const archived = await listAll(deps.session, { archived: true });
+  return pmRootsIn(archived).map(
+    (pm) => `pm-${pm.code}  ${pm.session.id}  archived in OpenCode`,
+  );
+}
+
+export function pmListTool(deps: ListDeps): ToolDefinition {
+  return {
+    name: "coven_pm_list",
+    description:
+      "Lists the live PM sessions, one line each: code, session id, busy or idle, the last " +
+      "outcome, any waiting ask (ASK WAITING (bug) with its request id), a child busy for " +
+      "30 minutes or more, and the head of the last message. A PM whose session is gone " +
+      "shows as missing. A PM hidden by coven_pm_stop with archive true is left out; with " +
+      "archived true it is listed, marked archived, and so is a PM archived in OpenCode.",
+    input: {
+      type: "object",
+      properties: { archived: { type: "boolean" } },
+      additionalProperties: false,
+    },
+    options: { codemode: false },
+    execute: (raw, context) =>
+      asToolError(async () => {
+        await requireGm(deps, context.sessionID, "coven_pm_list");
+        const all = flag(raw === undefined ? {} : object(raw), "archived");
+        // one listing gives both the PM roots and who is working
+        const live = await listAll(deps.session, { archived: false });
+        const busy = busyIds(live);
+        const shown = pmRootsIn(live).filter(
+          (pm) => all || !isHidden(pm.session),
+        );
+        const lines = [
+          ...(await Promise.all(shown.map((pm) => describe(deps, busy, pm)))),
+          ...(all ? await archivedLines(deps) : []),
+        ];
+        return {
+          content: lines.length === 0 ? "no PM sessions" : lines.join("\n"),
+        };
+      }),
+  };
 }
 
 async function livePm(deps: ToolDeps, code: string): Promise<SessionLike> {
@@ -177,21 +209,27 @@ async function livePm(deps: ToolDeps, code: string): Promise<SessionLike> {
   return found;
 }
 
-/**
- * Whether the server holds the session archived. `update` answers nothing either way, and 2.3.2's
- * plugin side leaves `archived` alone, so only the session read back says what happened.
- */
-async function isArchived(deps: ToolDeps, sessionID: string): Promise<boolean> {
-  const read = await deps.session.get({ sessionID });
-  return typeof read.time?.archived === "number";
+/** The PM `code` stands for, live or hidden; a PM archived in OpenCode is a tool error. */
+async function resumable(deps: ToolDeps, code: string): Promise<SessionLike> {
+  const live = await findPm(deps.session, code);
+  if (live !== undefined) {
+    return live;
+  }
+  if ((await findPm(deps.session, code, true)) !== undefined) {
+    throw new ToolError(
+      `pm-${code} is archived in OpenCode: unarchive it there first, nothing was sent`,
+    );
+  }
+  throw new ToolError(`no PM with code "${code}"`);
 }
 
 export function pmResumeTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "coven_pm_resume",
     description:
-      "Resumes a PM by its code: unarchives it if needed and queues it a turn that starts " +
-      "with RESUMED by gm, then your text. Use it after a stop or a server restart.",
+      "Resumes a PM by its code: shows it in coven_pm_list again if coven_pm_stop hid it, and " +
+      "queues it a turn that starts with RESUMED by gm, then your text. Use it after a stop or " +
+      "a server restart. A PM archived in OpenCode is refused: unarchive it there first.",
     input: {
       type: "object",
       properties: {
@@ -208,18 +246,14 @@ export function pmResumeTool(deps: ToolDeps): ToolDefinition {
         const input = object(raw);
         const code = nonEmptyString(input, "code", ToolError);
         const text = nonEmptyString(input, "text", ToolError);
-        const live = await findPm(deps.session, code);
-        const target = live ?? (await findPm(deps.session, code, true));
-        if (target === undefined) {
-          throw new ToolError(`no PM with code "${code}"`);
-        }
-        if (live === undefined) {
-          await deps.session.update({ sessionID: target.id, archived: false });
-          if (await isArchived(deps, target.id)) {
-            throw new ToolError(
-              `pm-${code} is still archived: the server did not unarchive it, so nothing was sent`,
-            );
-          }
+        const target = await resumable(deps, code);
+        if (isHidden(target)) {
+          // `update` replaces the whole metadata: build it from the session as it is now
+          const fresh = await deps.session.get({ sessionID: target.id });
+          await deps.session.update({
+            sessionID: target.id,
+            metadata: withCoven(fresh, { archived: undefined }),
+          });
         }
         sharedState().stopped.delete(target.id);
         await deps.session.prompt({
@@ -232,21 +266,13 @@ export function pmResumeTool(deps: ToolDeps): ToolDefinition {
   };
 }
 
-function archiveFlag(input: Record<string, unknown>): boolean {
-  const value = input["archive"];
-  if (value !== undefined && typeof value !== "boolean") {
-    throw new ToolError(`archive must be true or false, got ${show(value)}`);
-  }
-  return value === true;
-}
-
 export function pmStopTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "coven_pm_stop",
     description:
       "Stops a PM by its code: interrupts its turn (which also ends a waiting ask) and, with " +
-      "archive true, archives the session and reads it back; an error says when the server did " +
-      "not archive it. No turn-end notice follows the stop.",
+      "archive true, hides it from coven_pm_list (the session is not archived in OpenCode; " +
+      "coven_pm_resume shows it again). No turn-end notice follows the stop.",
     input: {
       type: "object",
       properties: {
@@ -262,7 +288,7 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
         await requireGm(deps, context.sessionID, "coven_pm_stop");
         const input = object(raw);
         const code = nonEmptyString(input, "code", ToolError);
-        const archive = archiveFlag(input);
+        const archive = flag(input, "archive");
         const target = await livePm(deps, code);
         const { stopped } = sharedState();
         // marked first: the end event of the interrupted turn must find the mark
@@ -273,16 +299,17 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
           stopped.delete(target.id);
           throw error;
         }
-        if (archive) {
-          await deps.session.update({ sessionID: target.id, archived: true });
-          if (!(await isArchived(deps, target.id))) {
-            throw new ToolError(
-              `stopped pm-${code} but the server did not archive it`,
-            );
-          }
+        if (!archive) {
+          return { content: `stopped pm-${code}` };
         }
+        // `update` replaces the whole metadata: build it from the session as it is now
+        const fresh = await deps.session.get({ sessionID: target.id });
+        await deps.session.update({
+          sessionID: target.id,
+          metadata: withCoven(fresh, { archived: true }),
+        });
         return {
-          content: `stopped pm-${code}${archive ? " and archived it" : ""}`,
+          content: `stopped pm-${code}; hidden from coven_pm_list; the session is not archived in OpenCode`,
         };
       }),
   };

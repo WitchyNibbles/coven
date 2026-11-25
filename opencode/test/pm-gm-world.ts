@@ -16,17 +16,14 @@ export interface World extends FakeSession {
   readonly created: SessionCreateInput[];
   readonly interrupts: string[];
   /**
-   * Ids the fake treats as archived: `list` hides them unless asked for them, and `get` shows
-   * `time.archived`. A test puts an id here as an archive made over HTTP would.
+   * Ids the fake treats as archived in OpenCode: `list` hides them unless asked for them. A test
+   * puts an id here as an archive made in the UI or over HTTP would; the plugin cannot make one
+   * (2.3.2's plugin-side `update` ignores `archived`). `get` shows them with `time.archived` only
+   * while `getShowsArchived` is true.
    */
   readonly archived: Set<string>;
   failInterrupt: boolean;
-  /**
-   * Whether `update` acts on `archived`. 2.3.2's plugin side does not (it answers undefined and
-   * changes nothing; only HTTP `PATCH` archives), so the default is false; a test sets it to
-   * play a server that would.
-   */
-  updateArchives: boolean;
+  getShowsArchived: boolean;
 }
 
 /** `fakeSession` plus `create`, `interrupt` and `archived` that a GM tool needs. */
@@ -36,18 +33,17 @@ export function gmWorld(initial: readonly SessionLike[]): World {
   const interrupts: string[] = [];
   const archived = new Set<string>();
   const listBase = fake.list.bind(fake);
-  const updateBase = fake.update.bind(fake);
   const getBase = fake.get.bind(fake);
   Object.assign(fake, {
     created,
     interrupts,
     archived,
     failInterrupt: false,
-    updateArchives: false,
+    getShowsArchived: true,
   });
   fake.get = async (input) => {
     const found = await getBase(input);
-    return archived.has(input.sessionID)
+    return fake.getShowsArchived && archived.has(input.sessionID)
       ? { ...found, time: { ...found.time, archived: 1 } }
       : found;
   };
@@ -68,17 +64,6 @@ export function gmWorld(initial: readonly SessionLike[]): World {
     }
     interrupts.push(sessionID);
     return Promise.resolve({});
-  };
-  fake.update = async (input) => {
-    if (input.archived !== undefined) {
-      fake.calls.push(`archive:${input.sessionID}:${String(input.archived)}`);
-      if (fake.updateArchives && input.archived) {
-        archived.add(input.sessionID);
-      } else if (fake.updateArchives) {
-        archived.delete(input.sessionID);
-      }
-    }
-    await updateBase(input);
   };
   fake.list = async (input) => {
     const page = await listBase(input);
