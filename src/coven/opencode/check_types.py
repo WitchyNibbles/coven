@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-from coven.opencode.canary import ServerOptions, ServerView, data_items, http_json
+from coven.opencode.canary import ServerOptions, ServerView, data_items, http_json, operation_ids
 from coven.opencode.profile import RESET_HINT, Layout, OpencodeError, Profile
 from coven.opencode.serve import HOST, ServerInfo
 
@@ -72,7 +72,8 @@ class Server:
 
     def _read_live(self) -> ServerView:
         plugins = data_items(self.fetch("/api/plugin"), "/api/plugin")
-        return ServerView(plugins, data_items(self.fetch("/api/skill"), "/api/skill"))
+        skills = data_items(self.fetch("/api/skill"), "/api/skill")
+        return ServerView(plugins, skills, operation_ids(self.fetch("/openapi.json")))
 
     def view(self) -> ServerView:
         if self._blocked:

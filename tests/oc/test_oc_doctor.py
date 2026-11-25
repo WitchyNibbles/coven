@@ -65,7 +65,7 @@ def test_an_old_runtime_fails_runtime_and_blocks_the_server_checks(good: Good):
     assert found["runtime"].status == "fail"
     assert "1.19.0" in found["runtime"].detail
     assert found["runtime"].fix == "point COVEN_OPENCODE_BIN at 2.3.2"
-    for name in ("plugin", "skills"):
+    for name in ("plugin", "skills", "operations"):
         assert found[name].status == "fail"
         assert "runtime check failed" in found[name].detail
     assert reader.calls == []

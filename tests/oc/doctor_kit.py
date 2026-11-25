@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coven.opencode.canary import ServerOptions, ServerView
 from coven.opencode.checks import Outcome, run_doctor
+from coven.opencode.checks_server import REQUIRED_OPERATIONS
 from coven.opencode.profile import Layout
 
 NAMES = [
@@ -43,6 +44,7 @@ LITELLM_FLAGS = [*BARE_FLAGS, *LIMIT_FLAGS]
 GOOD_VIEW = ServerView(
     [{"id": "coven", "state": {"status": "active"}}],
     [{"id": "opencode", "path": "skill://opencode/SKILL.md"}],
+    frozenset(REQUIRED_OPERATIONS),
 )
 
 

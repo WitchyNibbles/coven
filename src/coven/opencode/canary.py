@@ -79,6 +79,8 @@ class ServerView:
 
     plugins: list[dict[str, object]]
     skills: list[dict[str, object]]
+    # The operationIds of the server's OpenAPI document.
+    operations: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,20 @@ def data_items(payload: object, path: str) -> list[dict[str, object]]:
     return [item for item in data if isinstance(item, dict)]
 
 
+def operation_ids(document: object) -> frozenset[str]:
+    """Every operationId in an OpenAPI document."""
+    paths = document.get("paths") if isinstance(document, dict) else None
+    if not isinstance(paths, dict):
+        return frozenset()
+    found: set[str] = set()
+    for item in paths.values():
+        for operation in item.values() if isinstance(item, dict) else ():
+            name = operation.get("operationId") if isinstance(operation, dict) else None
+            if isinstance(name, str):
+                found.add(name)
+    return frozenset(found)
+
+
 def loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, object]]:
     """The plugin list once coven is in it; 2.3.2 lists none until they have loaded (~0.5 s)."""
     deadline = time.monotonic() + SETTLE
@@ -167,7 +183,8 @@ def _read_view(url: str, password: str, fetch: Fetch) -> ServerView:
     fetch("POST", f"{url}/api/location/reload", password)
     plugins = loaded_plugins(url, password, fetch)
     skills = data_items(fetch("GET", f"{url}/api/skill", password), "/api/skill")
-    return ServerView(plugins, skills)
+    operations = operation_ids(fetch("GET", f"{url}/openapi.json", password))
+    return ServerView(plugins, skills, operations)
 
 
 def _start(binary: Path, env: Mapping[str, str], cwd: Path) -> subprocess.Popen[str]:

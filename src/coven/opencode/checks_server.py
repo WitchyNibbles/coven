@@ -16,8 +16,11 @@ from coven.opencode.check_types import RESET, Context, Outcome
 from coven.opencode.profile import PINNED_VERSION, OpencodeError
 from coven.opencode.runtime import probe
 
-# The 2.3.2 operationIds of the calls the plugin and the CLI make: session create, list, get,
-# prompt, interrupt, update, permission list and reply, and the event stream.
+# The 2.3.2 operationIds of every API route coven calls over HTTP: the plugin and the CLI's session
+# create, list, get, prompt, interrupt, update, permission list and reply, and the event stream;
+# `serve status` (session.active); the canary and `gm` (location.reload, plugin.list, skill.list).
+# The plugin's `ctx.session.wait` and `ctx.session.context` run in-process, but they are the same
+# operations of the same API (matched by name), so a runtime that drops them breaks the join too.
 REQUIRED_OPERATIONS: Final = (
     "session.create",
     "session.list",
@@ -28,6 +31,12 @@ REQUIRED_OPERATIONS: Final = (
     "session.permission.list",
     "session.permission.reply",
     "event.subscribe",
+    "session.active",
+    "session.context",
+    "experimental.session.wait",
+    "location.reload",
+    "plugin.list",
+    "skill.list",
 )
 PYTHON_MINIMUM: Final = (3, 12)
 PYTHON_VERSION: Final = re.compile(r"Python (\d+)\.(\d+)\.(\d+)")
@@ -92,24 +101,10 @@ def password_check(ctx: Context) -> Outcome:
     return Outcome("ok", f"{path} is mode {mode:04o}")
 
 
-def operation_ids(document: object) -> set[str]:
-    """Every operationId in an OpenAPI document."""
-    paths = document.get("paths") if isinstance(document, dict) else None
-    if not isinstance(paths, dict):
-        return set()
-    found: set[str] = set()
-    for item in paths.values():
-        for operation in item.values() if isinstance(item, dict) else ():
-            name = operation.get("operationId") if isinstance(operation, dict) else None
-            if isinstance(name, str):
-                found.add(name)
-    return found
-
-
 def operations_check(ctx: Context) -> Outcome:
-    if ctx.server.live is None:
-        return Outcome("ok", "no server running; the API is checked against the running server")
-    offered = operation_ids(ctx.server.fetch("/openapi.json"))
+    if ctx.profile is None:
+        return ctx.skip()
+    offered = ctx.server.view().operations
     missing = [name for name in REQUIRED_OPERATIONS if name not in offered]
     if missing:
         return Outcome(
