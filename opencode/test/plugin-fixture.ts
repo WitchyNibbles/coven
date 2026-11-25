@@ -19,6 +19,7 @@ import type { SpawnFn } from "../src/guard.ts";
 import { joinSetup } from "../src/plugin.ts";
 import { Stream } from "./plugin-stream.ts";
 import { exits, fakeSpawn } from "./guard-fake.ts";
+import { realPage } from "./pm-fake-session.ts";
 import type { Behaviour } from "./guard-fake.ts";
 
 /** The options setup always writes besides `covenRoot` and `keyEnv`; placeholder paths. */
@@ -45,6 +46,9 @@ export const KID = "ses_kid";
 export const PM = "ses_pm";
 export const PM_KID = "ses_pm_kid";
 export const DIRECTORY = "/work/session";
+
+/** Sessions per `list` page of the fake context. */
+const PAGE_SIZE = 100;
 
 export { ended, notFound, report, started } from "./plugin-events.ts";
 import { notFound } from "./plugin-events.ts";
@@ -147,15 +151,16 @@ function makeWorld({
             ? Promise.reject(notFound())
             : Promise.resolve(found);
       },
-      list: ({ parentID }) =>
-        Promise.resolve({
-          data: [...sessions.values()].filter(
+      list: ({ parentID, cursor }) =>
+        realPage(
+          [...sessions.values()].filter(
             (found): found is SessionLike & { title?: string } =>
               !(found instanceof Error) &&
               (parentID === undefined || found.parentID === parentID),
           ),
-          cursor: {},
-        }),
+          { cursor },
+          PAGE_SIZE,
+        ),
       create: () => Promise.reject(new Error("create is not faked")),
       prompt: (input) => {
         prompts.push(input);

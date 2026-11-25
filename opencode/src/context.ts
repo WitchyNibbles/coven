@@ -57,10 +57,14 @@ export interface SessionUpdateInput {
   archived?: boolean;
 }
 
-/** One page of `ctx.session.list`: follow `cursor.next` until there is none. */
+/**
+ * One page of `ctx.session.list`: follow `cursor.next` until there is none. 2.3.2 answers a string
+ * on every page that has sessions and `null` on the page after the last, so the walk always reads
+ * one empty page; a `null` means "none" and is never a cursor to send back.
+ */
 export interface SessionPage {
   data: SessionLike[];
-  cursor: { previous?: string; next?: string };
+  cursor: { previous?: string | null; next?: string | null };
 }
 
 /**
