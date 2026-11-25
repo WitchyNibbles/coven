@@ -211,6 +211,19 @@ await test("a setup that fails on the evaluate hook still disposes the shell hoo
   assert.deepEqual(p.disposals, ["create.before"]);
 });
 
+await test("a setup that fails rejects with its own error even when the teardown throws", async () => {
+  const p = bootCoven({
+    options: COVEN,
+    failEvaluate: true,
+    guardDisposeThrows: true,
+  });
+  await assert.rejects(p.outcome, /evaluate refused/);
+  assert.deepEqual(p.disposals, ["create.before"]);
+  assert.ok(
+    p.logs.some((line) => /cleanup failed.*guard dispose failed/.test(line)),
+  );
+});
+
 await test("teardown disposes the registrations even when the execute.before hook cannot be disposed", async () => {
   const p = bootCoven({ options: COVEN, guardDisposeThrows: true });
   const cleanup = await p.outcome;

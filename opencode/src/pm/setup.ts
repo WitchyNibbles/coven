@@ -138,7 +138,12 @@ export async function pmSetup(
       });
     });
   } catch (error) {
-    cleanup();
+    try {
+      cleanup();
+    } catch (cleanupError) {
+      // the setup's own error is the one to report; the teardown's is only noted
+      deps.log(`coven setup cleanup failed: ${messageOf(cleanupError)}`);
+    }
     throw error;
   }
   return cleanup;

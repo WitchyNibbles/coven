@@ -21,11 +21,19 @@ export interface ShellCall {
   role: Role | undefined;
   command: string;
   cwd: string;
+  /** A second `cwd` string the call's shell may start under: an empty `workdir` has two. */
+  alsoCwd?: string;
+}
+
+/** Shared by the entries one call leaves under its keys: taken under one, spent under all. */
+interface Spend {
+  spent: boolean;
 }
 
 interface Entry {
   role: Role | undefined;
   at: number;
+  spend: Spend;
 }
 
 /**
@@ -37,10 +45,13 @@ export class ShellQueue {
   private readonly entries = new Map<string, Entry[]>();
 
   record(call: ShellCall, now: number): void {
-    const key = keyOf(call.command, call.cwd);
-    const live = this.live(key, now);
-    live.push({ role: call.role, at: now });
-    this.entries.set(key, live);
+    const spend: Spend = { spent: false };
+    for (const cwd of new Set([call.cwd, call.alsoCwd ?? call.cwd])) {
+      const key = keyOf(call.command, cwd);
+      const live = this.live(key, now);
+      live.push({ role: call.role, at: now, spend });
+      this.entries.set(key, live);
+    }
   }
 
   /**
@@ -54,6 +65,9 @@ export class ShellQueue {
     const live = this.live(key, now);
     const mixed = new Set(live.map((entry) => entry.role)).size > 1;
     const taken = mixed ? takeNonPm(live) : live.shift();
+    if (taken !== undefined) {
+      taken.spend.spent = true;
+    }
     if (live.length === 0) {
       this.entries.delete(key);
     } else {
@@ -64,7 +78,7 @@ export class ShellQueue {
 
   private live(key: string, now: number): Entry[] {
     return (this.entries.get(key) ?? []).filter(
-      (entry) => now - entry.at < EXPIRY_MS,
+      (entry) => !entry.spend.spent && now - entry.at < EXPIRY_MS,
     );
   }
 }
@@ -107,7 +121,7 @@ export interface ShellEnvDeps {
 function shellCall(
   event: ExecuteBeforeEvent,
   directory: string,
-): { command: string; cwd: string } | undefined {
+): { command: string; cwd: string; alsoCwd?: string } | undefined {
   const input: unknown = event.input;
   if (!SHELL_TOOLS.has(event.tool) || !isPlainObject(input)) {
     return undefined;
@@ -116,9 +130,14 @@ function shellCall(
   if (typeof command !== "string") {
     return undefined;
   }
-  // an empty workdir is no workdir: the guard's `callCwd` reads it the same way
-  const given = typeof workdir === "string" && workdir !== "";
-  return { command, cwd: given ? workdir : directory };
+  if (typeof workdir === "string" && workdir !== "") {
+    return { command, cwd: workdir };
+  }
+  // an empty workdir is no workdir, as the guard's `callCwd` reads it; which string the shell
+  // event then carries (`""` or the location directory) is not known, so a call keeps both
+  return workdir === ""
+    ? { command, cwd: directory, alsoCwd: "" }
+    : { command, cwd: directory };
 }
 
 /**

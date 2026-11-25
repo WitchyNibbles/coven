@@ -27,6 +27,10 @@ export interface NoticeDeps {
   log: (line: string) => void;
 }
 
+/** Who a session belongs to, from this copy's side. */
+type Owner =
+  { kind: "pm"; code: string } | { kind: "other" } | { kind: "unreadable" };
+
 /** The marks of a turn, read when its end event arrives, before anything can clear them. */
 interface Marks {
   messaged: boolean;
@@ -72,13 +76,13 @@ export class NoticeTracker {
     if (type === STARTED) {
       // a mark outlives its turn when no end event followed it: the stop of an idle PM. Only
       // the copy that owns the PM clears: another location's copy could do it before the owner
-      // has read the marks of the turn that just ended.
-      if (
-        (messaged.has(sessionID) || stopped.has(sessionID)) &&
-        (await this.pmCode(sessionID)) !== undefined
-      ) {
-        messaged.delete(sessionID);
-        stopped.delete(sessionID);
+      // has read the marks of the turn that just ended. A lookup that fails clears too: a stale
+      // mark would mute the next turn's notice, and a notice is the safer error.
+      if (messaged.has(sessionID) || stopped.has(sessionID)) {
+        if ((await this.owner(sessionID)).kind !== "other") {
+          messaged.delete(sessionID);
+          stopped.delete(sessionID);
+        }
       }
       return;
     }
@@ -121,6 +125,12 @@ export class NoticeTracker {
 
   /** The code of the PM in `directory` this session is, or `undefined` for any other session. */
   private async pmCode(sessionID: string): Promise<string | undefined> {
+    const owner = await this.owner(sessionID);
+    return owner.kind === "pm" ? owner.code : undefined;
+  }
+
+  /** Whether this copy owns the session; a lookup that fails is its own answer, and is logged. */
+  private async owner(sessionID: string): Promise<Owner> {
     let session;
     try {
       session = await this.deps.session.get({ sessionID });
@@ -128,13 +138,15 @@ export class NoticeTracker {
       this.deps.log(
         `coven notice: cannot read session ${sessionID}: ${messageOf(error)}`,
       );
-      return undefined;
+      return { kind: "unreadable" };
     }
     if (!isRoot(session) || session.location?.directory !== this.directory) {
-      return undefined;
+      return { kind: "other" };
     }
     const role = await resolveRole(sessionID, () => Promise.resolve(session));
-    return role?.role === "pm" ? role.code : undefined;
+    return role?.role === "pm" && role.code !== undefined
+      ? { kind: "pm", code: role.code }
+      : { kind: "other" };
   }
 
   /** True after a message, or while a child works (said in the serve log, so it can be found). */

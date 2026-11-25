@@ -126,3 +126,25 @@ await test("an empty workdir pairs on the location directory, as the guard reads
   first.createBefore(event);
   assert.deepEqual(event.env, { [ROLE_ENV]: "pm" });
 });
+
+await test("an empty workdir also pairs with a shell that starts with an empty cwd", async () => {
+  const { first } = copies();
+  await first.executeBefore({ ...call, input: { command: "ls", workdir: "" } });
+  const event = { ...shellEvent({}), cwd: "" };
+  first.createBefore(event);
+  assert.deepEqual(event.env, { [ROLE_ENV]: "pm" });
+});
+
+await test("an empty workdir call is taken once, whichever form its shell has", async () => {
+  const { first } = copies();
+  await first.executeBefore({ ...call, input: { command: "ls", workdir: "" } });
+  first.createBefore({ ...shellEvent({}), cwd: "" });
+  const other = shellEvent({});
+  first.createBefore(other);
+  assert.deepEqual(other.env, {});
+  await first.executeBefore({ ...call, input: { command: "ls", workdir: "" } });
+  first.createBefore(shellEvent({}));
+  const left = { ...shellEvent({}), cwd: "" };
+  first.createBefore(left);
+  assert.deepEqual(left.env, {});
+});
