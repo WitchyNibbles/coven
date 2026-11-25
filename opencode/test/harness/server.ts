@@ -7,7 +7,7 @@ import { stop } from "./process.ts";
 
 export interface Api {
   get(path: string): Promise<unknown>;
-  post(path: string): Promise<unknown>;
+  post(path: string, body?: object): Promise<unknown>;
 }
 
 interface ServerOptions {
@@ -53,26 +53,31 @@ async function request(
   method: string,
   url: string,
   password: string,
+  body?: object,
 ): Promise<unknown> {
   const token = Buffer.from(`${USERNAME}:${password}`).toString("base64");
   const response = await fetch(url, {
     method,
-    headers: { authorization: `Basic ${token}` },
+    headers: {
+      authorization: `Basic ${token}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  const body = await response.text();
+  const text = await response.text();
   if (!response.ok) {
     throw new Error(
       `${method} ${new URL(url).pathname} returned HTTP ${response.status}`,
     );
   }
-  return body.trim() === "" ? undefined : (JSON.parse(body) as unknown);
+  return text.trim() === "" ? undefined : (JSON.parse(text) as unknown);
 }
 
 function apiFor(base: string, password: string): Api {
   return {
     get: (path) => request("GET", `${base}${path}`, password),
-    post: (path) => request("POST", `${base}${path}`, password),
+    post: (path, body) => request("POST", `${base}${path}`, password, body),
   };
 }
 

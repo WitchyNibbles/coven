@@ -26,6 +26,8 @@ export interface RecordedRequest {
   hasToolChoice: boolean;
   toolChoice: unknown;
   stream: boolean;
+  /** The Authorization header the request carried, or undefined when it had none. */
+  authorization: string | undefined;
 }
 
 export interface FakeModel {
@@ -74,6 +76,7 @@ export function replyFor(
   raw: string,
   mode: FakeMode,
   decide: Decide,
+  authorization?: string,
 ): { reply: Reply | Stranded; recorded: RecordedRequest } {
   const request = parseRequest(raw);
   const tools = request.tools ?? [];
@@ -86,6 +89,7 @@ export function replyFor(
     hasToolChoice,
     toolChoice: request.tool_choice,
     stream: request.stream !== false,
+    authorization,
   };
   const reply = decide(request.messages ?? [], names);
   const strand =
@@ -163,6 +167,7 @@ function modelList(res: ServerResponse): void {
 function answer(
   url: string,
   raw: string,
+  authorization: string | undefined,
   res: ServerResponse,
   context: {
     tag: string;
@@ -175,7 +180,12 @@ function answer(
     modelList(res);
     return;
   }
-  const { reply, recorded } = replyFor(raw, context.mode, context.decide);
+  const { reply, recorded } = replyFor(
+    raw,
+    context.mode,
+    context.decide,
+    authorization,
+  );
   context.log.push(recorded);
   const text: Reply =
     reply.kind === "stranded" ? { kind: "text", text: reply.text } : reply;
@@ -196,7 +206,7 @@ export function startFakeModel(options: FakeOptions): Promise<FakeModel> {
     req.on("end", () => {
       counter += 1;
       const tag = String(counter);
-      answer(req.url ?? "", raw, res, {
+      answer(req.url ?? "", raw, req.headers.authorization, res, {
         tag,
         mode,
         decide: options.decide,
