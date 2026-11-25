@@ -92,6 +92,21 @@ await test("only a real not-found is missing: a status decides alone, else the e
       Object.assign(new Error(""), { name: "Model.NotFoundError" }),
     ],
     ["not a name", Object.assign(new Error(""), { _tag: "Session.NotFound" })],
+    // a message's not-found that carries the session it was looked up in is not a gone session
+    [
+      "message tag",
+      Object.assign(new Error(""), {
+        _tag: "Message.NotFoundError",
+        sessionID: "x",
+      }),
+    ],
+    [
+      "message name",
+      Object.assign(new Error(""), {
+        name: "Message.NotFoundError",
+        sessionID: "x",
+      }),
+    ],
     ["real 500", Object.assign(notFound("real 500"), { status: 500 })],
   ];
   const world = gmWorld([
@@ -120,6 +135,8 @@ await test("only a real not-found is missing: a status decides alone, else the e
     "other tag",
     "other name",
     "not a name",
+    "message tag",
+    "message name",
     "real 500",
   ]) {
     assert.match(verdict(id) ?? "", /^status unavailable: /, id);

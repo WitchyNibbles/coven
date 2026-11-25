@@ -52,21 +52,21 @@ function head(message: string): string {
 
 const NOT_FOUND_TEXT = /^session not found$/i;
 
-const NOT_FOUND_SUFFIX = "NotFoundError";
-
 /**
- * Whether the error's `name` or `_tag` is a session's not-found: exactly `NotFoundError`, or one
- * ending in it that is a session's, by the `Session.` prefix (2.3.2's plugin side throws
- * `Session.NotFoundError`) or by the `sessionID` the error carries (its HTTP tag is
- * `SessionNotFoundError`). `Permission.NotFoundError` and the like are another outage.
+ * The `name` or `_tag` values of a session's not-found: a bare `NotFoundError`, 2.3.2's plugin
+ * side `Session.NotFoundError`, and the HTTP tag `SessionNotFoundError`. Another subject's
+ * (`Permission.`, `Model.`, `Message.NotFoundError`, even one that carries a `sessionID`) is
+ * another outage.
  */
+const SESSION_NOT_FOUND = new Set([
+  "NotFoundError",
+  "Session.NotFoundError",
+  "SessionNotFoundError",
+]);
+
 function namesNotFound(error: Record<string, unknown>): boolean {
   return [error["name"], error["_tag"]].some(
-    (label) =>
-      label === NOT_FOUND_SUFFIX ||
-      (typeof label === "string" &&
-        label.endsWith(NOT_FOUND_SUFFIX) &&
-        (label.startsWith("Session.") || "sessionID" in error)),
+    (label) => typeof label === "string" && SESSION_NOT_FOUND.has(label),
   );
 }
 

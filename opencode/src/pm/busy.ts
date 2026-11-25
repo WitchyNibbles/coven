@@ -37,9 +37,9 @@ interface ListQuery {
  * The sessions `list` returns for the query, one by one, page by page; a page is read only when
  * the one before it is used up. The walk ends on a page with no `cursor.next`: 2.3.2 answers
  * `null` there (on the page after the last), older shapes leave it out, and a `null` is never
- * sent back as a `cursor`, which the SDK refuses. A `list` that throws, or a listing still going after `MAX_PAGES`
- * pages, throws: a listing not read to the end says nothing, and "nobody found" is never a safe
- * answer from a lookup that did not finish.
+ * sent back as a `cursor`, which the SDK refuses. A `list` that throws, or a listing still going
+ * after `MAX_PAGES` pages, throws: a listing not read to the end says nothing, and "nobody found"
+ * is never a safe answer from a lookup that did not finish.
  */
 export async function* pages(
   session: SessionApi,
