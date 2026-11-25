@@ -5848,9 +5848,7 @@ def _no_valid_guard_reading(call: Call, store: Path, exc: GuardError) -> _Readin
     return _Reading([], everyone=refusal)
 
 
-def _read_store(
-    call: Call, store: Path, now: datetime, *, use_approvals: bool = True
-) -> _Reading:
+def _read_store(call: Call, store: Path, now: datetime, *, use_approvals: bool = True) -> _Reading:
     out = _reaches_out(call)
     try:
         enforced = load_targets(store)
