@@ -19,8 +19,9 @@ cannot be monkeypatched. From a plain shell the same run passes
 - `tests/test_approve.py` neutralises the installed hook of every store it makes, the way the
   memory tests already do: `neutral_hook` (now in `tests/memory/memory_support.py`) rewrites the
   hook copy's `PROC_ROOT = Path("/proc")` line to a folder without processes. The walk then reads
-  nothing and finds no ancestor role. The environment check is untouched, so the tests that set the
-  variable themselves (`monkeypatch.setenv(ROLE, ...)`) still see the refusal.
+  nothing and finds no ancestor role. The hook's environment check is untouched. Its role refusal,
+  the ancestor walk included, stays tested with a fake /proc in `tests/memory/test_pre_commit.py`;
+  `test_approve`'s own role tests are refused by `coven approve` before any commit.
 - `neutral_hook` moves to `tests/support.py`, shared by the memory tests and `test_approve.py`
   (its second user). `memory_support` imports it from there.
 - Only the hook copy inside a test's temporary store changes. Real stores, the shipped hook and

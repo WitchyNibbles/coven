@@ -23,8 +23,9 @@
 
 ## Review Focus
 
-1. A test that sets the role itself (`monkeypatch.setenv(ROLE, ...)`) must still be refused by the
-   hook: the neutral hook only blinds the ancestor walk, not the environment check.
+1. The hook's role refusal stays tested where it is (`tests/memory/test_pre_commit.py`, fake
+   /proc), and `test_approve`'s role tests (`monkeypatch.setenv(ROLE, ...)`) are still refused by
+   `coven approve` itself: the neutral hook only blinds the ancestor walk of test stores.
 2. Every store `test_approve.py` builds, in `make_store` or inline, gets the neutral hook before
    its first commit.
 3. The memory tests keep passing with `neutral_hook` imported from `tests/support.py`.
