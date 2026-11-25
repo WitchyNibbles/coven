@@ -36,6 +36,10 @@ symlink to `~`. The refusal just does not say so, and the PM cannot tell what to
   literal `cd ~/.claude`, a write to `~/.claude.json`) keeps today's text.
 - A relative name after an unfollowed `cd` (`cd $X && rm .claude.json`) is refused by another
   check (`_changes_zone_holder` via `_after_cd`) and keeps the plain refusal.
+- Only the user-folder zone gets the hint: it is the only zone that follows a literal `cd`.
+- The hint is not added when the session starts in a folder that holds the zone: a literal `cd`
+  would not help there. After `..`, `popd` or `cd ~` it may still show, and its absolute-glob
+  remedy still works there.
 - `docs/known-gaps.md` lists the case under "More false positives for the user folder".
 
 ## Not in scope

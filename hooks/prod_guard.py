@@ -5295,8 +5295,8 @@ def _bash_touches(call: Call, zone: _Zone, *, follow_cds: bool = False) -> bool:
     """A command run in the zone, or whose text reaches it. For a zone a session may read
     (`writes_only`), every word that only reads or runs a file is blanked first
     (`_read_spans`): what is left reaches it only by a write. With `follow_cds`, every `cd` of
-    the text counts as one the guard can follow: what is asked is whether a `cd` it cannot follow
-    is the only reason for a touch."""
+    the text counts as one the guard can follow, from a start folder that is clear of the zone: what
+    is asked is whether a `cd` it cannot follow is the only reason for a touch."""
     cwd = os.path.realpath(call.cwd)
     bash = _bash(call)
     if zone.writes_only and _only_reads_text(bash.command, zone, call.cwd):
@@ -5311,7 +5311,7 @@ def _bash_touches(call: Call, zone: _Zone, *, follow_cds: bool = False) -> bool:
         code, glob_code = _blank(code, spans), _blank(glob_code, spans)
     if zone.writes_inside and _odd_job_mention(code):
         return True  # CLAUDE_JOB_DIR used otherwise than as written out: where it goes is unknown
-    clear = follow_cds or (
+    clear = (follow_cds and _clear_folder(cwd, zone)) or (
         zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
     )
     where = _Where(call.cwd, cds_clear=clear)

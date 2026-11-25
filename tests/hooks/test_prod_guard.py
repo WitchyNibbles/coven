@@ -4401,6 +4401,17 @@ def test_a_refusal_with_another_cause_has_no_hint(run: Run, store: Path, command
     assert EXPECTED_CD_HINT not in proc.stderr
 
 
+def test_a_refusal_after_a_literal_cd_from_a_folder_that_holds_the_zone_has_no_hint(
+    run: Run, store: Path
+) -> None:
+    """The default cwd, `/tmp`, holds the test home: the literal `cd` is no help to say."""
+    command = "cd /srv/work/wt-x && uv run privacy-scan docs/x/*.json"
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to Claude Code's user folder" in proc.stderr
+    assert EXPECTED_CD_HINT not in proc.stderr
+
+
 def test_a_refusal_by_another_zone_after_a_cd_has_no_hint(run: Run, store: Path) -> None:
     """Only the user folder follows a literal `cd`: a literal one would not lift this refusal."""
     proc = run(bash("cd /srv/work/wt-x && rm -rf coven-mem*", WORK_DIR), role="pm")
