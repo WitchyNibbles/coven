@@ -43,6 +43,7 @@
       "package": "<P>/plugin/coven",
       "options": {
         "covenRoot": "<COVEN_ROOT>",
+        "keyEnv": "GATEWAY_KEY",
         "toolChoiceAuto": [
           "litellm"
         ],

@@ -97,10 +97,12 @@ def test_without_a_store_there_is_no_store_allow(tmp_path: Path):
 def test_plugin_options(tmp_path: Path):
     assert generate.plugin_options(LITELLM, tmp_path) == {
         "covenRoot": str(tmp_path),
+        "keyEnv": "GATEWAY_KEY",
         "toolChoiceAuto": ["litellm"],
         "guardTimeoutMs": 5000,
     }
     assert generate.plugin_options(OPENCODE, tmp_path)["toolChoiceAuto"] == []
+    assert generate.plugin_options(OPENCODE, tmp_path)["keyEnv"] == "OPENCODE_API_KEY"
     assert generate.GUARD_TIMEOUT_MS == 5000
 
 

@@ -1,4 +1,4 @@
-/** The runtime suite's checks: isolation, the `tool_choice` hook, doctor, deny-secrets and the SDD smoke. */
+/** The runtime suite's checks: isolation, the `tool_choice` hook, doctor, deny-secrets, the SDD smoke and the shell env. */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -11,7 +11,7 @@ import { withServer } from "../../harness/server.ts";
 import { snapshot, snapshotDiff } from "../../harness/snapshot.ts";
 import { makeWorld, setToolChoiceAuto } from "./profile.ts";
 import type { RuntimeWorld } from "./profile.ts";
-import { sddProblem, secretsProblem } from "./content.ts";
+import { sddProblem, secretsProblem, shellEnvProblem } from "./content.ts";
 import { runSession } from "./run.ts";
 import type { Session } from "./run.ts";
 
@@ -208,7 +208,7 @@ function afterRestore(
     : Promise.resolve(`no restored profile: ${restored}`);
 }
 
-/** Runs the five checks in order in `world`; `binary` is the 2.3.2 runtime they all use. */
+/** Runs the six checks in order in `world`; `binary` is the 2.3.2 runtime they all use. */
 export async function runtimeChecks(
   world: RuntimeWorld,
   binary: string,
@@ -234,6 +234,9 @@ export async function runtimeChecks(
   const sdd = await settle(() =>
     afterRestore(restored, () => sddProblem(used)),
   );
+  const shellEnv = await settle(() =>
+    afterRestore(restored, () => shellEnvProblem(used)),
+  );
   return [
     {
       title: "isolation: the 1.x install stays out and unchanged",
@@ -251,6 +254,11 @@ export async function runtimeChecks(
     {
       title: "sdd: two role subagents are awaited and each report arrives once",
       problem: sdd,
+    },
+    {
+      title:
+        "shell-env: a shell command sees neither the key nor the server password",
+      problem: shellEnv,
     },
   ];
 }

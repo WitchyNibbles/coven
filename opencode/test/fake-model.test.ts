@@ -108,3 +108,10 @@ await test("an unparsable body is a request with no tools", () => {
   assert.equal(recorded.tools, 0);
   assert.equal(recorded.hasToolChoice, false);
 });
+
+await test("the Authorization header is recorded as received, or as undefined", () => {
+  const sent = replyFor(body({}), "plain", talk, "Bearer dummy");
+  const bare = replyFor(body({}), "plain", talk);
+  assert.equal(sent.recorded.authorization, "Bearer dummy");
+  assert.equal(bare.recorded.authorization, undefined);
+});

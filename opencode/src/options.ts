@@ -3,6 +3,8 @@ import { isPlainObject, show } from "./join/fields.ts";
 
 export interface CovenOptions {
   covenRoot: string;
+  /** The name of the environment variable that holds the provider key; never its value. */
+  keyEnv: string;
   toolChoiceAuto: readonly string[];
   guardTimeoutMs: number;
 }
@@ -17,7 +19,13 @@ export class OptionsError extends Error {
 
 const MIN_GUARD_TIMEOUT_MS = 5000;
 const MAX_GUARD_TIMEOUT_MS = 600_000;
-const KNOWN = new Set(["covenRoot", "toolChoiceAuto", "guardTimeoutMs"]);
+const KNOWN = new Set([
+  "covenRoot",
+  "keyEnv",
+  "toolChoiceAuto",
+  "guardTimeoutMs",
+]);
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function parseRoot(raw: unknown): string {
   if (raw === undefined) {
@@ -26,6 +34,18 @@ function parseRoot(raw: unknown): string {
   if (typeof raw !== "string" || !isAbsolute(raw)) {
     throw new OptionsError(
       `covenRoot must be a non-empty absolute path, got ${show(raw)}`,
+    );
+  }
+  return raw;
+}
+
+function parseKeyEnv(raw: unknown): string {
+  if (raw === undefined) {
+    throw new OptionsError("keyEnv is missing; run coven opencode setup");
+  }
+  if (typeof raw !== "string" || !ENV_NAME.test(raw)) {
+    throw new OptionsError(
+      `keyEnv must be the name of an environment variable, got ${show(raw)}`,
     );
   }
   return raw;
@@ -81,6 +101,7 @@ export function parseOptions(raw: unknown): CovenOptions {
   }
   return {
     covenRoot: parseRoot(fields["covenRoot"]),
+    keyEnv: parseKeyEnv(fields["keyEnv"]),
     toolChoiceAuto: parseProviders(fields["toolChoiceAuto"]),
     guardTimeoutMs: parseTimeout(fields["guardTimeoutMs"]),
   };

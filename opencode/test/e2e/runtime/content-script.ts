@@ -4,6 +4,7 @@
  *   SECRETS        read the secrets file, then cat it through the shell, then stop
  *   SECRETS_READ   only the read
  *   SDD_LEAD       start the implementer and the reviewer, await both, then stop
+ *   SHELLENV       one shell command that prints whether the key and the password are set
  *   SDD_CHILD role=<r>   answer with that role's report marker at once
  *   anything else  the PING script
  */
@@ -27,6 +28,15 @@ const SECRETS = /\bSECRETS\b/;
 const SECRETS_READ = /\bSECRETS_READ\b/;
 const SDD_LEAD = /\bSDD_LEAD\b/;
 const SDD_CHILD = /\bSDD_CHILD role=(\w+)/;
+const SHELLENV = /\bSHELLENV\b/;
+
+/** The variables the shell must not see: the profile's key and the server password. */
+export const KEY_ENV = "COVEN_E2E_KEY";
+export const PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
+/** The key's dummy value, so the check can tell the provider still got it. */
+export const KEY_VALUE = "offline";
+/** The shell command of the SHELLENV part: it prints whether each variable is set, never a value. */
+const PRESENCE = `echo "KEY=[\${${KEY_ENV}:+set}] PW=[\${${PASSWORD_ENV}:+set}]"`;
 
 function readCall(): Reply {
   return {
@@ -37,6 +47,14 @@ function readCall(): Reply {
 
 function catCall(): Reply {
   const args = { command: `cat ${SECRETS_FILE}`, description: "show" };
+  return { kind: "calls", calls: [{ name: "shell", args }] };
+}
+
+function decideShellEnv(messages: readonly ChatMessage[]): Reply {
+  if (resultsOf(messages, "shell").length > 0) {
+    return { kind: "text", text: "SHELLENV DONE" };
+  }
+  const args = { command: `sh -c '${PRESENCE}'`, description: "presence" };
   return { kind: "calls", calls: [{ name: "shell", args }] };
 }
 
@@ -93,6 +111,9 @@ export const decideRuntime: Decide = (messages, toolNames) => {
   }
   if (SDD_LEAD.test(users)) {
     return decideLead(messages);
+  }
+  if (SHELLENV.test(users)) {
+    return decideShellEnv(messages);
   }
   if (SECRETS.test(users) || SECRETS_READ.test(users)) {
     return decideSecrets(messages, SECRETS_READ.test(users));

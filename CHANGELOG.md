@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The coven plugin for OpenCode removes the provider key variable and `OPENCODE_SERVER_PASSWORD`
+  from the environment of every shell command the model runs (OpenCode 2.3.2 passed the key on,
+  and in a served session the password too). The profile's `opencode.jsonc` gains the plugin option `keyEnv`,
+  so run `coven opencode setup` again.
 - `coven opencode install | setup | run | doctor`: coven's own OpenCode 2.3.2 in a profile of its
   own, apart from any OpenCode you use, with coven's plugin (`coven_ping`, `await_agents` and a
   `tool_choice` hook for LiteLLM and vLLM gateways) and an offline end-to-end run.

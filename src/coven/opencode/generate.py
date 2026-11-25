@@ -41,6 +41,7 @@ def plugin_source() -> Path:
 def plugin_options(profile: Profile, coven_root: Path) -> dict[str, object]:
     return {
         "covenRoot": str(coven_root),
+        "keyEnv": profile.key_env,
         "toolChoiceAuto": ["litellm"] if profile.preset == "litellm" else [],
         "guardTimeoutMs": GUARD_TIMEOUT_MS,
     }

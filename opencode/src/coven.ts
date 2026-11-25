@@ -4,6 +4,7 @@ import type { SpawnFn } from "./guard.ts";
 import { joinSetup } from "./plugin.ts";
 import { parseOptions } from "./options.ts";
 import { pingTool } from "./ping.ts";
+import { scrubShellEnv } from "./shell-env.ts";
 import { toolChoiceHook } from "./tool-choice.ts";
 
 export interface CovenDeps {
@@ -51,6 +52,9 @@ export async function covenSetup(
         ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
       }),
     );
+    // The registration is not kept: `shell.hook` is typed `Promise<unknown>` in context.ts, so
+    // nothing says it has a `dispose`. A scrub that outlives the plugin only removes more from the env.
+    await ctx.shell.hook("create.before", scrubShellEnv(options.keyEnv));
     const warned = new Set<string>();
     for (const providerID of options.toolChoiceAuto) {
       await ctx.session.hook("http.request", toolChoiceHook(deps.log, warned), {

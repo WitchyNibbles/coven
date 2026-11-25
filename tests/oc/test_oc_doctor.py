@@ -111,6 +111,23 @@ def test_other_edits_fail_config(good: Good, change: Change):
     assert results_by_name(good)["config"].status == "fail"
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda data: data["plugins"][0]["options"].pop("keyEnv"),
+        lambda data: data["plugins"][0]["options"].update(keyEnv="OTHER_KEY"),
+    ],
+    ids=["no-key-env", "other-key-env"],
+)
+def test_a_plugin_keyenv_that_differs_from_the_profile_fails_config(good: Good, change: Change):
+    """A config written before the shell scrub has no keyEnv; shell commands would see the key."""
+    edit_config(good, change)
+    found = results_by_name(good)["config"]
+    assert found.status == "fail"
+    assert "keyEnv" in found.detail
+    assert found.fix == "re-run coven opencode setup"
+
+
 def test_an_unparsable_config_fails_config(good: Good):
     (good.layout.config_dir / "opencode.jsonc").write_text("{")
     found = results_by_name(good)

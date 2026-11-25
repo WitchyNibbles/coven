@@ -9,7 +9,10 @@ OpenCode, its config and coven's plugin, apart from any OpenCode you already use
   `<subagent>` messages; the tool returns states;
 - the tool `coven_ping`, which reports the plugin's name, version and root. `coven opencode doctor`
   and the end-to-end run use it to prove the plugin loaded;
-- a `tool_choice` hook for gateways (see below).
+- a `tool_choice` hook for gateways (see below);
+- a `shell` hook that removes the profile's key variable (the plugin option `keyEnv`) and
+  `OPENCODE_SERVER_PASSWORD` from the environment of every shell command the model runs; OpenCode
+  itself keeps both.
 
 Setup also copies coven's skills, role agents, commands and routing (`opencode/content/`, generated
 from the Claude Code content by `python -m coven.opencode.content`) and the deny-secrets guard,
@@ -243,17 +246,20 @@ fake LiteLLM gateway on a free loopback port:
    the tool never runs.
 3. Doctor passes on the generated profile, fails on the `plugin` line when the plugin folder is
    removed, and names a skill planted in the profile's home.
+4. Deny-secrets: a `read` and a `cat` of a secrets file are refused.
+5. SDD: two role subagents are awaited and each report arrives once.
+6. Shell-env: a shell command sees neither the provider key nor the server password.
 
 The join suite follows. It takes about two and a half minutes, because one check waits a real 120
 seconds:
 
-4. `all` and `any` return with 3 parallel workers.
-5. Each worker report appears exactly once in the lead's history. This check passes without the
+7. `all` and `any` return with 3 parallel workers.
+8. Each worker report appears exactly once in the lead's history. This check passes without the
    plugin too, by design: it guards against the join adding a duplicate, not against a missing
    join.
-6. A worker that sleeps 120 s is waited for.
-7. A worker with its own worker: the wait ends after the final report.
-8. An unknown id is named in the tool result.
+9. A worker that sleeps 120 s is waited for.
+10. A worker with its own worker: the wait ends after the final report.
+11. An unknown id is named in the tool result.
 
 The join project under `test/e2e/project/` loads the plugin by re-exporting `src/plugin.ts`. The
 shared harness (fake model, loopback guards, snapshots, the `withServer` helper) is in
