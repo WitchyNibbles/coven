@@ -303,6 +303,48 @@ def test_with_a_port_file_that_cannot_be_read_every_loopback_port_is_refused(
     assert unreadable.call("Bash", "command", "curl https://example.com/") is None
 
 
+REFUSAL_WORDING = [
+    ("Read", "file_path", "<serve>/password"),
+    ("Read", "file_path", "/proc/1/environ"),
+    ("Read", "file_path", "<profile>/data/opencode/auth.json"),
+    ("Write", "file_path", "<profile>/config/opencode/opencode.jsonc"),
+    ("Write", "file_path", "<coven>/hooks/x.py"),
+    ("Bash", "command", "opencode db"),
+    ("Bash", "command", "echo x | xargs opencode db"),
+    ("Bash", "command", "GIT_PAGER=sh git log"),
+    ("Bash", "command", "git -c core.pager=sh log"),
+    ("Bash", "command", "ps eww"),
+    ("Bash", "command", "coven opencode serve stop"),
+    ("Bash", "command", "curl http://127.0.0.1:<port>/"),
+    ("Bash", "command", "cat /proc/self/environ"),
+]
+
+
+@pytest.mark.parametrize(("tool", "field", "value"), REFUSAL_WORDING)
+def test_a_refusal_speaks_of_opencode_sessions_not_of_a_pm(
+    world: World, tool: str, field: str, value: str
+) -> None:
+    # The guard also covers the GM's session, so no refusal calls its reader a PM.
+    text = world.call(tool, field, value)
+    assert text
+    assert "PM" not in text
+
+
+def test_the_checkout_rule_speaks_of_opencode_sessions_not_of_a_pm(world: World) -> None:
+    text = call_in(world, "touch x", world.coven)
+    assert text
+    assert "PM" not in text
+
+
+def test_an_unreadable_port_file_says_what_to_do(world: World) -> None:
+    unreadable = World(**{**world.__dict__, "port": guard.PortFile.UNREADABLE})
+    text = unreadable.call("Bash", "command", "curl http://127.0.0.1:5173/")
+    assert text
+    assert "the server's port file cannot be read" in text
+    assert "ask the user to restart `coven opencode serve`" in text
+    assert "PM" not in text
+
+
 def test_with_a_port_known_only_the_servers_port_is_refused(world: World) -> None:
     assert world.call("Bash", "command", "curl http://127.0.0.1:<port>/")
     assert world.call("Bash", "command", "curl http://127.0.0.1:5173/") is None
@@ -1562,7 +1604,7 @@ INTO_A_WORKTREE_ALLOWED = [
     "git -C .claude/worktrees/t1 status",
     "git -C .claude/worktrees/t1 commit -am x",
     "cd <coven>/.claude/worktrees/t1 && touch x",
-    "pushd .claude/worktrees/t1; npm test",
+    "pushd .claude/worktrees/t1 && npm test",
     "cd .claude/worktrees/t1 2>/dev/null && touch x",
     "cd .claude/worktrees/t1 && echo x > notes.md",
     "cd .claude/worktrees/t1 && printf x > notes.md",
@@ -1621,11 +1663,11 @@ def test_a_line_that_does_not_stay_in_a_worktree_follows_the_checkout_rule(
     assert call_in(world, world.fill(command), world.coven)
 
 
-# Task 7b, 2-4: the first move counts only when `&&`, `;` or a newline follows it and it writes no
+# Task 7b, 2-4: the first move counts only when `&&` or a newline follows it (not `;`: a `cd` that
+# fails at run time leaves the rest of the line in the working folder) and it writes no
 # file; `pushd +N`/`-N` and `$OLDPWD`, `~-`, `~N` as words are folders the guard cannot know.
 FIRST_MOVE_ALLOWED = [
     "cd proj && grep -r x .",
-    "cd proj; git log",
     "cd proj\ngrep -r x .",
     "cd proj 2>/dev/null && grep -r x .",
     "pushd proj && pushd +1 && ls",
@@ -1634,6 +1676,9 @@ FIRST_MOVE_ALLOWED = [
     "cd proj && ls ~- ~1",
 ]
 FIRST_MOVE_REFUSED = [
+    "cd proj; grep -r x .",
+    "cd proj; git log",
+    "pushd proj; grep -r x .",
     "cd proj | grep -r password",
     "cd proj & grep -r password",
     "cd proj || grep -r password",

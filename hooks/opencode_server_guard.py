@@ -29,11 +29,12 @@ What it refuses:
   diff|show|grep|blame`...) and nothing is redirected to a file. That covers the words of the
   line, the working folder and every folder a `cd` moves to (a bare `cd`, also with a redirection,
   is home), so `rg password` run in the folder that holds the profile is refused, unless the line
-  first moves to a literal folder that holds no closed place (`cd proj && ...`, `cd proj; ...`,
-  a lone `git -C proj ...`, and no file written by that first command); a `cd` whose folder cannot
-  be known (`cd -`, `cd ~-`, `cd $UNSET`, which bash runs as a bare `cd`, `pushd +1`) and a word
-  that names a folder only the shell remembers (`$OLDPWD`, `~-`, `~1`) are refused on a line with
-  a program that reads;
+  first moves to a literal folder that holds no closed place (`cd proj && ...`, a newline after
+  the `cd` but not `;`, which runs on when the `cd` fails, a lone `git -C proj ...`, and no file
+  written by that first command); a `cd` whose folder cannot be known (`cd -`, `cd ~-`,
+  `cd $UNSET`, which bash runs as a bare `cd`, `pushd +1`) and a word that names a folder
+  only the shell remembers (`$OLDPWD`, `~-`, `~1`) are refused on a line with a program that
+  reads;
 - an option or variable that makes git, man or rg run a command (`git -c`, `git bisect run`,
   `git rebase --exec`, `git submodule foreach`, `git difftool -x`, `man -P`, also in a bundle such
   as `-qx`, `rg --pre`, and `GIT_*=`, `PAGER=`, `EDITOR=` assigned before a program or exported),
@@ -222,17 +223,17 @@ def hit(path: Path, scope: Scope, mode: Mode, *, coven_open: bool = False) -> st
     """The rule a real path breaks, or None. With `coven_open` (a line that only reads, run in
     coven's checkout), coven's own files are open; the profile is not."""
     if path.is_relative_to(scope.serve):
-        return "the server's serve folder (its password) is closed to a PM"
+        return "the server's serve folder (its password) is closed to OpenCode sessions"
     if re.fullmatch(r"/proc/[^/]+(?:/task/[^/]+)?/environ", str(path)):
-        return "another process's environment is closed to a PM"
+        return "another process's environment is closed to OpenCode sessions"
     if mode is Mode.READ:
         if path.is_relative_to(scope.data):
-            return "the profile's data folder (credentials and sessions) is closed to a PM"
+            return "the profile's data folder (credentials and sessions) is closed to OpenCode sessions"
         return None
     in_profile = path.is_relative_to(scope.profile) and not path.is_relative_to(scope.tmp)
     in_coven = not coven_open and _in_coven_checkout(path, scope)
     if in_profile or in_coven:
-        return "the profile and coven's own files are protected from a PM"
+        return "the profile and coven's own files are protected from OpenCode sessions"
     return None
 
 
@@ -769,7 +770,7 @@ NULL_REDIRECTION = re.compile(r"(?:\d+|&)?>>?\s*/dev/null\b|\d*>&(?:\d+|-)")
 # The git options before `worktree add` that take a value, and the folder a PM may add one in.
 WORKTREE_ADD_VALUED = frozenset({"-b", "-B", "--reason"})
 COVEN_CHECKOUT_RULE = (
-    "coven's own checkout is read-only to a PM: run reading programs here, or add a worktree"
+    "coven's own checkout is read-only to OpenCode sessions: run reading programs here, or add a worktree"
     " with `git worktree add .claude/worktrees/<name>` and work under .claude/worktrees/"
 )
 WORKING_FOLDER_RULE = "the working folder holds coven's {}; cd into a project folder first"
@@ -1232,20 +1233,24 @@ def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -
     if OPENCODE_NAME.fullmatch(name):
         if tuple(command[1:]) not in ALLOWED_OPENCODE:
             raise RefusedError(
-                "`opencode` is closed to a PM but for `opencode --version` and `--help`"
+                "`opencode` is closed to OpenCode sessions but for `opencode --version` and `--help`"
             )
     elif name not in NEVER_EXECUTES and (
         _names_opencode([each for each in words if each not in strings], cwd)
         or _names_opencode([each for each in command if each not in strings], cwd)
     ):
-        raise RefusedError("a program that may run `opencode` is closed to a PM when it names it")
+        raise RefusedError(
+            "a program that may run `opencode` is closed to OpenCode sessions when it names it"
+        )
 
 
 def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     words = [names.expand(word) for word in argv.words]
     command = [names.expand(word) for word in argv.command]
     if _sets_a_running_variable(argv.prefix, command):
-        raise RefusedError("a variable that makes git or man run a command is closed to a PM")
+        raise RefusedError(
+            "a variable that makes git or man run a command is closed to OpenCode sessions"
+        )
     if not command:
         return
     program = command[0]
@@ -1255,14 +1260,18 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
         raise RefusedError("a command whose program is built at run time cannot be checked")
     name = _base(program)
     if _runs_other_programs(name, command[1:]):
-        raise RefusedError("an option that makes this program run a command is closed to a PM")
+        raise RefusedError(
+            "an option that makes this program run a command is closed to OpenCode sessions"
+        )
     _opencode_problem(words, command, cwd)
     if name == "ps" and _ps_prints_environments(command[1:]):
         raise RefusedError(
-            "`ps` options that print other processes' environments are closed to a PM"
+            "`ps` options that print other processes' environments are closed to OpenCode sessions"
         )
     if _coven_lifecycle(command):
-        raise RefusedError("`coven opencode` is closed to a PM but for `doctor` and `--help`")
+        raise RefusedError(
+            "`coven opencode` is closed to OpenCode sessions but for `doctor` and `--help`"
+        )
     if name in SHELL_READERS and any(word.endswith(PROCESS_SUBSTITUTION) for word in command[1:]):
         raise RefusedError("a shell that reads a process substitution cannot be checked")
     if argv.piped and name in SHELL_READERS:
@@ -1273,13 +1282,14 @@ def check_text(quoting: Quoting, scope: Scope) -> None:
     """The rules that read the text of a command or a path as it stands."""
     for variant in (quoting.text, *quoting.variants):
         if isinstance(scope.port, int) and re.search(rf"(?<!\d){scope.port}(?!\d)", variant):
-            raise RefusedError("the coven OpenCode server's port is closed to a PM")
+            raise RefusedError("the coven OpenCode server's port is closed to OpenCode sessions")
         if scope.port is PortFile.UNREADABLE and LOOPBACK_PORT.search(variant):
             raise RefusedError(
-                "a loopback port is closed to a PM while the server's port file cannot be read"
+                "the server's port file cannot be read; "
+                "ask the user to restart `coven opencode serve`"
             )
         if ENVIRON_TEXT.search(variant):
-            raise RefusedError("another process's environment is closed to a PM")
+            raise RefusedError("another process's environment is closed to OpenCode sessions")
 
 
 def _only_names_paths(commands: Sequence[Argv]) -> bool:
@@ -1404,7 +1414,7 @@ def _coven_checkout_allows(command: str, commands: Sequence[Argv], cwd: Path, sc
 
 def _first_folder(command: str, cwd: Path) -> Path | None:
     """The folder a line moves to before any other program runs: the literal, existing folder of
-    a first `cd <dir>` or `pushd <dir>` followed by `&&`, `;` or a newline (the rest of the line
+    a first `cd <dir>` or `pushd <dir>` followed by `&&` or a newline (the rest of the line
     runs there), or of `git -C <dir>` or `env -C <dir>` when that is the only command. None for
     any other line: one the scanner cannot follow, one whose first command writes a file or is a
     bare redirection (`> x; cd proj`: it is read from the working folder), and one with a subshell
@@ -1431,10 +1441,11 @@ def _first_folder(command: str, cwd: Path) -> Path | None:
 
 
 def _then_follows(rest: str) -> bool:
-    """Whether the text after a first command runs the next one only after it (`&&`, `;`, a
-    newline) or holds nothing: not beside it (`&`), into it (`|`) or in its place (`||`)."""
+    """Whether the text after a first command runs the next one only when it succeeded (`&&`,
+    a newline) or holds nothing. Not `;`: a `cd` that fails at run time leaves the rest of the
+    line in the working folder. Not beside it (`&`), into it (`|`) or in its place (`||`)."""
     rest = rest.lstrip(" \t")
-    return not rest or rest.startswith(("&&", ";", "\n"))
+    return not rest or rest.startswith(("&&", "\n"))
 
 
 def _chdir_value(arguments: Sequence[str]) -> str | None:
