@@ -258,3 +258,19 @@ def write_ts_project(
     (app / "node_modules").symlink_to(node_modules, target_is_directory=True)
     ignore = repo / ".gitignore"
     ignore.write_text((ignore.read_text() if ignore.is_file() else "") + "node_modules\n")
+
+
+PROC_LINE = 'PROC_ROOT = Path("/proc")'
+
+
+def neutral_hook(store_path: Path) -> None:
+    """Point the installed hook's ancestor walk at a folder without processes.
+
+    The real process tree may or may not run under a session role (a test run from a project
+    manager does), and a hook that git starts as a subprocess cannot be monkeypatched. The role
+    refusal itself is tested in process with a fake /proc.
+    """
+    hook = store_path / ".git" / "hooks" / "pre-commit"
+    text = hook.read_text(encoding="utf-8")
+    assert PROC_LINE in text
+    hook.write_text(text.replace(PROC_LINE, 'PROC_ROOT = Path("/nonexistent-coven-proc")'))
