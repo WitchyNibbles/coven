@@ -351,3 +351,89 @@ def test_blank_lines_are_not_counted(tmp_path):
     path = tmp_path / "t.jsonl"
     path.write_text("\n\n  \n", encoding="utf-8")
     assert read_transcript(path).lines == 0
+
+
+def test_absorbed_peer_message_is_received_with_its_sender(tmp_path):
+    path = (
+        TranscriptBuilder()
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T1)
+        .write(tmp_path / "t.jsonl")
+    )
+    facts = read_transcript(path)
+    assert [(r.sender, r.via, r.message.text, r.message.at) for r in facts.received] == [
+        ("gm-main", "peer", "ANSWER acme-1/2: b", T1)
+    ]
+    assert facts.received[0].message.head == Head("ANSWER", "acme-1/2")
+
+
+def test_same_msg_id_absorbed_first_counts_once(tmp_path):
+    path = (
+        TranscriptBuilder()
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T1, msg_id="m-1")
+        .peer("gm-main", "ANSWER acme-1/2: b", T2, msg_id="m-1")
+        .write(tmp_path / "t.jsonl")
+    )
+    assert [r.message.at for r in read_transcript(path).received] == [T1]
+
+
+def test_same_msg_id_delivered_first_counts_once(tmp_path):
+    path = (
+        TranscriptBuilder()
+        .peer("gm-main", "ANSWER acme-1/2: b", T1, msg_id="m-1")
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T2, msg_id="m-1")
+        .write(tmp_path / "t.jsonl")
+    )
+    assert [r.message.at for r in read_transcript(path).received] == [T1]
+
+
+def test_distinct_messages_without_msg_id_all_count(tmp_path):
+    path = (
+        TranscriptBuilder()
+        .peer("gm-main", "ANSWER acme-1/1: a", T0)
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T1)
+        .peer("gm-main", "APPROVED acme-1/3: c", T2)
+        .write(tmp_path / "t.jsonl")
+    )
+    assert [r.message.text for r in read_transcript(path).received] == [
+        "ANSWER acme-1/1: a",
+        "ANSWER acme-1/2: b",
+        "APPROVED acme-1/3: c",
+    ]
+
+
+@pytest.mark.parametrize("kind", ["human", "task-notification"])
+def test_absorbed_command_that_is_not_a_peer_message_is_not_received(tmp_path, kind):
+    path = (
+        TranscriptBuilder()
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T1, kind=kind)
+        .write(tmp_path / "t.jsonl")
+    )
+    assert read_transcript(path).received == []
+
+
+def test_absorbed_peer_without_name_or_body_is_ignored(tmp_path):
+    def attachment(origin: dict[str, object]) -> str:
+        queued = {"type": "queued_command", "commandMode": "prompt", "origin": origin}
+        return json.dumps({"type": "attachment", "timestamp": stamp(T1), "attachment": queued})
+
+    path = (
+        TranscriptBuilder()
+        .raw(attachment({"kind": "peer", "body": "ANSWER acme-1/2: b"}))
+        .raw(attachment({"kind": "peer", "name": "gm-main", "body": 3}))
+        .write(tmp_path / "t.jsonl")
+    )
+    facts = read_transcript(path)
+    assert facts.recognized == 2
+    assert facts.received == []
+
+
+def test_an_earlier_stamped_attachment_does_not_move_the_last_entry_back(tmp_path):
+    path = (
+        TranscriptBuilder()
+        .text("working", T2)
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T1)
+        .write(tmp_path / "t.jsonl")
+    )
+    facts = read_transcript(path)
+    assert facts.last_entry_at == T2
+    assert facts.received[0].message.at == T1

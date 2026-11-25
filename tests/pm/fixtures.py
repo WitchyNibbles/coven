@@ -61,14 +61,43 @@ class TranscriptBuilder:
             message={"role": "user", "content": text},
         )
 
-    def peer(self, sender: str, body: str, at: datetime | None) -> Self:
+    def peer(self, sender: str, body: str, at: datetime | None, msg_id: str | None = None) -> Self:
         wrapped = f'<cross-session-message from="{sender}">{body}</cross-session-message>'
+        origin = {"kind": "peer", "name": sender, "body": body}
+        if msg_id is not None:
+            origin["msg_id"] = msg_id
         return self._entry(
             "user",
             at,
-            origin={"kind": "peer", "name": sender, "body": body},
+            origin=origin,
             message={"role": "user", "content": wrapped},
         )
+
+    def absorbed_peer(
+        self,
+        sender: str,
+        body: str,
+        at: datetime | None,
+        msg_id: str | None = None,
+        kind: str = "peer",
+    ) -> Self:
+        """A message taken in mid-turn: a `queue-operation` removal, then its `queued_command`."""
+        source = "uds:/tmp/fake.sock"
+        attrs = f'from="{source}" from-name="{sender}" from-mode="bypass"'
+        wrapped = f"<cross-session-message {attrs}>\n{body}\n</cross-session-message>"
+        origin = {"kind": kind, "from": source, "name": sender, "fromMode": "bypass", "body": body}
+        if msg_id is not None:
+            origin["msg_id"] = msg_id
+        self._entry(
+            "queue-operation", at, operation="remove", reason="absorbed_mid_turn", content=wrapped
+        )
+        attachment = {
+            "type": "queued_command",
+            "prompt": wrapped,
+            "commandMode": "prompt",
+            "origin": origin,
+        }
+        return self._entry("attachment", at, attachment=attachment)
 
     def _send_call(self, to: str, message: str, at: datetime | None) -> str:
         """Write a SendMessage call; return its tool_use id."""
