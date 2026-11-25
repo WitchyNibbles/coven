@@ -1,43 +1,46 @@
 import type { SessionApi, SessionLike } from "../context.ts";
 import { isPlainObject } from "../join/fields.ts";
+import { pages } from "./busy.ts";
 import { isRoot } from "./role.ts";
 
-/** How many pages of `list` one lookup reads before it gives up. */
-export const MAX_PAGES = 50;
-
 /** The `coven` entry of a session's own metadata; `{}` when it has none. */
-function covenOf(session: SessionLike): Record<string, unknown> {
+export function covenOf(session: SessionLike): Record<string, unknown> {
   const coven = session.metadata?.["coven"];
   return isPlainObject(coven) ? coven : {};
 }
 
+export interface PmRoot {
+  session: SessionLike;
+  code: string;
+}
+
+/** The code a session's own metadata holds when it says `role: pm`; else `undefined`. */
+function pmCodeOf(session: SessionLike): string | undefined {
+  const coven = covenOf(session);
+  const code = coven["code"];
+  return coven["role"] === "pm" && typeof code === "string" ? code : undefined;
+}
+
 /**
- * The root sessions, live or archived, page by page. A `list` that throws, or a listing still
- * going after `MAX_PAGES` pages, throws: "nobody found" is never a safe answer from a lookup
- * that did not finish.
+ * The root sessions (no `parentID`), live or archived, that `match` accepts, in listing order and
+ * page by page: the next page is read only when the caller asks for one more. A `list` that
+ * throws, or a listing still going after `MAX_PAGES` pages, throws.
  */
-async function* roots(
+async function* rootsWhere(
   session: SessionApi,
+  match: (root: SessionLike) => boolean,
   archived = false,
-): AsyncGenerator<SessionLike> {
-  let cursor: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const listed = await session.list({
-      archived,
-      ...(cursor === undefined ? {} : { cursor }),
-    });
-    for (const found of listed.data) {
-      if (isRoot(found)) {
-        yield found;
-      }
-    }
-    cursor = listed.cursor.next;
-    if (cursor === undefined) {
-      return;
+): AsyncGenerator<SessionLike, undefined> {
+  for await (const found of pages(session, { archived })) {
+    if (isRoot(found) && match(found)) {
+      yield found;
     }
   }
-  throw new Error(`session list has more than ${MAX_PAGES} pages`);
+  return undefined;
 }
+
+const holdsGm = (session: SessionLike): boolean =>
+  covenOf(session)["role"] === "gm";
 
 /**
  * The GM: the live root session (no `parentID`) whose own metadata holds `role: gm`. A GM's
@@ -46,12 +49,7 @@ async function* roots(
 export async function findGm(
   session: SessionApi,
 ): Promise<SessionLike | undefined> {
-  for await (const found of roots(session)) {
-    if (covenOf(found)["role"] === "gm") {
-      return found;
-    }
-  }
-  return undefined;
+  return (await rootsWhere(session, holdsGm).next()).value;
 }
 
 /** Every live root session other than `exceptID` that holds `role: gm`: the caller's rivals. */
@@ -60,10 +58,12 @@ export async function findOtherGms(
   exceptID: string,
 ): Promise<SessionLike[]> {
   const others: SessionLike[] = [];
-  for await (const found of roots(session)) {
-    if (found.id !== exceptID && covenOf(found)["role"] === "gm") {
-      others.push(found);
-    }
+  const rivals = rootsWhere(
+    session,
+    (root) => root.id !== exceptID && holdsGm(root),
+  );
+  for await (const found of rivals) {
+    others.push(found);
   }
   return others;
 }
@@ -74,25 +74,14 @@ export async function findPm(
   code: string,
   archived = false,
 ): Promise<SessionLike | undefined> {
-  for await (const found of roots(session, archived)) {
-    const coven = covenOf(found);
-    if (coven["role"] === "pm" && coven["code"] === code) {
-      return found;
-    }
-  }
-  return undefined;
+  const holdsCode = (root: SessionLike): boolean => pmCodeOf(root) === code;
+  return (await rootsWhere(session, holdsCode, archived).next()).value;
 }
 
-/** Every live PM: its root session and the code its metadata holds. */
-export async function listPms(
-  session: SessionApi,
-): Promise<{ session: SessionLike; code: string }[]> {
-  const found: { session: SessionLike; code: string }[] = [];
-  for await (const each of roots(session)) {
-    const coven = covenOf(each);
-    if (coven["role"] === "pm" && typeof coven["code"] === "string") {
-      found.push({ session: each, code: coven["code"] });
-    }
-  }
-  return found;
+/** The PMs among sessions already listed: each root session whose metadata holds `role: pm` and a code. */
+export function pmRootsIn(sessions: readonly SessionLike[]): PmRoot[] {
+  return sessions.flatMap((each) => {
+    const code = pmCodeOf(each);
+    return isRoot(each) && code !== undefined ? [{ session: each, code }] : [];
+  });
 }

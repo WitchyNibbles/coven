@@ -1,7 +1,9 @@
 import type { SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
 import { isPlainObject, messageOf, show } from "../join/fields.ts";
-import { findPm, listPms } from "./find.ts";
+import { busyIds, listAll } from "./busy.ts";
+import { findPm, pmRootsIn } from "./find.ts";
+import type { PmRoot } from "./find.ts";
 import { sharedState } from "./state.ts";
 import { ToolError, asToolError, requireGm } from "./tools.ts";
 import type { ToolDeps } from "./tools.ts";
@@ -20,12 +22,13 @@ const HEAD_LIMIT = 200;
  * "nothing busy" and "no asks" are never what a failed read looks like.
  */
 export interface PmStatus {
-  /** Ids of the sessions with a turn running. */
-  active(): Promise<ReadonlySet<string>>;
-  /** Request ids of the asks waiting in the session's tree: always a bug for a PM. */
-  asks(sessionID: string): Promise<readonly string[]>;
-  /** How long the PM's longest-busy child has been busy, or undefined with no busy child. */
-  childBusyMs(sessionID: string): Promise<number | undefined>;
+  /** What one read of the session's tree shows: its waiting asks and its longest-busy child. */
+  watch(sessionID: string): Promise<{
+    /** Request ids of the asks waiting in the session's tree: always a bug for a PM. */
+    asks: readonly string[];
+    /** How long the longest-busy child has been busy, or undefined with no busy child. */
+    childBusyMs: number | undefined;
+  }>;
   /** The text of the session's last message, or undefined with none. */
   lastMessage(sessionID: string): Promise<string | undefined>;
 }
@@ -79,7 +82,7 @@ async function fetched(
 async function describe(
   deps: ListDeps,
   busy: ReadonlySet<string>,
-  pm: { session: SessionLike; code: string },
+  pm: PmRoot,
 ): Promise<string> {
   const { id } = pm.session;
   const who = `pm-${pm.code}  ${id}`;
@@ -101,10 +104,8 @@ async function describe(
 
 /** The waiting asks, a long-busy child and the last message of one PM, as line parts. */
 async function watched(status: PmStatus, id: string): Promise<string[]> {
-  const parts = (await status.asks(id)).map(
-    (ask) => `ASK WAITING (bug) ${ask}`,
-  );
-  const child = await status.childBusyMs(id);
+  const { asks, childBusyMs: child } = await status.watch(id);
+  const parts = asks.map((ask) => `ASK WAITING (bug) ${ask}`);
   if (child !== undefined && child >= CHILD_BUSY_SHOWN_MS) {
     parts.push(`child busy ${Math.floor(child / MINUTE_MS)}m`);
   }
@@ -128,12 +129,12 @@ export function pmListTool(deps: ListDeps): ToolDefinition {
     execute: (_raw, context) =>
       asToolError(async () => {
         await requireGm(deps, context.sessionID, "coven_pm_list");
-        const pms = await listPms(deps.session);
-        const busy = await deps.status.active();
-        const lines = [];
-        for (const pm of pms) {
-          lines.push(await describe(deps, busy, pm));
-        }
+        // one listing gives both the PM roots and who is working
+        const live = await listAll(deps.session, { archived: false });
+        const busy = busyIds(live);
+        const lines = await Promise.all(
+          pmRootsIn(live).map((pm) => describe(deps, busy, pm)),
+        );
         return {
           content: lines.length === 0 ? "no PM sessions" : lines.join("\n"),
         };

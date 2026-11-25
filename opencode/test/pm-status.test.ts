@@ -41,39 +41,19 @@ function rig(extra: readonly SessionLike[] = []): Rig {
   return { world, asks, texts, status };
 }
 
-await test("active holds the sessions whose turn runs, children included", async () => {
+/** Five idle children first, so the busy one sits at list index 5 while its stamp is small. */
+const FILLER: readonly SessionLike[] = ["a", "b", "c", "d", "e"].map((id) => ({
+  id: `idle-${id}`,
+  parentID: "pm1",
+  time: { busy: 1, idle: 2 },
+}));
+
+await test("watch counts a child whose busy stamp is smaller than its list index", async () => {
   const { status } = rig([
-    { id: "kid1", parentID: "pm1", time: { busy: 5, idle: 3 } },
-    { id: "kid2", parentID: "pm1", time: { busy: 5, idle: 9 } },
-    { id: "rest", time: { busy: 5, idle: 5 } },
+    ...FILLER,
+    { id: "late", parentID: "pm1", time: { busy: 3, idle: 1 } },
   ]);
-  assert.deepEqual([...(await status.active())].sort(), ["kid1", "pm1"]);
-});
-
-await test("active pages through the whole list", async () => {
-  const { world, status } = rig([
-    { id: "kid1", parentID: "pm1", time: { busy: 5 } },
-    { id: "kid2", parentID: "pm1", time: { busy: 5 } },
-  ]);
-  world.pageSize = 1;
-  assert.deepEqual([...(await status.active())].sort(), [
-    "kid1",
-    "kid2",
-    "pm1",
-  ]);
-  assert.ok(world.pages >= 4);
-});
-
-await test("active rejects when the list cannot be read", async () => {
-  const { world, status } = rig();
-  world.failList = true;
-  await assert.rejects(status.active(), /list down/);
-});
-
-await test("active rejects on a list that never ends", async () => {
-  const { world, status } = rig();
-  world.endless = true;
-  await assert.rejects(status.active(), /more than \d+ pages/);
+  assert.equal((await status.watch("pm1")).childBusyMs, NOW - 3);
 });
 
 await test("childBusyMs is how long the longest-busy child has been busy", async () => {
@@ -83,27 +63,27 @@ await test("childBusyMs is how long the longest-busy child has been busy", async
     { id: "kid3", parentID: "kid1", time: { busy: NOW - 40 * MINUTE } },
     { id: "kid4", parentID: "pm1", time: { busy: 1, idle: 2 } },
   ]);
-  assert.equal(await status.childBusyMs("pm1"), 40 * MINUTE);
+  assert.equal((await status.watch("pm1")).childBusyMs, 40 * MINUTE);
 });
 
 await test("childBusyMs is undefined with no busy child", async () => {
   const { status } = rig([
     { id: "kid1", parentID: "pm1", time: { busy: 1, idle: 2 } },
   ]);
-  assert.equal(await status.childBusyMs("pm1"), undefined);
+  assert.equal((await status.watch("pm1")).childBusyMs, undefined);
 });
 
 await test("childBusyMs rejects when the children cannot be read", async () => {
   const { world, status } = rig();
   world.failList = true;
-  await assert.rejects(status.childBusyMs("pm1"), /list down/);
+  await assert.rejects(status.watch("pm1"), /list down/);
 });
 
 await test("asks holds the request ids waiting in the pm and below it", async () => {
   const { asks, status } = rig([{ id: "kid1", parentID: "pm1" }]);
   asks.set("pm1", [{ id: "per_1" }]);
   asks.set("kid1", [{ requestID: "per_2" }, { id: "per_3" }, { nothing: 1 }]);
-  assert.deepEqual(await status.asks("pm1"), [
+  assert.deepEqual((await status.watch("pm1")).asks, [
     "per_1",
     "per_2",
     "per_3",
@@ -119,7 +99,7 @@ await test("asks takes the first string among id and requestID", async () => {
     { id: "per_6", requestID: "per_7" },
     { id: "", requestID: 9 },
   ]);
-  assert.deepEqual(await status.asks("pm1"), [
+  assert.deepEqual((await status.watch("pm1")).asks, [
     "per_4",
     "per_5",
     "per_6",
@@ -129,7 +109,7 @@ await test("asks takes the first string among id and requestID", async () => {
 
 await test("asks is empty when nothing waits", async () => {
   const { status } = rig([{ id: "kid1", parentID: "pm1" }]);
-  assert.deepEqual(await status.asks("pm1"), []);
+  assert.deepEqual((await status.watch("pm1")).asks, []);
 });
 
 await test("asks rejects when an ask list or the tree cannot be read", async () => {
@@ -140,9 +120,9 @@ await test("asks rejects when an ask list or the tree cannot be read", async () 
     lastText: () => Promise.resolve(""),
     now: () => NOW,
   });
-  await assert.rejects(broken.asks("pm1"), /permission down/);
+  await assert.rejects(broken.watch("pm1"), /permission down/);
   world.failList = true;
-  await assert.rejects(status.asks("pm1"), /list down/);
+  await assert.rejects(status.watch("pm1"), /list down/);
 });
 
 await test("asks rejects on an answer that is not a list", async () => {
@@ -153,7 +133,7 @@ await test("asks rejects on an answer that is not a list", async () => {
     lastText: () => Promise.resolve(""),
     now: () => NOW,
   });
-  await assert.rejects(odd.asks("pm1"), /not a list/);
+  await assert.rejects(odd.watch("pm1"), /not a list/);
 });
 
 await test("lastMessage is the last assistant text, or undefined with none", async () => {

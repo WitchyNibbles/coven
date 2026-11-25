@@ -105,9 +105,7 @@ export const SECRET: readonly PermissionRule[] = [
 /** A status source with nothing busy, nothing waiting, nothing to say. */
 export function quietStatus(over: Partial<PmStatus> = {}): PmStatus {
   return {
-    active: () => Promise.resolve(new Set()),
-    asks: () => Promise.resolve([]),
-    childBusyMs: () => Promise.resolve(undefined),
+    watch: () => Promise.resolve({ asks: [], childBusyMs: undefined }),
     lastMessage: () => Promise.resolve(undefined),
     ...over,
   };

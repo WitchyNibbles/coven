@@ -1,6 +1,6 @@
 import type { SessionApi } from "../context.ts";
 import { isPlainObject } from "../join/fields.ts";
-import { descendants, isBusy, listAll } from "./busy.ts";
+import { descendants, isBusy } from "./busy.ts";
 import type { PmStatus } from "./manage.ts";
 
 export interface StatusDeps {
@@ -31,31 +31,29 @@ function requestId(ask: unknown): string {
  * asked. Every method rejects when a read fails; a resolved value always means "known".
  */
 export function serverStatus(deps: StatusDeps): PmStatus {
+  /** The request ids waiting in each of the sessions. */
+  async function waitingIn(sessionIDs: readonly string[]): Promise<string[]> {
+    const ids: string[] = [];
+    for (const id of sessionIDs) {
+      const waiting = await deps.permission.list({ sessionID: id });
+      if (!Array.isArray(waiting)) {
+        throw new Error(`the ask list of ${id} is not a list`);
+      }
+      ids.push(...waiting.map(requestId));
+    }
+    return ids;
+  }
   return {
-    async active() {
-      const live = await listAll(deps.session, { archived: false });
-      return new Set(live.filter(isBusy).map((session) => session.id));
-    },
-    async asks(sessionID) {
-      const tree = [sessionID];
-      for (const child of await descendants(deps.session, sessionID)) {
-        tree.push(child.id);
-      }
-      const ids: string[] = [];
-      for (const id of tree) {
-        const waiting = await deps.permission.list({ sessionID: id });
-        if (!Array.isArray(waiting)) {
-          throw new Error(`the ask list of ${id} is not a list`);
-        }
-        ids.push(...waiting.map(requestId));
-      }
-      return ids;
-    },
-    async childBusyMs(sessionID) {
-      const since = (await descendants(deps.session, sessionID))
-        .filter(isBusy)
+    async watch(sessionID) {
+      const tree = await descendants(deps.session, sessionID);
+      const since = tree
+        .filter((child) => isBusy(child))
         .flatMap((child) => child.time?.busy ?? []);
-      return since.length === 0 ? undefined : deps.now() - Math.min(...since);
+      return {
+        asks: await waitingIn([sessionID, ...tree.map((child) => child.id)]),
+        childBusyMs:
+          since.length === 0 ? undefined : deps.now() - Math.min(...since),
+      };
     },
     async lastMessage(sessionID) {
       const text = await deps.lastText(sessionID);

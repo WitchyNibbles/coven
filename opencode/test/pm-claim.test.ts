@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { SessionLike } from "../src/context.ts";
-import { MAX_PAGES, findGm } from "../src/pm/find.ts";
+import { MAX_PAGES } from "../src/pm/busy.ts";
+import { findGm } from "../src/pm/find.ts";
 import { resolveRole } from "../src/pm/role.ts";
 import { gmClaimTool, sendTool } from "../src/pm/tools.ts";
 import { coven, fakeSession } from "./pm-fake-session.ts";

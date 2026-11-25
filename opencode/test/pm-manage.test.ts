@@ -47,7 +47,7 @@ await test("list shows code, id, busy/idle, outcome, ASK WAITING (bug) with requ
   const world = gmWorld([
     GM,
     PM1,
-    { id: "pm2", metadata: coven("pm", "beta") },
+    { id: "pm2", metadata: coven("pm", "beta"), time: { busy: 5 } },
     { id: "pm3", metadata: coven("pm", "gamma") },
     { id: "kid", parentID: "pm1", metadata: coven("pm", "acme-1") },
     { id: "old", metadata: coven("former-gm") },
@@ -60,10 +60,11 @@ await test("list shows code, id, busy/idle, outcome, ASK WAITING (bug) with requ
   const out = await list(
     world,
     quietStatus({
-      active: () => Promise.resolve(new Set(["pm2"])),
-      asks: (id) => Promise.resolve(id === "pm2" ? ["req-9", "req-10"] : []),
-      childBusyMs: (id) =>
-        Promise.resolve(id === "pm1" ? 30 * MINUTE : 5 * MINUTE),
+      watch: (id) =>
+        Promise.resolve({
+          asks: id === "pm2" ? ["req-9", "req-10"] : [],
+          childBusyMs: id === "pm1" ? 30 * MINUTE : 5 * MINUTE,
+        }),
       lastMessage: (id) =>
         Promise.resolve(
           id === "pm1" ? "DONE acme-1/1 merged\nmore" : undefined,
@@ -93,7 +94,7 @@ await test("list is a tool error when the listing or a status read fails", async
   await assert.rejects(list(down), ToolError);
   const world = gmWorld([GM, PM1]);
   const failing = quietStatus({
-    asks: () => Promise.reject(new Error("no asks")),
+    watch: () => Promise.reject(new Error("no asks")),
   });
   await assert.rejects(
     list(world, failing),
@@ -226,21 +227,62 @@ await test("a GM tool is refused with the GM-only reason", async () => {
   );
 });
 
-await test("list reads the busy set once", async () => {
+await test("list reads the live sessions once, for the PM roots and the busy set together", async () => {
   const world = gmWorld([
     GM,
     PM1,
-    { id: "pm2", metadata: coven("pm", "beta") },
+    { id: "pm2", metadata: coven("pm", "beta"), time: { busy: 5 } },
   ]);
-  let reads = 0;
-  await list(
-    world,
-    quietStatus({
-      active: () => {
-        reads += 1;
-        return Promise.resolve(new Set<string>());
-      },
-    }),
+  const out = await list(world);
+  assert.equal(world.calls.filter((each) => each === "list").length, 1);
+  assert.deepEqual(out.split("\n"), [
+    "pm-acme-1  pm1  idle  last succeeded",
+    "pm-beta  pm2  busy",
+  ]);
+});
+
+await test(
+  "list describes the PMs together and keeps them in listing order",
+  { timeout: 2000 },
+  async () => {
+    const world = gmWorld([
+      GM,
+      { id: "pm1", metadata: coven("pm", "one") },
+      { id: "pm2", metadata: coven("pm", "two") },
+      { id: "pm3", metadata: coven("pm", "three") },
+    ]);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((done) => {
+      release = done;
+    });
+    const out = await list(
+      world,
+      quietStatus({
+        lastMessage: async (id) => {
+          // the first PM waits for the last one to be asked: sequential reads would never finish
+          if (id === "pm3") {
+            release();
+          } else if (id === "pm1") {
+            await gate;
+          }
+          return `said by ${id}`;
+        },
+      }),
+    );
+    assert.deepEqual(out.split("\n"), [
+      'pm-one  pm1  idle  "said by pm1"',
+      'pm-two  pm2  idle  "said by pm2"',
+      'pm-three  pm3  idle  "said by pm3"',
+    ]);
+  },
+);
+
+await test("list is a tool error when the live listing never ends", async () => {
+  const world = gmWorld([GM, PM1]);
+  world.endless = true;
+  await assert.rejects(
+    list(world),
+    (error: unknown) =>
+      error instanceof ToolError && /more than \d+ pages/.test(error.message),
   );
-  assert.equal(reads, 1);
 });

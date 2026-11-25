@@ -1,7 +1,7 @@
 import type { SessionApi, SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
 import { isPlainObject, messageOf, show } from "../join/fields.ts";
-import { findGm, findOtherGms, findPm } from "./find.ts";
+import { covenOf, findGm, findOtherGms, findPm } from "./find.ts";
 import { GM_PREFIXES, PM_PREFIXES, headPrefix } from "./prefixes.ts";
 import { isRoot } from "./role.ts";
 import type { Role, RoleInfo, resolveRole } from "./role.ts";
@@ -21,11 +21,7 @@ const NO_GM = "no GM session; end the turn with the full message";
 
 /** The session's metadata with `coven.role` set, every other entry kept. */
 function withRole(session: SessionLike, role: Role): Record<string, unknown> {
-  const coven = session.metadata?.["coven"];
-  return {
-    ...session.metadata,
-    coven: { ...(isPlainObject(coven) ? coven : {}), role },
-  };
+  return { ...session.metadata, coven: { ...covenOf(session), role } };
 }
 
 async function caller(

@@ -96,3 +96,31 @@ await test("only a real not-found is missing: a status decides alone, else the e
     assert.match(verdict(id) ?? "", /^status unavailable: /, id);
   }
 });
+
+await test("list calls a PM busy when its busy stamp is smaller than its list index", async () => {
+  const idle = ["a", "b", "c", "d", "e"].map((id) => ({
+    id: `idle-${id}`,
+    time: { busy: 1, idle: 2 },
+  }));
+  const world = gmWorld([
+    GM,
+    ...idle,
+    { id: "pm1", metadata: coven("pm", "one"), time: { busy: 3, idle: 1 } },
+  ]);
+  assert.equal(await list(world), "pm-one  pm1  busy");
+});
+
+await test("list reads the busy set and the PMs across pages, and fails on a listing that never ends", async () => {
+  const world = gmWorld([
+    GM,
+    { id: "pm1", metadata: coven("pm", "one"), time: { busy: 5 } },
+    { id: "pm2", metadata: coven("pm", "two") },
+  ]);
+  world.pageSize = 1;
+  assert.deepEqual((await list(world)).split("\n"), [
+    "pm-one  pm1  busy",
+    "pm-two  pm2  idle",
+  ]);
+  world.endless = true;
+  await assert.rejects(list(world), /more than \d+ pages/);
+});
