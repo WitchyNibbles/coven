@@ -83,7 +83,7 @@ def test_manifests_parse_and_match_docs_fields() -> None:
     plugin = load(PLUGIN_JSON)
     assert set(plugin) <= PLUGIN_KEYS
     assert plugin["name"] == "coven"
-    assert plugin["version"] == "0.1.0"
+    assert plugin["version"] == "0.2.0"
     assert plugin["description"].strip()
     assert plugin["author"] == {"name": "WitchyNibbles"}
     assert plugin["license"] == "MIT"

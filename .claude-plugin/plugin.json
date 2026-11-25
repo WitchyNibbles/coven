@@ -1,6 +1,6 @@
 {
   "name": "coven",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run work through a general manager and background project managers, with shared memory, routing instructions and a code standard.",
   "author": { "name": "WitchyNibbles" },
   "license": "MIT",
