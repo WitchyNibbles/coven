@@ -131,6 +131,18 @@ def test_no_profile_and_no_flags_fails(home: Path, capsys: pytest.CaptureFixture
     assert not home.exists()
 
 
+@pytest.mark.parametrize("command", [["serve", "start"], ["gm"]], ids=["serve-start", "gm"])
+def test_a_command_that_needs_the_server_fails_without_a_profile(
+    home: Path, command: list[str], capsys: pytest.CaptureFixture[str]
+):
+    assert cli.main(["opencode", *command]) == 1
+    assert (
+        capsys.readouterr().err.strip()
+        == "coven: no profile yet; run coven opencode setup --preset ..."
+    )
+    assert not home.exists()
+
+
 @pytest.mark.parametrize(
     "flags",
     [

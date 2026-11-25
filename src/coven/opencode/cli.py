@@ -17,6 +17,7 @@ from coven.opencode.profile import (
     ASSUMED_CONTEXT,
     PINNED_VERSION,
     ROLES,
+    Layout,
     OpencodeError,
     Profile,
     layout,
@@ -29,15 +30,20 @@ type ExecFn = Callable[[str, list[str], dict[str, str]], object]
 FLAGS_NEED_PRESET = "pass --preset with the other flags, or no flags to regenerate"
 
 
+def _profile_at(home: Layout) -> Profile:
+    """The saved profile (Raise OpencodeError when setup has not run)."""
+    saved = load_profile(home)
+    if saved is None:
+        raise OpencodeError(runtime.NO_PROFILE)
+    return saved
+
+
 def _chosen_profile(args: argparse.Namespace) -> Profile:
     """The profile the flags describe, or the saved one when there are no flags."""
     if args.preset is None:
         if args.base_url is not None or args.key_env is not None or args.model or args.limit:
             raise OpencodeError(FLAGS_NEED_PRESET)
-        saved = load_profile(layout())
-        if saved is None:
-            raise OpencodeError(runtime.NO_PROFILE)
-        return saved
+        return _profile_at(layout())
     return make_profile(args.preset, args.base_url, args.key_env, args.model, args.limit)
 
 
@@ -110,9 +116,7 @@ PLUGIN_INACTIVE = "coven's plugin is not active on the server"
 def _attach_target() -> tuple[str, str]:
     """The URL and password of the coven server, started first when none runs."""
     home = layout()
-    profile = load_profile(home)
-    if profile is None:
-        raise OpencodeError(runtime.NO_PROFILE)
+    profile = _profile_at(home)
     info = serve.running(home) or serve.start(home, profile)
     return f"http://{serve.HOST}:{info.port}", serve.read_password(home)
 
@@ -150,10 +154,7 @@ def run_doctor_command(_args: argparse.Namespace) -> int:
 
 def run_serve_start(args: argparse.Namespace) -> int:
     home = layout()
-    profile = load_profile(home)
-    if profile is None:
-        raise OpencodeError(runtime.NO_PROFILE)
-    info = serve.start(home, profile, args.port)
+    info = serve.start(home, _profile_at(home), args.port)
     print(f"running pid {info.pid} port {info.port}")
     return 0
 
