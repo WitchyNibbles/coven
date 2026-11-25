@@ -42,6 +42,7 @@ PM_ROLE: Final = "pm"
 MORE_SESSIONS: Final = "more sessions exist; this list may be incomplete"
 STARTING: Final = "a server is starting"
 UNKNOWN_ASK: Final = "unknown id"
+ACTIVE_PATH: Final = "/api/session/active"
 
 
 class ServeError(OpencodeError):
@@ -83,8 +84,13 @@ def _read_int(path: Path) -> int | None:
 
 
 def _is_server(pid: int, layout: Layout) -> bool:
-    """Whether `pid` is a live process running the runtime's binary (a gone or reused pid is not)."""
-    return os.path.realpath(f"/proc/{pid}/exe") == str(server_exe(layout))
+    """Whether `pid` is a live process running the runtime's binary (a gone or reused pid is not;
+    nor is a zombie, a dead child nobody reaped yet, whose `/proc/<pid>/exe` cannot be read)."""
+    expected = str(server_exe(layout))
+    try:
+        return os.path.realpath(f"/proc/{pid}/exe") == expected
+    except OSError:
+        return False
 
 
 def running(layout: Layout) -> ServerInfo | None:
@@ -342,6 +348,15 @@ def _pm_line(code: str, session: dict[str, object], busy: bool, asks: list[str])
     return "  ".join(parts)
 
 
+def _active_ids(payload: object, path: str) -> set[str]:
+    """The ids of the sessions whose turn runs: 2.3.2 answers `{"data": {<id>: {"type": ...}}}`,
+    an empty object while all rest (Raise OpencodeError for any other shape)."""
+    data = _sub(payload, "data")
+    if not isinstance(data, dict):
+        raise OpencodeError(f"GET {path} returned no data object")
+    return set(data)
+
+
 def _pm_lines(info: ServerInfo, password: str) -> list[str]:
     def fetch(path: str) -> object:
         return http_json("GET", f"http://{HOST}:{info.port}{path}", password)
@@ -349,7 +364,7 @@ def _pm_lines(info: ServerInfo, password: str) -> list[str]:
     def get(path: str) -> list[dict[str, object]]:
         return data_items(fetch(path), path)
 
-    busy = {item.get("id") for item in get("/api/session/active")}
+    busy = _active_ids(fetch(ACTIVE_PATH), ACTIVE_PATH)
     listing = fetch("/api/session")
     lines = []
     for session in data_items(listing, "/api/session"):
