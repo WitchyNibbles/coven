@@ -12,15 +12,18 @@ function covenOf(session: SessionLike): Record<string, unknown> {
 }
 
 /**
- * The live root sessions, page by page. A `list` that throws, or a listing still going after
- * `MAX_PAGES` pages, throws: "nobody found" is never a safe answer from a lookup that did not
- * finish.
+ * The root sessions, live or archived, page by page. A `list` that throws, or a listing still
+ * going after `MAX_PAGES` pages, throws: "nobody found" is never a safe answer from a lookup
+ * that did not finish.
  */
-async function* roots(session: SessionApi): AsyncGenerator<SessionLike> {
+export async function* roots(
+  session: SessionApi,
+  archived = false,
+): AsyncGenerator<SessionLike> {
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const listed = await session.list({
-      archived: false,
+      archived,
       ...(cursor === undefined ? {} : { cursor }),
     });
     for (const found of listed.data) {
@@ -65,16 +68,31 @@ export async function findOtherGms(
   return others;
 }
 
-/** The PM with this code: a live root session whose own metadata holds `role: pm` and the code. */
+/** The PM with this code: a root session whose own metadata holds `role: pm` and the code. */
 export async function findPm(
   session: SessionApi,
   code: string,
+  archived = false,
 ): Promise<SessionLike | undefined> {
-  for await (const found of roots(session)) {
+  for await (const found of roots(session, archived)) {
     const coven = covenOf(found);
     if (coven["role"] === "pm" && coven["code"] === code) {
       return found;
     }
   }
   return undefined;
+}
+
+/** Every live PM: its root session and the code its metadata holds. */
+export async function listPms(
+  session: SessionApi,
+): Promise<{ session: SessionLike; code: string }[]> {
+  const found: { session: SessionLike; code: string }[] = [];
+  for await (const each of roots(session)) {
+    const coven = covenOf(each);
+    if (coven["role"] === "pm" && typeof coven["code"] === "string") {
+      found.push({ session: each, code: coven["code"] });
+    }
+  }
+  return found;
 }

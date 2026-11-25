@@ -1,6 +1,6 @@
 import type { SessionApi, SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
-import { isPlainObject, show } from "../join/fields.ts";
+import { isPlainObject, messageOf, show } from "../join/fields.ts";
 import { findGm, findOtherGms, findPm } from "./find.ts";
 import { GM_PREFIXES, PM_PREFIXES, headPrefix } from "./prefixes.ts";
 import { isRoot } from "./role.ts";
@@ -36,6 +36,30 @@ async function caller(
     deps.session.get({ sessionID: id });
   const me = await get(sessionID);
   return { me, role: await deps.resolve(sessionID, get) };
+}
+
+/**
+ * Throws unless the caller is the GM: a resolved role of exactly `gm` on a root session. A
+ * failed lookup, a PM, a former GM, a child of the GM and a session with no role are refused.
+ */
+export async function requireGm(
+  deps: ToolDeps,
+  sessionID: string,
+  tool: string,
+): Promise<void> {
+  const { me, role } = await caller(deps, sessionID);
+  if (role?.role !== "gm" || !isRoot(me)) {
+    throw new ToolError(`only the GM can use ${tool}`);
+  }
+}
+
+/** Runs a tool body; whatever it throws, the model reads it as the tool's error. */
+export async function asToolError<T>(body: () => Promise<T>): Promise<T> {
+  try {
+    return await body();
+  } catch (error) {
+    throw error instanceof ToolError ? error : new ToolError(messageOf(error));
+  }
 }
 
 export function gmClaimTool(deps: ToolDeps): ToolDefinition {

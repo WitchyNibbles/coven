@@ -16,6 +16,8 @@ export interface SessionLike {
   location?: { directory: string; workspaceID?: string };
   /** `{coven: {role, code?}}` once coven has marked the session; missing before that. */
   metadata?: Record<string, unknown>;
+  /** How the session's last turn ended (`succeeded`, `failed`, ...), as `GET /api/session` gives it. */
+  outcome?: string;
 }
 
 /** What `ctx.session.create` takes (checked live in Task 0, step 6). */
