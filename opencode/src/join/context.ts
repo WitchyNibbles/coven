@@ -5,7 +5,8 @@
 
 export interface SessionInfo {
   id: string;
-  parentID?: string;
+  /** Missing or `null` for a root session. */
+  parentID?: string | null;
   title?: string;
   directory?: string;
   /** `{coven: {role, code?}}` once coven has marked the session (read by `pm/role.ts`). */

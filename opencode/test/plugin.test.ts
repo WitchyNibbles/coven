@@ -4,8 +4,10 @@ import { setImmediate as tick } from "node:timers/promises";
 
 import { EVENT_TYPES } from "../src/join/events.ts";
 import { inputSchema, InputError } from "../src/join/input.ts";
+import { JoinRecord } from "../src/join/record.ts";
 import { NotAChildError, UnknownSessionError } from "../src/join/wait.ts";
 import plugin from "../src/index.ts";
+import { Children } from "../src/plugin.ts";
 import {
   KID,
   LEAD,
@@ -197,6 +199,20 @@ await test("a session without a parent is not a child", async () => {
   await p.emit(started(LEAD));
   assert.deepEqual(p.reminder(LEAD), []);
   p.cleanup();
+});
+
+await test("a session with a null parent is not linked as a child of null", async () => {
+  const record = new JoinRecord(() => 1);
+  const children = new Children(
+    () => Promise.resolve({ id: "ses_root", parentID: null }),
+    record,
+  );
+  record.observe({ kind: "started", sessionID: "ses_root" });
+  children.link("ses_root");
+  await tick();
+  record.observe({ kind: "ended", sessionID: "ses_root" });
+  // Unlinked, the session's end is seen from any parent; linked to null, from none.
+  assert.equal(record.status(LEAD, "ses_root").endedAt, 1);
 });
 
 await test("a child without a title is listed by its id", async () => {

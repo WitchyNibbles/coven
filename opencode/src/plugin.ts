@@ -24,15 +24,15 @@ export interface Deps {
 
 /**
  * Looks each session up once while the record holds it, failures included, to learn which ones
- * are children.
+ * are children. A session with no parent, missing or `null`, is a root and is not linked.
  */
-class Children {
+export class Children {
   private readonly seen = new Set<string>();
-  private readonly ctx: PluginContext;
+  private readonly get: PluginContext["session"]["get"];
   private readonly record: JoinRecord;
 
-  constructor(ctx: PluginContext, record: JoinRecord) {
-    this.ctx = ctx;
+  constructor(get: PluginContext["session"]["get"], record: JoinRecord) {
+    this.get = get;
     this.record = record;
   }
 
@@ -41,8 +41,8 @@ class Children {
       return;
     }
     this.seen.add(sessionID);
-    void this.ctx.session.get({ sessionID }).then((session) => {
-      if (session.parentID !== undefined) {
+    void this.get({ sessionID }).then((session) => {
+      if (session.parentID != null) {
         this.record.linkChild(session.parentID, sessionID, session.title ?? "");
       }
     }, noop);
@@ -84,7 +84,7 @@ export async function joinSetup(
   deps: Deps,
 ): Promise<() => void> {
   const record = new JoinRecord(deps.now);
-  const children = new Children(ctx, record);
+  const children = new Children((input) => ctx.session.get(input), record);
   await ctx.session.hook("context", (event) => {
     const text = reminderText(record.running(event.sessionID));
     if (text !== undefined) {

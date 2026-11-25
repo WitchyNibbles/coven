@@ -16,7 +16,7 @@ export function lookupFailed(id: string): (error: unknown) => never {
 export function checkChild(
   id: string,
   callerID: string,
-  session: { id: string; parentID?: string } | undefined,
+  session: { id: string; parentID?: string | null } | undefined,
 ): void {
   if (session === undefined) {
     throw new UnknownSessionError(`session ${id} does not exist`);

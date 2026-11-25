@@ -177,27 +177,6 @@ export function runHookScript(
   });
 }
 
-/**
- * Runs the deny-secrets guard on one payload through `fail-closed.sh`. Resolves when it allows;
- * rejects with the text the model should see when it refuses, fails, times out or cannot start.
- */
-export function runGuard(
-  covenRoot: string,
-  payload: Payload,
-  timeoutMs: number,
-  spawnFn: SpawnFn = spawnShell,
-): Promise<void> {
-  return runHookScript(
-    covenRoot,
-    "deny_secrets.py",
-    [],
-    payload,
-    timeoutMs,
-    undefined,
-    spawnFn,
-  );
-}
-
 const MIN_PYTHON = "(3, 12)";
 const PYTHON_CHECK_TIMEOUT_MS = 5000;
 
@@ -229,50 +208,18 @@ export async function checkPython(
   }
 }
 
-export interface DenySecretsOptions {
+export interface GuardsOptions {
   covenRoot: string;
+  /** deny-secrets' own timeout. */
   guardTimeoutMs: number;
-}
-
-export interface DenySecretsDeps {
-  /** The session's directory: relative paths in a call resolve against it. */
-  directory: string;
-  spawn?: SpawnFn;
-}
-
-/**
- * The `execute.before` hook of deny-secrets alone. It never catches: a refusal, a crash of the
- * guard and a timeout all throw, which fails the tool call before OpenCode asks for permission.
- */
-export function denySecretsHook(
-  options: DenySecretsOptions,
-  deps: DenySecretsDeps,
-): (event: ExecuteBeforeEvent) => Promise<void> {
-  return async (event) => {
-    const checked = payloads(event.tool, event.input, deps.directory);
-    if (checked === "unchecked") {
-      return;
-    }
-    for (const payload of checked) {
-      await runHookScript(
-        options.covenRoot,
-        "deny_secrets.py",
-        [],
-        payload,
-        options.guardTimeoutMs,
-        undefined,
-        deps.spawn,
-      );
-    }
-  };
-}
-
-export interface GuardsOptions extends DenySecretsOptions {
   profileDir: string;
   serveDir: string;
 }
 
-export interface GuardsDeps extends DenySecretsDeps {
+export interface GuardsDeps {
+  /** The session's directory: relative paths in a call resolve against it. */
+  directory: string;
+  spawn?: SpawnFn;
   /** The role of a session; a failed lookup counts as a PM. */
   resolve: RoleResolver;
 }
@@ -284,7 +231,9 @@ const PM_ENV: NodeJS.ProcessEnv = { [ROLE_ENV]: "pm" };
  * The `execute.before` hook of every session. For each mapped payload it runs deny-secrets and
  * the server guard; a session in a PM tree (a failed role lookup included) also gets
  * pm-permissions and the production guard, which run without approvals and with the role set in
- * their env. The first refusal throws, and the hooks after it do not run.
+ * their env. The first refusal throws, and the hooks after it do not run. It never catches: a
+ * refusal, a crash of a guard and a timeout all throw, which fails the tool call before OpenCode
+ * asks for permission.
  */
 export function guardsHook(
   options: GuardsOptions,
