@@ -3,18 +3,21 @@ import { setImmediate as tick } from "node:timers/promises";
 import { covenSetup } from "../src/coven.ts";
 import type {
   CovenContext,
+  EvaluateEvent,
   ExecuteBeforeEvent,
+  SessionLike,
+  SessionPromptInput,
   ShellCreateEvent,
 } from "../src/context.ts";
 import type {
   ContextHookEvent,
   ContextMessage,
-  SessionInfo,
   ToolCallContext,
   ToolDefinition,
 } from "../src/join/context.ts";
 import type { SpawnFn } from "../src/guard.ts";
 import { joinSetup } from "../src/plugin.ts";
+import { Stream } from "./plugin-stream.ts";
 import { exits, fakeSpawn } from "./guard-fake.ts";
 import type { Behaviour } from "./guard-fake.ts";
 
@@ -26,6 +29,16 @@ export const PROFILE_OPTIONS = {
   secretRules: [],
 };
 
+/** The tools the hierarchy adds to the plugin. */
+export const PM_TOOLS = [
+  "coven_gm_claim",
+  "coven_pm_launch",
+  "coven_pm_list",
+  "coven_pm_resume",
+  "coven_pm_stop",
+  "coven_send",
+];
+
 export const LEAD = "ses_lead";
 export const KID = "ses_kid";
 /** A PM session and a child of it (which has no role of its own). */
@@ -33,72 +46,8 @@ export const PM = "ses_pm";
 export const PM_KID = "ses_pm_kid";
 export const DIRECTORY = "/work/session";
 
-class Stream {
-  private readonly queue: unknown[] = [];
-  private wake: (() => void) | undefined;
-  private over = false;
-
-  push(event: unknown): void {
-    this.queue.push(event);
-    this.wake?.();
-  }
-
-  end(): void {
-    this.over = true;
-    this.wake?.();
-  }
-
-  async *iterate(signal: AbortSignal): AsyncGenerator<unknown> {
-    signal.addEventListener("abort", () => this.end());
-    for (;;) {
-      const next = this.queue.shift();
-      if (next !== undefined) {
-        yield next;
-      } else if (this.over) {
-        return;
-      } else {
-        await new Promise<void>((resolve) => {
-          this.wake = resolve;
-        });
-      }
-    }
-  }
-}
-
-export function notFound(): Error {
-  return Object.assign(new Error("session not found"), {
-    _tag: "Session.NotFoundError",
-  });
-}
-
-export function started(sessionID: string): unknown {
-  return { type: "session.execution.started", data: { sessionID } };
-}
-
-export function ended(sessionID: string): unknown {
-  return { type: "session.execution.succeeded", data: { sessionID } };
-}
-
-export function report(
-  parentID: string,
-  childID: string,
-  state: string,
-): unknown {
-  return {
-    type: "session.inbox.enqueued",
-    data: {
-      sessionID: parentID,
-      item: {
-        type: "synthetic",
-        payload: {
-          text: `<subagent sessionID="${childID}" state="${state}" description="kid">\nbody\n</subagent>`,
-          description: "kid",
-          metadata: { source: "subagent", childID, state },
-        },
-      },
-    },
-  };
-}
+export { ended, notFound, report, started } from "./plugin-events.ts";
+import { notFound } from "./plugin-events.ts";
 
 export interface Registered {
   name: string;
@@ -136,12 +85,23 @@ function makeWorld({
 }: Setup) {
   const streams: Stream[] = [];
   const subscriptions: { types: readonly string[]; signal: AbortSignal }[] = [];
-  const sessions = new Map<string, SessionInfo | Error>([
+  const here = { directory: DIRECTORY };
+  const sessions = new Map<string, (SessionLike & { title?: string }) | Error>([
     [KID, { id: KID, parentID: LEAD, title: "kid" }],
-    [LEAD, { id: LEAD, metadata: { coven: { role: "gm" } } }],
-    [PM, { id: PM, metadata: { coven: { role: "pm", code: "proj" } } }],
+    [LEAD, { id: LEAD, location: here, metadata: { coven: { role: "gm" } } }],
+    [
+      PM,
+      {
+        id: PM,
+        location: here,
+        metadata: { coven: { role: "pm", code: "proj" } },
+      },
+    ],
     [PM_KID, { id: PM_KID, parentID: PM }],
   ]);
+  const prompts: SessionPromptInput[] = [];
+  const evaluateHooks: ((event: EvaluateEvent) => Promise<void> | void)[] = [];
+  const asks = new Map<string, unknown[]>();
   const messages = new Map<string, ContextMessage[]>();
   const lookups: string[] = [];
   const hooks: ((event: ContextHookEvent) => void)[] = [];
@@ -175,6 +135,22 @@ function makeWorld({
             ? Promise.reject(notFound())
             : Promise.resolve(found);
       },
+      list: ({ parentID }) =>
+        Promise.resolve({
+          data: [...sessions.values()].filter(
+            (found): found is SessionLike & { title?: string } =>
+              !(found instanceof Error) &&
+              (parentID === undefined || found.parentID === parentID),
+          ),
+          cursor: {},
+        }),
+      create: () => Promise.reject(new Error("create is not faked")),
+      prompt: (input) => {
+        prompts.push(input);
+        return Promise.resolve({});
+      },
+      interrupt: () => Promise.resolve({}),
+      update: () => Promise.resolve(),
       wait: () => new Promise<void>(() => undefined),
       context: ({ sessionID }) =>
         Promise.resolve(messages.get(sessionID) ?? []),
@@ -189,6 +165,13 @@ function makeWorld({
         }
         return Promise.resolve({});
       }) as CovenContext["session"]["hook"],
+    },
+    permission: {
+      hook: (_name, callback) => {
+        evaluateHooks.push(callback);
+        return Promise.resolve({});
+      },
+      list: ({ sessionID }) => Promise.resolve(asks.get(sessionID) ?? []),
     },
     shell: {
       hook: (name, callback) => {
@@ -231,6 +214,9 @@ function makeWorld({
     registered,
     toolHooks,
     shellHooks,
+    prompts,
+    evaluateHooks,
+    asks,
     spawn,
     spawned: fake.calls,
     pythonChecks: pythonFake.calls,
@@ -287,14 +273,21 @@ export async function boot(clock = { now: 1_000_000 }) {
 export function bootCoven(setup: Setup = {}) {
   const world = makeWorld(setup);
   const logs: string[] = [];
+  const serveLogs: string[] = [];
   const outcome = covenSetup(
     world.ctx,
     {
       now: () => world.clock.now,
       log: (line) => logs.push(line),
+      serveLog: (line) => serveLogs.push(line),
       spawn: world.spawn,
     },
     world.ctx.options,
   );
-  return { ...world, logs, outcome };
+  const emit = async (event: unknown, stream = 0): Promise<void> => {
+    world.streams[stream]?.push(event);
+    await tick();
+    await tick();
+  };
+  return { ...world, logs, serveLogs, outcome, emit };
 }

@@ -1,0 +1,265 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import type { SessionLike } from "../src/context.ts";
+import { NoticeTracker } from "../src/pm/notices.ts";
+import { coven } from "./pm-fake-session.ts";
+import { GM, gmWorld } from "./pm-gm-world.ts";
+import type { World } from "./pm-gm-world.ts";
+
+const HERE = "/work/repo";
+const PM: SessionLike = {
+  id: "pm1",
+  location: { directory: HERE },
+  metadata: coven("pm", "acme"),
+};
+
+interface Rig {
+  world: World;
+  tracker: NoticeTracker;
+  state: { messaged: Set<string>; stopped: Set<string> };
+  logs: string[];
+}
+
+function rig(
+  extra: readonly SessionLike[] = [],
+  text: () => Promise<string> = () => Promise.resolve("working\nall done\n"),
+  directory = HERE,
+): Rig {
+  const world = gmWorld([GM, PM, ...extra]);
+  const state = { messaged: new Set<string>(), stopped: new Set<string>() };
+  const logs: string[] = [];
+  const tracker = new NoticeTracker(directory, {
+    session: world,
+    state,
+    lastText: text,
+    log: (line) => logs.push(line),
+  });
+  return { world, tracker, state, logs };
+}
+
+function end(
+  sessionID: string,
+  outcome: "succeeded" | "failed" | "interrupted" = "succeeded",
+): unknown {
+  return { type: `session.execution.${outcome}`, data: { sessionID } };
+}
+
+function start(sessionID: string): unknown {
+  return { type: "session.execution.started", data: { sessionID } };
+}
+
+function sent(world: World): string[] {
+  return world.prompts.map((each) => each.text);
+}
+
+await test("a pm turn with no message queues one notice into the GM with the exact text", async () => {
+  const { world, tracker } = rig();
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, [
+    {
+      sessionID: "gm1",
+      text: "[coven notice] pm-acme ended a turn (succeeded) without a message. Last line: all done",
+      delivery: "queue",
+    },
+  ]);
+});
+
+await test("the last line is cut to 200 characters", async () => {
+  const { world, tracker } = rig([], () => Promise.resolve("x".repeat(500)));
+  await tracker.onEvent(end("pm1"));
+  assert.equal(sent(world)[0]?.split("Last line: ")[1], "x".repeat(200));
+});
+
+await test("an unreadable last message still gives the notice", async () => {
+  const { world, tracker } = rig([], () => Promise.reject(new Error("down")));
+  await tracker.onEvent(end("pm1"));
+  assert.match(sent(world)[0] ?? "", /Last line: \(unreadable\)$/);
+});
+
+await test("no notice when the pm sent to the GM in that turn", async () => {
+  const { world, tracker, state } = rig();
+  state.messaged.add("pm1");
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("no notice for a child (parentID)", async () => {
+  const { world, tracker } = rig([
+    {
+      id: "kid1",
+      parentID: "pm1",
+      location: { directory: HERE },
+      metadata: coven("pm", "acme"),
+    },
+  ]);
+  await tracker.onEvent(end("kid1"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("no notice for a session in another directory", async () => {
+  const { world, tracker } = rig([], undefined, "/work/other");
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("no notice for a session that is not a pm", async () => {
+  const { world, tracker } = rig([
+    { id: "bare", location: { directory: HERE } },
+    { id: "gm2", location: { directory: HERE }, metadata: coven("gm") },
+  ]);
+  await tracker.onEvent(end("bare"));
+  await tracker.onEvent(end("gm2"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("no notice after coven_pm_stop", async () => {
+  const { world, tracker, state } = rig();
+  state.stopped.add("pm1");
+  await tracker.onEvent(end("pm1", "interrupted"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("no notice while the pm has a busy child", async () => {
+  const { world, tracker } = rig([
+    {
+      id: "kid1",
+      parentID: "pm1",
+      time: { created: 1, busy: 900, idle: 100 },
+    },
+  ]);
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("a child that is idle does not hold the notice back", async () => {
+  const { world, tracker } = rig([
+    {
+      id: "kid1",
+      parentID: "pm1",
+      time: { created: 1, busy: 100, idle: 900 },
+    },
+    { id: "kid2", parentID: "pm1" },
+  ]);
+  await tracker.onEvent(end("pm1"));
+  assert.equal(world.prompts.length, 1);
+});
+
+await test("a busy grandchild holds the notice back too", async () => {
+  const { world, tracker } = rig([
+    { id: "kid1", parentID: "pm1", time: { busy: 100, idle: 900 } },
+    { id: "kid2", parentID: "kid1", time: { busy: 900 } },
+  ]);
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("a failed turn gets a notice even after a send", async () => {
+  const { world, tracker, state } = rig();
+  state.messaged.add("pm1");
+  await tracker.onEvent(end("pm1", "failed"));
+  assert.equal(
+    sent(world)[0],
+    "[coven notice] pm-acme ended a turn (failed) after its message. Last line: all done",
+  );
+});
+
+await test("a failed turn gets a notice even with a busy child", async () => {
+  const { world, tracker } = rig([
+    { id: "kid1", parentID: "pm1", time: { busy: 900 } },
+  ]);
+  await tracker.onEvent(end("pm1", "failed"));
+  assert.match(sent(world)[0] ?? "", /\(failed\) without a message/);
+});
+
+await test("a failed turn after the GM stopped the pm gets no notice", async () => {
+  const { world, tracker, state } = rig();
+  state.stopped.add("pm1");
+  await tracker.onEvent(end("pm1", "failed"));
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("failed and interrupted outcomes are named", async () => {
+  const { world, tracker } = rig();
+  await tracker.onEvent(end("pm1", "failed"));
+  await tracker.onEvent(end("pm1", "interrupted"));
+  assert.deepEqual(
+    sent(world).map((text) => /\((\w+)\)/.exec(text)?.[1]),
+    ["failed", "interrupted"],
+  );
+});
+
+await test("a missing GM writes the notice to the serve log", async () => {
+  const { world, tracker, logs } = rig();
+  world.sessions.delete("gm1");
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0] ?? "", /no GM session/);
+  assert.match(logs[0] ?? "", /\[coven notice\] pm-acme ended a turn/);
+});
+
+await test("a notice that cannot be sent is logged", async () => {
+  const { world, tracker, logs } = rig();
+  world.failPrompt = true;
+  await tracker.onEvent(end("pm1"));
+  assert.equal(logs.length, 1);
+  assert.match(logs[0] ?? "", /prompt down/);
+});
+
+await test("a session that cannot be read is logged, not guessed", async () => {
+  const { world, tracker, logs } = rig();
+  world.get = () => Promise.reject(new Error("get down"));
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+  assert.match(logs[0] ?? "", /pm1.*get down/);
+});
+
+await test("a busy-child read that fails still gives the notice", async () => {
+  const { world, tracker } = rig();
+  const list = world.list.bind(world);
+  world.list = (input) =>
+    input.parentID === undefined
+      ? list(input)
+      : Promise.reject(new Error("list down"));
+  await tracker.onEvent(end("pm1"));
+  assert.equal(world.prompts.length, 1);
+});
+
+await test("a turn start clears the stop and message marks of that session only", async () => {
+  const { tracker, state } = rig();
+  state.messaged.add("pm1").add("pm2");
+  state.stopped.add("pm1").add("pm2");
+  await tracker.onEvent(start("pm1"));
+  assert.deepEqual([...state.messaged], ["pm2"]);
+  assert.deepEqual([...state.stopped], ["pm2"]);
+});
+
+await test("a stop of an idle pm does not suppress the next real notice", async () => {
+  const { world, tracker, state } = rig();
+  state.stopped.add("pm1");
+  await tracker.onEvent(start("pm1"));
+  await tracker.onEvent(end("pm1"));
+  assert.equal(world.prompts.length, 1);
+});
+
+await test("the marks are read before the next turn can clear them", async () => {
+  const { world, tracker, state } = rig();
+  state.messaged.add("pm1");
+  const ending = tracker.onEvent(end("pm1"));
+  await tracker.onEvent(start("pm1"));
+  await ending;
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("events that are not turn events change nothing", async () => {
+  const { world, tracker } = rig();
+  await tracker.onEvent({
+    type: "session.deleted",
+    data: { sessionID: "pm1" },
+  });
+  await tracker.onEvent({ type: "session.execution.succeeded", data: {} });
+  await tracker.onEvent("nonsense");
+  await tracker.onEvent(undefined);
+  assert.deepEqual(world.prompts, []);
+});

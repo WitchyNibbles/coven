@@ -50,13 +50,15 @@ export function fakeSession(initial: readonly SessionLike[]): FakeSession {
         ? Promise.reject(new Error(`no session ${sessionID}`))
         : Promise.resolve(found);
     },
-    list({ cursor }): Promise<SessionPage> {
+    list({ cursor, parentID }): Promise<SessionPage> {
       fake.calls.push("list");
       if (fake.failList) {
         return Promise.reject(new Error("list down"));
       }
       fake.pages += 1;
-      const all = [...sessions.values()];
+      const all = [...sessions.values()].filter(
+        (each) => parentID === undefined || each.parentID === parentID,
+      );
       const start = cursor === undefined ? 0 : Number(cursor);
       const data = all.slice(start, start + fake.pageSize);
       const end = start + fake.pageSize;

@@ -1,24 +1,35 @@
-import type { CovenContext, Registration } from "./context.ts";
+import type { CovenContext } from "./context.ts";
 import { checkPython, guardsHook } from "./guard.ts";
 import type { SpawnFn } from "./guard.ts";
 import { joinSetup } from "./plugin.ts";
 import { parseOptions } from "./options.ts";
 import { pingTool } from "./ping.ts";
 import { resolveRole } from "./pm/role.ts";
-import { scrubShellEnv } from "./shell-env.ts";
+import { pmSetup } from "./pm/setup.ts";
 import { toolChoiceHook } from "./tool-choice.ts";
 
 export interface CovenDeps {
   now: () => number;
   log: (line: string) => void;
+  /** Where an undeliverable notice goes; the serve folder's `log` unless a test stands in. */
+  serveLog?: (line: string) => void;
   /** Starts the guard child; the real `spawn` unless a test stands in. */
   spawn?: SpawnFn;
 }
 
-const REQUIRED_TOOLS = ["coven_ping", "await_agents"] as const;
+const REQUIRED_TOOLS = [
+  "coven_ping",
+  "await_agents",
+  "coven_gm_claim",
+  "coven_send",
+  "coven_pm_launch",
+  "coven_pm_list",
+  "coven_pm_resume",
+  "coven_pm_stop",
+] as const;
 
 /**
- * 2.3.2 has no HTTP tool list, so a plugin reported active proves both tools are there. The hooks
+ * 2.3.2 has no HTTP tool list, so a plugin reported active proves every tool is there. The hooks
  * need `python3` 3.12 or newer: with less, pm-permissions would allow what it could not check.
  */
 async function selfCheck(ctx: CovenContext, spawn?: SpawnFn): Promise<void> {
@@ -38,10 +49,10 @@ export async function covenSetup(
 ): Promise<() => void> {
   const options = parseOptions(rawOptions);
   const stopJoin = await joinSetup(ctx, { now: deps.now });
-  let guard: Registration | undefined;
+  let stopPm: (() => void) | undefined;
   const cleanup = (): void => {
     try {
-      guard?.dispose();
+      stopPm?.();
     } finally {
       stopJoin();
     }
@@ -50,18 +61,17 @@ export async function covenSetup(
     await ctx.tool.transform((editor) => {
       editor.add(pingTool(options.covenRoot));
     });
-    guard = await ctx.tool.hook(
-      "execute.before",
-      guardsHook(options, {
+    stopPm = await pmSetup(ctx, options, {
+      now: deps.now,
+      log: deps.log,
+      ...(deps.serveLog === undefined ? {} : { serveLog: deps.serveLog }),
+      beforeTool: guardsHook(options, {
         directory: ctx.location.directory,
         resolve: (sessionID) =>
           resolveRole(sessionID, (id) => ctx.session.get({ sessionID: id })),
         ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
       }),
-    );
-    // The registration is not kept: `shell.hook` is typed `Promise<unknown>` in context.ts, so
-    // nothing says it has a `dispose`. A scrub that outlives the plugin only removes more from the env.
-    await ctx.shell.hook("create.before", scrubShellEnv(options.keyEnv));
+    });
     const warned = new Set<string>();
     for (const providerID of options.toolChoiceAuto) {
       await ctx.session.hook("http.request", toolChoiceHook(deps.log, warned), {

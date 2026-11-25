@@ -11,6 +11,7 @@ import { Children } from "../src/plugin.ts";
 import {
   KID,
   LEAD,
+  PM_TOOLS,
   PROFILE_OPTIONS,
   boot,
   bootCoven,
@@ -33,13 +34,13 @@ const COVEN = {
   toolChoiceAuto: ["litellm"],
 };
 
-await test("coven setup registers both tools and one scoped http.request hook", async () => {
+await test("the plugin registers its tools and one scoped http.request hook", async () => {
   const p = bootCoven({ options: COVEN });
   const cleanup = await p.outcome;
-  assert.deepEqual(p.tools.map((tool) => tool.name).sort(), [
-    "await_agents",
-    "coven_ping",
-  ]);
+  assert.deepEqual(
+    p.tools.map((tool) => tool.name).sort(),
+    ["await_agents", "coven_ping", ...PM_TOOLS].sort(),
+  );
   assert.deepEqual(
     p.registered.filter((hook) => hook.name === "http.request"),
     [{ name: "http.request", options: { providerID: "litellm" } }],
@@ -84,6 +85,16 @@ await test("a tool that is not listed fails setup and stops the join", async () 
   const p = bootCoven({ options: COVEN, unlisted: ["coven_ping"] });
   await assert.rejects(p.outcome, /tools not registered: coven_ping/);
   assert.equal(p.subscriptions[0]?.signal.aborted, true);
+});
+
+await test("plugin registers coven_gm_claim, coven_send, coven_pm_launch, coven_pm_list, coven_pm_resume, coven_pm_stop", async () => {
+  const p = bootCoven({ options: COVEN });
+  const cleanup = await p.outcome;
+  const names = p.tools.map((tool) => tool.name);
+  for (const name of PM_TOOLS) {
+    assert.ok(names.includes(name), `${name} is not registered`);
+  }
+  cleanup();
 });
 
 await test("the self-check names every missing tool", async () => {

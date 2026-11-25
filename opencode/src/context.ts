@@ -18,6 +18,11 @@ export interface SessionLike {
   metadata?: Record<string, unknown>;
   /** How the session's last turn ended (`succeeded`, `failed`, ...), as `GET /api/session` gives it. */
   outcome?: string;
+  /**
+   * Epoch milliseconds, read from 2.3.2 in the e2e: `busy` is when the session last turned busy,
+   * `idle` when its last turn ended (later than `busy` while the session rests).
+   */
+  time?: { created?: number; updated?: number; busy?: number; idle?: number };
 }
 
 /** What `ctx.session.create` takes (checked live in Task 0, step 6). */
@@ -79,10 +84,10 @@ export interface SessionApi {
 
 /**
  * 2.3.2 `permission.hook("evaluate")`: the plugin may change `effect` and `message` before the
- * session's tool call goes on.
+ * session's tool call goes on. The e2e (`npm run e2e -- evaluate`) saw the fields `action`,
+ * `agent`, `effect`, `metadata`, `resources`, `sessionID` and `source`.
  */
 export interface EvaluateEvent {
-  /** Unconfirmed: Task 10 checks it in the e2e. */
   readonly sessionID: string;
   readonly action: string;
   readonly resources: string[];
@@ -139,12 +144,21 @@ export interface CovenContext extends PluginContext {
   readonly options?: Readonly<Record<string, unknown>>;
   /** `Location.Info` of 2.3.2: the directory the session works in. */
   readonly location: { readonly directory: string };
-  session: PluginContext["session"] & {
+  session: Omit<PluginContext["session"], "get"> &
+    SessionApi & {
+      hook(
+        name: "http.request",
+        callback: (event: HttpRequestEvent) => Promise<void> | void,
+        options?: { providerID?: string },
+      ): Promise<unknown>;
+    };
+  permission: {
     hook(
-      name: "http.request",
-      callback: (event: HttpRequestEvent) => Promise<void> | void,
-      options?: { providerID?: string },
+      name: "evaluate",
+      callback: (event: EvaluateEvent) => Promise<void> | void,
     ): Promise<unknown>;
+    /** The asks waiting in one session (not its children): an array of `{id, ...}`. */
+    list(input: { sessionID: string }): Promise<readonly unknown[]>;
   };
   shell: {
     hook(
