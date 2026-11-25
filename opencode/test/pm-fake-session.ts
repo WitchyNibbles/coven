@@ -11,6 +11,8 @@ export interface FakeSession extends SessionApi {
   /** Every call, in order: `update:<id>:<role>`, `prompt:<id>`, `list`. */
   readonly calls: string[];
   readonly prompts: SessionPromptInput[];
+  /** Every `update` input, in order. */
+  readonly updates: SessionUpdateInput[];
   /** Make the n-th `update` call (1-based) throw. */
   failUpdate: number | undefined;
   failList: boolean;
@@ -65,6 +67,7 @@ export function fakeSession(initial: readonly SessionLike[]): FakeSession {
     sessions,
     calls: [],
     prompts: [],
+    updates: [],
     failUpdate: undefined,
     failList: false,
     failPrompt: false,
@@ -104,6 +107,7 @@ export function fakeSession(initial: readonly SessionLike[]): FakeSession {
     },
     update(input: SessionUpdateInput): Promise<void> {
       updates += 1;
+      fake.updates.push(input);
       const role = (input.metadata?.["coven"] as { role?: string } | undefined)
         ?.role;
       fake.calls.push(`update:${input.sessionID}:${role ?? ""}`);

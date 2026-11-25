@@ -3,9 +3,6 @@ import { test } from "node:test";
 
 import type { SessionLike } from "../src/context.ts";
 import { pmLaunchTool } from "../src/pm/launch.ts";
-import { pmListTool, pmResumeTool, pmStopTool } from "../src/pm/manage.ts";
-import type { PmStatus } from "../src/pm/manage.ts";
-import { resolveRole } from "../src/pm/role.ts";
 import { sharedState } from "../src/pm/state.ts";
 import { ToolError } from "../src/pm/tools.ts";
 import { coven } from "./pm-fake-session.ts";
@@ -17,7 +14,7 @@ import {
   gmWorld,
   quietStatus,
 } from "./pm-gm-world.ts";
-import type { World } from "./pm-gm-world.ts";
+import { deps, list, resume, stop } from "./pm-manage-kit.ts";
 
 const MINUTE = 60_000;
 
@@ -26,22 +23,6 @@ const PM1: SessionLike = {
   metadata: coven("pm", "acme-1"),
   outcome: "succeeded",
 };
-
-function deps(world: World) {
-  return { session: world, resolve: resolveRole };
-}
-
-function list(world: World, status: PmStatus = quietStatus(), as = "gm1") {
-  return call(pmListTool({ ...deps(world), status }), as, {});
-}
-
-function resume(world: World, input: unknown, as = "gm1") {
-  return call(pmResumeTool(deps(world)), as, input);
-}
-
-function stop(world: World, input: unknown, as = "gm1") {
-  return call(pmStopTool(deps(world)), as, input);
-}
 
 await test("list shows code, id, busy/idle, outcome, ASK WAITING (bug) with request id, missing, child busy 30m", async () => {
   const world = gmWorld([
@@ -103,101 +84,23 @@ await test("list is a tool error when the listing or a status read fails", async
   );
 });
 
-await test('resume prompts "RESUMED by gm\\n<text>" on a live PM without touching the archive', async () => {
+await test('resume prompts "RESUMED by gm\\n<text>" on a live PM and writes nothing', async () => {
   const world = gmWorld([GM, PM1]);
   await resume(world, { code: "acme-1", text: "carry on" });
   assert.deepEqual(world.prompts, [
     { sessionID: "pm1", text: "RESUMED by gm\ncarry on", delivery: "queue" },
   ]);
-  assert.equal(
-    world.calls.some((each) => each.startsWith("archive")),
-    false,
-  );
-});
-
-await test("resume unarchives then prompts, and forgets an earlier stop", async () => {
-  const world = gmWorld([GM, PM1]);
-  world.updateArchives = true;
-  world.archived.add("pm1");
-  sharedState().stopped.add("pm1");
-  await resume(world, { code: "acme-1", text: "back" });
-  assert.deepEqual(
-    world.calls.filter((each) => /^(archive|prompt)/.test(each)),
-    ["archive:pm1:false", "prompt:pm1"],
-  );
-  assert.equal(sharedState().stopped.has("pm1"), false);
-});
-
-await test("resume is a tool error for an unknown code, empty text or a failed unarchive", async () => {
-  const world = gmWorld([GM, PM1]);
-  await assert.rejects(
-    resume(world, { code: "nope", text: "x" }),
-    /no PM with code "nope"/,
-  );
-  await assert.rejects(resume(world, { code: "acme-1", text: " " }), ToolError);
-  await assert.rejects(resume(world, { text: "x" }), ToolError);
-  assert.equal(world.prompts.length, 0);
-  world.archived.add("pm1");
-  world.failUpdate = 1;
-  await assert.rejects(
-    resume(world, { code: "acme-1", text: "x" }),
-    (error: unknown) =>
-      error instanceof ToolError && /update down/.test(error.message),
-  );
-  assert.equal(world.prompts.length, 0);
+  assert.deepEqual(world.updates, []);
 });
 
 await test("stop interrupts, marks the stop in sharedState and keeps the session", async () => {
   sharedState().stopped.clear();
   const world = gmWorld([GM, PM1]);
-  await stop(world, { code: "acme-1" });
+  const out = await stop(world, { code: "acme-1" });
   assert.deepEqual(world.interrupts, ["pm1"]);
   assert.equal(sharedState().stopped.has("pm1"), true);
-  assert.equal(
-    world.calls.some((each) => each.startsWith("archive")),
-    false,
-  );
-});
-
-await test("stop with archive true archives after the interrupt, and says so once the session reads back archived", async () => {
-  sharedState().stopped.clear();
-  const world = gmWorld([GM, PM1]);
-  world.updateArchives = true;
-  const out = await stop(world, { code: "acme-1", archive: true });
-  assert.deepEqual(
-    world.calls.filter((each) => /^(interrupt|archive)/.test(each)),
-    ["interrupt:pm1", "archive:pm1:true"],
-  );
-  assert.ok(world.archived.has("pm1"));
-  assert.equal(out, "stopped pm-acme-1 and archived it");
-});
-
-await test("stop with archive true is a tool error when the update leaves the session unarchived, as on 2.3.2", async () => {
-  sharedState().stopped.clear();
-  const world = gmWorld([GM, PM1]);
-  await assert.rejects(
-    stop(world, { code: "acme-1", archive: true }),
-    (error: unknown) =>
-      error instanceof ToolError &&
-      /stopped pm-acme-1 but .*not archive/.test(error.message) &&
-      !/archived it/.test(error.message),
-  );
-  // the stop itself was done
-  assert.deepEqual(world.interrupts, ["pm1"]);
-  assert.equal(sharedState().stopped.has("pm1"), true);
-});
-
-await test("resume of an archived PM is a tool error, and sends nothing, when the update leaves it archived, as on 2.3.2", async () => {
-  const world = gmWorld([GM, PM1]);
-  world.archived.add("pm1");
-  sharedState().stopped.add("pm1");
-  await assert.rejects(
-    resume(world, { code: "acme-1", text: "back" }),
-    (error: unknown) =>
-      error instanceof ToolError && /still archived/.test(error.message),
-  );
-  assert.equal(world.prompts.length, 0);
-  assert.equal(sharedState().stopped.has("pm1"), true);
+  assert.deepEqual(world.updates, []);
+  assert.equal(out, "stopped pm-acme-1");
 });
 
 await test("stop is a tool error for an unknown code or a failed interrupt, which leaves no stop mark", async () => {

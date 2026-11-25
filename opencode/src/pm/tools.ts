@@ -6,7 +6,7 @@ import {
   nonEmptyString,
   show,
 } from "../join/fields.ts";
-import { covenOf, findGm, findOtherGms, findPm } from "./find.ts";
+import { findGm, findOtherGms, findPm, withCoven } from "./find.ts";
 import { GM_PREFIXES, PM_PREFIXES, headPrefix } from "./prefixes.ts";
 import { isRoot } from "./role.ts";
 import type { Role, RoleInfo, resolveRole } from "./role.ts";
@@ -26,7 +26,7 @@ const NO_GM = "no GM session; end the turn with the full message";
 
 /** The session's metadata with `coven.role` set, every other entry kept. */
 function withRole(session: SessionLike, role: Role): Record<string, unknown> {
-  return { ...session.metadata, coven: { ...covenOf(session), role } };
+  return withCoven(session, { role });
 }
 
 async function caller(
