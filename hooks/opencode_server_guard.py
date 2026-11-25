@@ -20,8 +20,9 @@ What it refuses:
 - a read, grep or glob of the serve folder or the profile's `data/` folder, and
   `/proc/<pid>/environ`, `ps` options that print environments (`e`, `-E`, `eww`);
 - a folder that holds the serve or the `data/` folder (the profile, `/`...) for the file tools, and
-  a folder that holds the profile or the coven root for every shell program but the ones that
-  never read content (`ls`, `cd`, `stat`...);
+  a folder that holds the profile for every shell program but the ones that never read content
+  (`ls`, `cd`, `stat`...); a folder that holds the coven root, only on a line with a program that
+  writes (`rm`, `cp`, `sed`, `find`...) or an output redirection;
 - a write, edit or patch, and any shell command that names a path, in the protected set: the
   profile except its `tmp/` folder, the serve folder, and the coven root except its
   `.claude/worktrees/` folder;
@@ -130,6 +131,17 @@ class Scope:
         for a read, the profile and the coven root otherwise."""
         return (self.serve, self.data) if mode is Mode.READ else (self.profile, self.coven)
 
+    def roots_to_hold(self, mode: Mode, *, profile_side: bool, coven_side: bool) -> list[Path]:
+        """The closed folders a call may not name the parents of: those of the profile side (what
+        a listing of a parent reads: the serve and data folders, or the whole profile) and, for a
+        call that writes, the coven root."""
+        roots: list[Path] = []
+        if profile_side:
+            roots.extend((self.serve, self.data) if mode is Mode.READ else (self.profile,))
+        if coven_side and mode is not Mode.READ:
+            roots.append(self.coven)
+        return roots
+
 
 def _real(path: Path) -> Path:
     try:
@@ -166,10 +178,13 @@ def hit(path: Path, scope: Scope, mode: Mode) -> str | None:
     return None
 
 
-def holds_closed_place(path: Path, scope: Scope, mode: Mode) -> str | None:
+def holds_closed_place(path: Path, view: "View", mode: Mode) -> str | None:
     """The rule a folder breaks by holding a place closed to the mode (a listing, a recursive
     read or a copy of it reaches what is under it), or None."""
-    if any(root != path and root.is_relative_to(path) for root in scope.closed_roots(mode)):
+    roots = view.scope.roots_to_hold(
+        mode, profile_side=view.profile_folders_closed, coven_side=view.coven_folders_closed
+    )
+    if any(root != path and root.is_relative_to(path) for root in roots):
         return (
             "a folder that holds the OpenCode profile or coven's own files is closed to this call"
         )
@@ -324,8 +339,11 @@ class View:
     scope: Scope
     cwd: Path
     names: Names
-    # Whether a folder that holds a closed place is closed too (`grep -r . <home>`, Grep on `/`).
-    folders_closed: bool = True
+    # Whether a folder that holds a closed place is closed too: one that holds the serve or data
+    # folder or the profile (`grep -r . <home>`, Grep on `/`), and one that holds the coven root,
+    # which is closed only to a call that can write (`rm -r <projects>`).
+    profile_folders_closed: bool = True
+    coven_folders_closed: bool = False
 
 
 def check_word(word: str, bases: Sequence[Path], view: View, mode: Mode) -> None:
@@ -344,8 +362,8 @@ def check_word(word: str, bases: Sequence[Path], view: View, mode: Mode) -> None
             found = [] if resolved is None else [resolved]
         for path in found:
             rule = hit(path, view.scope, mode)
-            if not rule and view.folders_closed:
-                rule = holds_closed_place(path, view.scope, mode)
+            if not rule:
+                rule = holds_closed_place(path, view, mode)
             if rule:
                 raise Refused(rule)
 
@@ -480,6 +498,14 @@ NEVER_READS_CONTENT = frozenset(
     {
         *("ls", "cd", "pushd", "popd", "pwd", "stat", "test", "[", "[[", "echo", "printf"),
         *("dirname", "basename", "realpath", "readlink", "du", "df", "mkdir", "true", "false", ":"),
+    }
+)
+# Programs that write, move or remove files: with one on the line (or an output redirection), a
+# folder that holds the coven root is closed too (`rm -r <projects>`). Reading one is fine.
+WRITING_PROGRAMS = frozenset(
+    {
+        *("rm", "mv", "cp", "ln", "chmod", "chown", "sed", "perl", "install", "rsync", "tar"),
+        *("unzip", "find", "xargs", "tee", "dd", "truncate", "patch"),
     }
 )
 
@@ -814,13 +840,27 @@ def _coven_lifecycle(words: Sequence[str]) -> bool:
     return False
 
 
-def _names_opencode(words: Sequence[str]) -> bool:
-    """Whether a word after the program names opencode (`uv run opencode db`, `coproc opencode`)."""
+def _is_directory(word: str, cwd: Path) -> bool:
+    resolved = _resolve(_tilde(word, cwd), cwd)
+    return resolved is not None and resolved.is_dir()
+
+
+def _names_opencode(words: Sequence[str], cwd: Path) -> bool:
+    """Whether a word after the program names opencode (`uv run opencode db`, `coproc opencode`).
+    The value of an option that is a folder of the working folder is a path to it, not a program
+    (`npm --prefix opencode test`, `tsc -p opencode`)."""
     start = _after_prefixes(words, 0)
-    return any(OPENCODE_NAME.fullmatch(_base(word)) for word in words[start + 1 :])
+    for index in range(start + 1, len(words)):
+        if not OPENCODE_NAME.fullmatch(_base(words[index])):
+            continue
+        before = words[index - 1]
+        if before.startswith("-") and before != "--" and _is_directory(words[index], cwd):
+            continue
+        return True
+    return False
 
 
-def check_command(argv: Argv, names: Names) -> None:
+def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     words = [names.expand(word) for word in argv.words]
     command = [names.expand(word) for word in _unwrapped(argv.words)]
     if not command:
@@ -834,7 +874,9 @@ def check_command(argv: Argv, names: Names) -> None:
     if OPENCODE_NAME.fullmatch(name):
         if tuple(command[1:]) not in ALLOWED_OPENCODE:
             raise Refused("`opencode` is closed to a PM but for `opencode --version` and `--help`")
-    elif name not in NEVER_EXECUTES and (_names_opencode(words) or _names_opencode(command)):
+    elif name not in NEVER_EXECUTES and (
+        _names_opencode(words, cwd) or _names_opencode(command, cwd)
+    ):
         raise Refused("a program that may run `opencode` is closed to a PM when it names it")
     if name == "ps" and _ps_prints_environments(command[1:]):
         raise Refused("`ps` options that print other processes' environments are closed to a PM")
@@ -864,6 +906,12 @@ def _only_names_paths(commands: Sequence[Argv]) -> bool:
     )
 
 
+def _can_write(command: str, commands: Sequence[Argv]) -> bool:
+    """Whether the line has a program that writes (or removes) files, or an output redirection."""
+    programs = (_unwrapped(each.words) for each in commands)
+    return ">" in command or any(_base(each[0]) in WRITING_PROGRAMS for each in programs if each)
+
+
 def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
     check_text(command, scope)
     names = Names(command, scope, cwd)
@@ -872,8 +920,14 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         raise Refused(rule)
     commands = argvs(command)
     for argv in commands:
-        check_command(argv, names)
-    view = View(scope, cwd, names, folders_closed=not _only_names_paths(commands))
+        check_command(argv, names, cwd)
+    view = View(
+        scope,
+        cwd,
+        names,
+        profile_folders_closed=not _only_names_paths(commands),
+        coven_folders_closed=_can_write(command, commands),
+    )
     bases = _folders(command, cwd, view.names, scope)
     for word in _words_of(command):
         check_word(word, bases, view, Mode.SHELL)
@@ -913,7 +967,7 @@ def path_problem(
     if tool in ("Read", "Write", "Edit", "NotebookEdit", "MultiEdit") and not paths:
         raise Refused("the file of this call cannot be read")
     # A folder that holds a closed place is closed to a read of it; a write cannot replace one.
-    view = View(scope, cwd, Names("", scope, cwd), folders_closed=mode is Mode.READ)
+    view = View(scope, cwd, Names("", scope, cwd), profile_folders_closed=mode is Mode.READ)
     for path in paths or [str(cwd)]:
         check_word(path, [cwd], view, mode)
     if pattern is not None:

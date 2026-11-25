@@ -39,6 +39,7 @@ class World:
             "<profile>": self.profile,
             "<home>": self.profile.parent,
             "<root>": self.root,
+            "<projects>": self.coven.parent,
             "<serve>": self.serve,
             "<coven>": self.coven,
             "<other>": self.other,
@@ -69,7 +70,8 @@ def world(tmp_path: Path) -> World:
     home = Path(os.environ["HOME"])
     profile = home / "profile"
     serve = profile / "state" / "serve"
-    coven = tmp_path / "coven"
+    # Not under the profile's parents: a folder above the coven root is not above the profile.
+    coven = tmp_path / "projects" / "coven"
     other = tmp_path / "other"
     project = tmp_path / "project"
     touch(serve / "password", "secret")
@@ -668,7 +670,8 @@ DATA_AND_ANCESTORS_REFUSED = [
     ("Bash", "command", "cd <home> && cp -r . <project>/copy"),
     ("Bash", "command", "cat <home>/*/state/serve/password"),
     ("Bash", "command", "ls <home> | grep x"),
-    ("Bash", "command", "grep -r . <coven>/.."),
+    ("Bash", "command", "rg foo <home>"),
+    ("Bash", "command", "cd <home> && git status"),
     ("Bash", "command", "bash -c 'grep -r . <home>'"),
     ("Bash", "command", "grep -r . ~"),
 ]
@@ -707,6 +710,67 @@ def test_reads_that_cannot_reach_the_serve_or_data_folder_stay_allowed(
     world: World, tool: str, field: str, value: str
 ) -> None:
     assert world.call(tool, field, value) is None
+
+
+COVEN_ANCESTOR_REFUSED = [
+    "rm -r <projects>",
+    "cp -r <projects> <project>/copy",
+    "mv <projects> <project>/copy",
+    "rsync -a <projects>/ <project>/copy/",
+    "tar cf <project>/x.tar <projects>",
+    "find <projects> -name x -exec sed -i s/a/b/ {} +",
+    "cd <projects> && rm -r .",
+    "bash -c 'rm -r <projects>'",
+    "cat <coven>/.. > <project>/out",
+    "cat x > <projects>/..",
+]
+COVEN_ANCESTOR_ALLOWED = [
+    "cd <projects> && git status",
+    "rg foo <projects>",
+    "grep -r foo <projects>",
+    "ls <projects>",
+    "cat <coven>/../other.md",
+    "find <project> -name x",
+    "git -C <projects> status",
+]
+
+
+@pytest.mark.parametrize("command", COVEN_ANCESTOR_REFUSED)
+def test_a_folder_above_the_coven_root_is_refused_on_a_line_that_writes(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", COVEN_ANCESTOR_ALLOWED)
+def test_a_folder_above_the_coven_root_is_open_to_programs_that_only_read(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+def test_the_coven_and_profile_ancestors_follow_their_own_rules(world: World) -> None:
+    assert world.call("Bash", "command", "rg foo <projects>") is None
+    assert world.call("Bash", "command", "rg foo <home>")
+    assert world.call("Bash", "command", "rg foo <root>")
+    assert world.call("Bash", "command", "ls <home> <projects>") is None
+    assert world.call("Grep", "path", "<projects>") is None
+    assert world.call("Read", "file_path", "<projects>") is None
+    assert world.call("Write", "file_path", "<projects>/new.md") is None
+
+
+def test_a_folder_that_is_an_option_value_is_a_path_not_a_program(world: World) -> None:
+    refused = ["npm --prefix opencode test", "tsc -p opencode", "xargs opencode"]
+    for command in refused:
+        assert world.call("Bash", "command", command)  # no such folder here
+    touch(world.project / "opencode" / "package.json")
+    assert world.call("Bash", "command", "npm --prefix opencode test") is None
+    assert world.call("Bash", "command", "tsc -p opencode") is None
+    assert world.call("Bash", "command", "npm --prefix ./opencode/ run build") is None
+    assert world.call("Bash", "command", "npm --prefix opencode exec opencode db")
+    assert world.call("Bash", "command", "xargs opencode")
+    assert world.call("Bash", "command", "npm --prefix opencode exec -- opencode db")
+    assert world.call("Bash", "command", "tsc -p opencode-ai") is not None
 
 
 def test_a_grep_or_glob_with_no_path_reads_the_cwd(world: World) -> None:
