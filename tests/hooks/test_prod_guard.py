@@ -1282,7 +1282,10 @@ def test_a_missing_shell_words_module_blocks(
 ) -> None:
     lone = tmp_path / "lone"
     lone.mkdir()
-    for name in ("prod_guard.py", "guard_config.py", "hook_support.py", "hooklog.py"):
+    for name in (
+        *("prod_guard.py", "guard_config.py", "hook_support.py", "hooklog.py"),
+        "wrapper_commands.py",
+    ):
         shutil.copy(HOOKS / name, lone / name)
     env = {} if role is None else {ROLE: role}
     proc = run_hook(lone / "prod_guard.py", bash("ls"), env)

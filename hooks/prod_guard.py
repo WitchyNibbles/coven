@@ -202,7 +202,9 @@ SHELL_SPLIT = re.compile(r"[\s;&|<>()`'\"=,{}]+")
 COMMAND_SPLIT = re.compile(r"[;&|()`{}\n]")
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
 SHELL_STRING_RUNNERS = frozenset({"sh", "bash", "zsh", "dash"})  # `sh -c STRING`, read as a text
-SHELLS = frozenset({"sh", "bash", "zsh", "dash", "fish", "ksh"})
+# The wrapper tables are shared with opencode_server_guard.py (wrapper_commands.py).
+_WRAPPER_COMMANDS: ModuleType = hook_support.sibling("wrapper_commands")
+SHELLS: frozenset[str] = _WRAPPER_COMMANDS.SHELLS
 # Words that read a heredoc body as shell commands, or start a shell without naming one: a body
 # fed by a line with one of them is shell text, and its globs are real.
 SHELL_READERS = frozenset(
@@ -266,38 +268,19 @@ PIPE_FILTERS = frozenset(
     }
 )
 CLASS_ESCAPE = re.compile(r"\\[wWdDsS]")  # a regex's `\w`: it can match any one name character
-# Commands that run their arguments as a command, so `<wrapper> ... claude` starts claude. A
-# command string (`sh -c`, `su -c`, `script -c`) is read as the option's value, quotes dropped.
-WRAPPERS = frozenset(
-    {
-        *("exec", "env", "nohup", "command", "builtin", "sudo", "doas", "setsid", "time"),
-        *("timeout", "xargs", "nice", "stdbuf", "watch", "parallel", "npx", "bunx"),
-        *("script", "screen", "tmux", "flock", "systemd-run", "runuser", "su", "busybox"),
-        *("chrt", "ionice", "taskset", "strace", "ltrace", "unbuffer"),
-        *SHELLS,
-        *("if", "then", "else", "elif", "do", "while", "until", "!", "eval", "coproc", "{", "}"),
-    }
-)
-# Wrappers that take one positional argument before the command: timeout's duration, flock's lock
-# file, chrt's priority, taskset's mask, su's and runuser's user, script's log file.
-POSITIONAL_WRAPPERS = frozenset({"timeout", "flock", "chrt", "taskset", "su", "runuser", "script"})
-# Wrappers whose command may follow any of their own words (`tmux new-session -d -s pm 'claude'`).
-ANYWHERE_WRAPPERS = frozenset({"tmux"})
-# Commands that run a program named later in their arguments (`uv run ssh`, `uvx`, `pipx run`,
-# `python -m`, `poetry run`, `hatch run`, `pdm run`, `conda run -n env`, `mise exec --`, `direnv
-# exec <dir>`, `nix-shell --run '...'`, `nix develop -c`, `nix shell <installable> -c`). The head
-# walk reads one as a wrapper. Where one has a run word (LAUNCHER_RUN_WORDS), every word between
-# the launcher and that word is skipped, whatever options it holds (`poetry -C dir run`); else
-# a subcommand word may follow it (LAUNCHER_COMMANDS) and, for direnv, a directory. The
+# Commands that run their arguments as a command, so `<wrapper> ... claude` starts claude (the
+# names are wrapper_commands.WRAPPERS). A command string (`sh -c`, `su -c`, `script -c`) is read as
+# the option's value, quotes dropped.
+WRAPPERS: frozenset[str] = _WRAPPER_COMMANDS.WRAPPERS
+POSITIONAL_WRAPPERS: frozenset[str] = _WRAPPER_COMMANDS.POSITIONAL_WRAPPERS
+ANYWHERE_WRAPPERS: frozenset[str] = _WRAPPER_COMMANDS.ANYWHERE_WRAPPERS
+# Commands that run a program named later in their arguments (wrapper_commands.LAUNCHERS). The
+# head walk reads one as a wrapper. Where one has a run word (LAUNCHER_RUN_WORDS), every word
+# between the launcher and that word is skipped, whatever options it holds (`poetry -C dir run`);
+# else a subcommand word may follow it (LAUNCHER_COMMANDS) and, for direnv, a directory. The
 # store-writing check also reads every word after one as a program it may run.
-LAUNCHER_RUN_WORDS = {
-    **dict.fromkeys(("uv", "poetry", "hatch", "pdm", "conda"), frozenset({"run"})),
-    "mise": frozenset({"--"}),
-    "direnv": frozenset({"exec"}),
-    "nix": frozenset({"-c", "--command"}),
-    "nix-shell": frozenset({"--run", "--command"}),
-}
-LAUNCHERS = frozenset({"uvx", "pipx", *LAUNCHER_RUN_WORDS})
+LAUNCHER_RUN_WORDS: Mapping[str, frozenset[str]] = _WRAPPER_COMMANDS.LAUNCHER_RUN_WORDS
+LAUNCHERS: frozenset[str] = _WRAPPER_COMMANDS.LAUNCHERS
 PYTHON = re.compile(r"python[\d.]*")
 LAUNCHER_COMMANDS = frozenset({"run", "exec", "tool", "develop", "x"})
 DIRECTORY_LAUNCHERS = frozenset({"direnv"})  # `direnv exec <dir> <program>`
@@ -454,7 +437,7 @@ PLAIN_REFERENCE = re.compile(r"\$([A-Za-z_]\w*)")  # `$NAME`, which a bound valu
 SPLITTING = frozenset(" \t\n*?[")  # in an unquoted value: it splits or globs
 EXPANDING = frozenset("$`*?[]{}~")  # in a word whose value is unknown: this part may expand
 # Wrappers that run a command string given after an option holding `c` (`sh -c`, `su -lc`).
-COMMAND_STRING_RUNNERS = frozenset({*SHELLS, "su", "runuser", "script", "flock"})
+COMMAND_STRING_RUNNERS: frozenset[str] = _WRAPPER_COMMANDS.COMMAND_STRING_RUNNERS
 MAX_SHELL_DEPTH = 3  # command strings inside command strings, followed this deep
 # ssh's `-o` settings that name a host, and those that run a command (read as a command string).
 HOST_SETTINGS = frozenset({"hostname", "proxyjump"})
