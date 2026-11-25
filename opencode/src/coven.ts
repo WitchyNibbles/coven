@@ -52,6 +52,8 @@ export async function covenSetup(
         ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
       }),
     );
+    // The registration is not kept: `shell.hook` is typed `Promise<unknown>` in context.ts, so
+    // nothing says it has a `dispose`. A scrub that outlives the plugin only removes more from the env.
     await ctx.shell.hook("create.before", scrubShellEnv(options.keyEnv));
     const warned = new Set<string>();
     for (const providerID of options.toolChoiceAuto) {
