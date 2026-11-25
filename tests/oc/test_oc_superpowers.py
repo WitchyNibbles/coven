@@ -121,11 +121,10 @@ def make_clone(layout: Layout) -> Path:
 
 
 def test_the_clone_is_preferred_over_the_claude_code_plugin(tmp_path: Path, claude_plugins: Path):
-    plugin = install_superpowers(claude_plugins)
+    install_superpowers(claude_plugins)
     clone = make_clone(Layout(tmp_path / "profile"))
     chosen = superpowers.source(Layout(tmp_path / "profile"))
     assert chosen == superpowers.Source(clone, "v7.0.2 clone")
-    assert chosen != superpowers.Source(plugin, "Claude Code plugin")
 
 
 def test_the_plugin_is_used_when_there_is_no_clone(tmp_path: Path, claude_plugins: Path):
@@ -143,3 +142,8 @@ def test_a_clone_folder_without_skills_does_not_count(tmp_path: Path, claude_plu
 
 def test_there_is_no_source_without_a_clone_or_a_plugin(tmp_path: Path):
     assert superpowers.source(Layout(tmp_path / "profile")) is None
+
+
+def test_the_pin_is_the_tag_and_the_commit_that_were_checked():
+    assert superpowers.PINNED_TAG == "v7.0.2"
+    assert superpowers.PINNED_SHA == "22f0b463e7a5e579904dd6211a520321035526f7"

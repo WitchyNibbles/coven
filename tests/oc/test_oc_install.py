@@ -1,7 +1,7 @@
 import json
+import os
 import shutil
-import subprocess
-import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,12 +9,17 @@ import pytest
 from doctor_kit import LITELLM_FLAGS
 from fakes import (
     NPM_PATH_VARS,
+    REAL_REPO_URL,
+    fake_git,
     fake_npm,
     fake_opencode,
+    git_calls,
+    git_grandchild,
     git_on_path,
     npm_env_log,
     npm_log,
     npm_paths_log,
+    process_is_running,
     superpowers_repo,
 )
 
@@ -306,44 +311,146 @@ def test_a_failed_clone_warns_and_leaves_nothing(
     assert cli.main(["opencode", "install"]) == 0
 
 
-def test_a_clone_that_times_out_warns_and_leaves_nothing(
-    home: Layout,
-    upstream: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+def test_a_clone_that_fails_midway_leaves_no_half_clone(
+    home: Layout, npm_dir: Path, capsys: pytest.CaptureFixture[str]
 ):
-    run = subprocess.run
-
-    def slow_git(command: list[str], *args: Any, **named: Any) -> Any:
-        if Path(command[0]).name == "git" and "clone" in command:
-            raise subprocess.TimeoutExpired(command, named["timeout"])
-        return run(command, *args, **named)
-
-    monkeypatch.setattr(subprocess, "run", slow_git)
-    installer.install(home, "2.3.2")
-    assert "did not finish within" in capsys.readouterr().err
+    fake_git(npm_dir)  # makes the work folder with a file in it, then exits 128
+    assert installer.install(home, "2.3.2") == home.runtime_binary("2.3.2")
+    err = capsys.readouterr().err
+    assert "cannot fetch superpowers v7.0.2: git exited 128: fatal: fake failure" in err
     assert not clone_of(home).exists()
     assert leftovers(home) == []
 
 
-def test_git_runs_without_prompts_or_hooks_and_clones_one_commit_of_the_tag(
-    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_a_clone_that_times_out_is_killed_with_everything_it_started(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    record = tmp_path / "git.log"
-    fake = npm_dir / "git"
-    fake.write_text(
-        f"#!{sys.executable}\nimport os, sys\n"
-        f"open({str(record)!r}, 'a').write(' '.join(sys.argv[1:]) + ' ' + "
-        "os.environ.get('GIT_TERMINAL_PROMPT', 'unset') + '\\n')\nsys.exit(1)\n"
-    )
-    fake.chmod(0o755)
+    fake_git(npm_dir, hang=True)  # half clone in the work folder, a child of its own, then sleeps
+    monkeypatch.setattr(installer, "GIT_TIMEOUT", 0.5)
     installer.install(home, "2.3.2")
-    first = record.read_text().splitlines()[0]
-    assert first.startswith(
-        "-c core.hooksPath=/dev/null clone --depth 1 --branch v7.0.2 --quiet "
-        f"{superpowers.REPO_URL} "
-    )
-    assert first.endswith(" 0")
+    assert "git did not finish within 0.5 s" in capsys.readouterr().err
+    assert not clone_of(home).exists()
+    assert leftovers(home) == []
+    child = int(git_grandchild(npm_dir).read_text())
+    deadline = time.monotonic() + 5
+    while process_is_running(child) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not process_is_running(child)
+
+
+def test_git_is_started_alone_in_its_session_with_both_streams_captured(
+    home: Layout, npm_dir: Path
+):
+    fake_git(npm_dir)
+    installer.install(home, "2.3.2")
+    first = git_calls(npm_dir)[0]
+    assert first["session_leader"] is True
+    assert first["stdout_pipe"] is True
+    assert first["stderr_pipe"] is True
+
+
+def test_git_clones_one_commit_of_the_tag_over_a_single_allowed_protocol(
+    home: Layout, npm_dir: Path
+):
+    fake_git(npm_dir)
+    installer.install(home, "2.3.2")
+    argv = git_calls(npm_dir)[0]["argv"]
+    work = clone_of(home).parent / f".tmp-v7.0.2-{os.getpid()}"
+    assert argv == [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.file.allow=always",  # the test URL is a local path; the real one is https
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        "v7.0.2",
+        "--quiet",
+        superpowers.REPO_URL,
+        str(work),
+    ]
+
+
+def test_the_real_superpowers_url_is_fetched_over_https_only():
+    assert REAL_REPO_URL == "https://github.com/obra/superpowers"
+    assert installer.git_options(REAL_REPO_URL) == [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.https.allow=always",
+    ]
+
+
+def test_git_does_not_read_the_users_config_or_inherit_repo_and_credential_variables(
+    home: Layout, npm_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    fake_git(npm_dir)
+    dropped = {
+        "GIT_DIR": "/elsewhere/.git",
+        "GIT_WORK_TREE": "/elsewhere",
+        "GIT_INDEX_FILE": "/elsewhere/index",
+        "GIT_PREFIX": "sub/",
+        "GIT_OBJECT_DIRECTORY": "/elsewhere/objects",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "/elsewhere/alternates",
+        "GIT_COMMON_DIR": "/elsewhere/common",
+        "GIT_ASKPASS": "/elsewhere/askpass",
+        "SSH_ASKPASS": "/elsewhere/ssh-askpass",
+        "GIT_SSH_COMMAND": "ssh -o ProxyCommand=elsewhere",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "url.https://mirror.example/.insteadOf",
+        "GIT_CONFIG_VALUE_0": "https://github.com/",
+    }
+    kept = {
+        "http_proxy": "http://proxy.example:3128",
+        "https_proxy": "http://proxy.example:3128",
+        "HTTPS_PROXY": "http://proxy.example:3128",
+        "no_proxy": "localhost",
+    }
+    for name, value in {**dropped, **kept}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/elsewhere/gitconfig")
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    installer.install(home, "2.3.2")
+    seen = git_calls(npm_dir)[0]["env"]
+    assert seen["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert seen["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert seen["GIT_TERMINAL_PROMPT"] == "0"
+    assert not set(dropped) & set(seen)
+    assert {name: seen[name] for name in kept} == kept
+    assert seen["PATH"] == str(npm_dir)
+
+
+def test_stale_work_folders_from_earlier_fetches_are_removed(home: Layout, upstream: Path):
+    stale = clone_of(home).parent / ".tmp-v7.0.2-1"
+    stale.mkdir(parents=True)
+    (stale / "partial").write_text("left by a killed install")
+    installer.install(home, "2.3.2")
+    assert leftovers(home) == []
+    assert (clone_of(home) / "skills").is_dir()
+
+
+def test_a_target_that_cannot_be_replaced_warns_instead_of_failing(
+    home: Layout, upstream: Path, capsys: pytest.CaptureFixture[str]
+):
+    clone_of(home).parent.mkdir(parents=True)
+    clone_of(home).write_text("a file where the clone folder goes")
+    assert installer.install(home, "2.3.2") == home.runtime_binary("2.3.2")
+    assert "cannot fetch superpowers v7.0.2" in capsys.readouterr().err
+    assert leftovers(home) == []
+
+
+def test_a_profile_that_cannot_hold_the_clone_folder_warns_instead_of_failing(
+    home: Layout, upstream: Path, capsys: pytest.CaptureFixture[str]
+):
+    clone_of(home).parent.parent.mkdir(parents=True, exist_ok=True)
+    clone_of(home).parent.write_text("a file where the superpowers folder goes")
+    assert installer.install(home, "2.3.2") == home.runtime_binary("2.3.2")
+    assert "cannot fetch superpowers v7.0.2" in capsys.readouterr().err
 
 
 def test_setup_after_install_copies_the_clone_with_the_skill_names_rewritten(

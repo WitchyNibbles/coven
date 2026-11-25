@@ -119,12 +119,17 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
 
 - `install` runs npm to put the pinned OpenCode into `P/runtime`, then runs `git clone` to put
   superpowers v7.0.2 into `P/superpowers/v7.0.2` (skipped when it is already there). These are the
-  only steps that use the network. A clone whose commit is not the pinned one is removed and
-  install fails; without `git`, or when the clone fails, install warns and still exits 0. npm runs with the profile env: the profile's XDG, temp and config folders, no key env and no
-  inherited `OPENCODE_` setting, so the package's postinstall check never writes into your own
-  OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm cache
-  still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2
-  binary instead.
+  only steps that use the network.
+  - npm runs with the profile env: the profile's XDG, temp and config folders, no key env and no
+    inherited `OPENCODE_` setting, so the package's postinstall check never writes into your own
+    OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm
+    cache still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2 binary instead.
+  - The clone goes over https only, with no hooks and no prompt, in its own process group, which a
+    timeout kills. Git's own config is not used for it (no mirrors, `insteadOf` rewrites or
+    credential helpers), because the pinned commit already checks what was downloaded; the proxy
+    environment variables (`https_proxy` and the rest) are used. A clone whose commit is not the
+    pinned one is removed and install fails. Without `git`, or when the clone fails, install warns
+    and still exits 0.
 - `setup` writes the config (with the content below), the plugin copy and `profile.json`, all or
   none. The preset
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
