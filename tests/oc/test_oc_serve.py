@@ -126,6 +126,50 @@ def test_stop_kills_and_removes_pid_and_port_keeps_password(fake: Good, procs: P
     assert serve.stop(fake.layout) is False
 
 
+def test_stop_of_a_server_that_died_unreaped_succeeds(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A dead child nobody has reaped is a zombie: resolving its /proc/<pid>/exe raises.
+    start(fake, procs)
+    files = serve.files(fake.layout)
+    resolve = os.path.realpath
+
+    def zombie_proc(path: str, *args: Any, **kwargs: Any) -> str:
+        if str(path).startswith("/proc/"):
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(serve.os.path, "realpath", zombie_proc)
+
+    assert serve.running(fake.layout) is None
+    assert serve.stop(fake.layout, grace_s=0.2) is False
+    assert not files.pid.exists()
+    assert not files.port.exists()
+    assert files.password.is_file()
+
+
+def test_stop_of_a_server_that_dies_while_stopping_succeeds(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The server is alive when stop looks and a zombie when stop waits for it to go.
+    info = start(fake, procs)
+    resolve = os.path.realpath
+    proc = f"/proc/{info.pid}/exe"
+    reads: list[str] = []
+
+    def zombie_after_term(path: str, *args: Any, **kwargs: Any) -> str:
+        if str(path) == proc and reads:
+            raise FileNotFoundError(2, "No such file or directory", proc)
+        if str(path) == proc:
+            reads.append(proc)
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(serve.os.path, "realpath", zombie_after_term)
+
+    assert serve.stop(fake.layout, grace_s=5.0) is True
+    assert not serve.files(fake.layout).pid.exists()
+
+
 def no_sigkill(pid: int, signum: int) -> None:
     """A kill that never delivers SIGKILL, so a server that ignores SIGTERM does not stop."""
     if signum != signal.SIGKILL:
@@ -320,7 +364,7 @@ def test_status_lists_pm_sessions(
     ]
     routes = {
         "/api/session": {"data": sessions, "cursor": None},
-        "/api/session/active": {"data": [{"id": "ses_x1"}]},
+        "/api/session/active": {"data": {"ses_x1": {"type": "running"}}},
         "/api/session/ses_x1/permission": {"data": []},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
@@ -335,12 +379,55 @@ def test_status_lists_pm_sessions(
     assert "ASK WAITING" not in lines[1]
 
 
+@pytest.mark.parametrize(
+    "case",
+    [({}, "idle"), ({"ses_x1": {"type": "running"}}, "busy"), ({"ses_other": {}}, "idle")],
+)
+def test_status_reads_the_active_sessions_as_an_object_keyed_by_session_id(
+    good: Good,
+    procs: Procs,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[dict[str, Any], str],
+) -> None:
+    active, word = case
+    routes = {
+        "/api/session": {"data": [pm_session("x1")], "cursor": None},
+        "/api/session/active": {"data": active},
+        "/api/session/ses_x1/permission": {"data": []},
+    }
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 2
+    assert lines[1].split("  ")[:2] == ["pm-x1", word]
+
+
+def test_status_says_why_when_the_active_sessions_are_not_an_object(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = {
+        "/api/session": {"data": [pm_session("x1")], "cursor": None},
+        "/api/session/active": {"data": [{"id": "ses_x1"}]},
+        "/api/session/ses_x1/permission": {"data": []},
+    }
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    info = start(good, procs)
+
+    assert serve.status(good.layout) == [
+        f"running pid {info.pid} port {info.port}",
+        "sessions unavailable: GET /api/session/active returned no data object",
+    ]
+
+
 def test_status_shows_a_waiting_ask(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     routes = {
         "/api/session": {"data": [pm_session("x1", outcome="succeeded")], "cursor": None},
-        "/api/session/active": {"data": []},
+        "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": [{"id": "per_42"}]},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
@@ -368,7 +455,7 @@ def test_status_names_an_ask_by_its_request_id_or_says_it_has_none(
     ask, shown = case
     routes = {
         "/api/session": {"data": [pm_session("x1")], "cursor": None},
-        "/api/session/active": {"data": []},
+        "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": [ask]},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
@@ -384,7 +471,7 @@ def test_status_warns_when_the_session_list_has_another_page(
 ) -> None:
     routes = {
         "/api/session": {"data": [pm_session("x1")], "cursor": "next-page"},
-        "/api/session/active": {"data": []},
+        "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": []},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
