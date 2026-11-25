@@ -355,8 +355,8 @@ What `coven opencode` does not do, or does not know. The install steps are in
 
 - Context limits: OpenCode 2.3.2 assumes 200000 tokens of context and 32000 of output for a gateway
   model with no limit set, so a model with a smaller window can overflow before OpenCode compacts.
-  Give each gateway model its real window if your version of setup offers a way to (see
-  `coven opencode setup` in opencode/README.md); otherwise use models with at least that window.
+  Give each gateway model its real window with `coven opencode setup --limit ID=CONTEXT[:OUTPUT]`
+  (see opencode/README.md); setup and doctor warn about a litellm model with no `--limit`.
 - Every `shell` and `webfetch` call asks. A headless `opencode run` rejects the ask, so it cannot
   use shell.
 - The GM/PM hierarchy does not run on OpenCode yet; it is planned.
