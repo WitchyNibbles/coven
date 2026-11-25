@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- pm-permissions: a plain `git push` after `cd <dir> &&` is checked in `<dir>` alone, so a PM can
+  push a worktree's branch from the main checkout; after `;`, `||` or `|`, and anywhere in a command
+  with a parenthesis, the old directory is still checked.
+- The manager, and the routing on Claude Code and OpenCode, keep replies to the user in the language
+  they write in, also after a compaction or a resume; briefs and messages to agents stay English.
+  The handoff and the PM brief name the user's language.
+
 ## 0.2.0 (2026-11-25)
 
 - The coven plugin for OpenCode removes the provider key variable and `OPENCODE_SERVER_PASSWORD`

@@ -1,4 +1,4 @@
-<!-- opencode override of instructions/routing.md sha256:745c5015d0055b80205794eae61abf31e4e149feb45e8740d577841fa215fec2 -->
+<!-- opencode override of instructions/routing.md sha256:e2c25fd9a7cfbe426bcc067417f79e7de29a59c827911ab905df6f9ca9f04282 -->
 # coven routing
 
 Project config is off in this profile: at the start of work in a repo, read its `AGENTS.md` and
@@ -57,6 +57,13 @@ messages) gets short, plain text: a quick note to a teammate, a few lines, no fo
 unless the content needs them. Facts, receipts, links and exact commands still go in, in full.
 Docs, specs and code comments keep their usual plain style. The user's own tone preferences are
 in the `user/` entries of the store.
+
+Reply to the user in the language they write in, from the first line, and keep to it after a
+compaction or a resume, even when briefs, agent messages, tool output or the summary around you are
+in another language. This covers every reply, question, production-step summary and report, and the
+text around a draft. Text for agents (briefs, subagent prompts, messages to other agents) stays in
+English. Repo text (code, commits, PRs, docs) follows the repo's language, and a draft for someone
+else follows its reader.
 
 ## Writing code
 
