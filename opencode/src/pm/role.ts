@@ -15,6 +15,10 @@ export interface RoleInfo {
 }
 
 const ROLES: ReadonlySet<unknown> = new Set<Role>(["gm", "pm", "former-gm"]);
+
+function isRole(value: unknown): value is Role {
+  return ROLES.has(value);
+}
 const MAX_HOPS = 32;
 /** What a lookup that cannot be trusted resolves to: the strictest role. */
 const FAIL_CLOSED: RoleInfo = { role: "pm" };
@@ -28,10 +32,13 @@ function ownRole(session: SessionLike): Outcome {
     return "none";
   }
   const coven = metadata["coven"];
-  if (!isPlainObject(coven) || !ROLES.has(coven["role"])) {
+  if (!isPlainObject(coven)) {
     return "unreadable";
   }
-  const role = coven["role"] as Role;
+  const role = coven["role"];
+  if (!isRole(role)) {
+    return "unreadable";
+  }
   const code = coven["code"];
   return typeof code === "string" ? { role, code } : { role };
 }

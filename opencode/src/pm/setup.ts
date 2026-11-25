@@ -106,14 +106,20 @@ export async function pmSetup(
   const registrations: unknown[] = [];
   const cleanup = (): void => {
     stop.abort();
-    guard.dispose();
-    registrations.forEach(dispose);
+    try {
+      guard.dispose();
+    } finally {
+      registrations.forEach(dispose);
+    }
   };
   try {
+    // each is kept as soon as it exists: a later one that fails must not leak it
     registrations.push(
       await ctx.shell.hook("create.before", (event) =>
         shell.createBefore(event),
       ),
+    );
+    registrations.push(
       await ctx.permission.hook(
         "evaluate",
         askToDeny((id) => resolveRole(id, get)),

@@ -72,6 +72,10 @@ interface Setup {
   unlisted?: readonly string[];
   /** False makes the shell and evaluate hooks return no registration to dispose. */
   disposable?: boolean;
+  /** Makes the evaluate hook registration fail, after the shell one went through. */
+  failEvaluate?: boolean;
+  /** Makes disposing the execute.before hook throw. */
+  guardDisposeThrows?: boolean;
   /** What each guard child the fake spawn starts does; it allows the call by default. */
   guard?: Behaviour;
   /** What the `python3` version check does; it passes by default, whatever `guard` does. */
@@ -83,6 +87,8 @@ function makeWorld({
   options,
   unlisted = [],
   disposable = true,
+  failEvaluate = false,
+  guardDisposeThrows = false,
   guard = exits(0),
   python = exits(0),
 }: Setup) {
@@ -175,7 +181,9 @@ function makeWorld({
     permission: {
       hook: (_name, callback) => {
         evaluateHooks.push(callback);
-        return Promise.resolve(registration("evaluate"));
+        return failEvaluate
+          ? Promise.reject(new Error("evaluate refused"))
+          : Promise.resolve(registration("evaluate"));
       },
       list: ({ sessionID }) => Promise.resolve(asks.get(sessionID) ?? []),
     },
@@ -196,6 +204,9 @@ function makeWorld({
         return Promise.resolve({
           dispose: () => {
             entry.disposed += 1;
+            if (guardDisposeThrows) {
+              throw new Error("guard dispose failed");
+            }
           },
         });
       },

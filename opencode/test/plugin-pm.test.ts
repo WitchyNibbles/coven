@@ -205,6 +205,20 @@ await test("a child busy since after the plugin started holds it back, and the l
   assert.match(p.serveLogs[0] ?? "", /held back for pm-proj: child ses_pm_kid/);
 });
 
+await test("a setup that fails on the evaluate hook still disposes the shell hook it registered", async () => {
+  const p = bootCoven({ options: COVEN, failEvaluate: true });
+  await assert.rejects(p.outcome, /evaluate refused/);
+  assert.deepEqual(p.disposals, ["create.before"]);
+});
+
+await test("teardown disposes the registrations even when the execute.before hook cannot be disposed", async () => {
+  const p = bootCoven({ options: COVEN, guardDisposeThrows: true });
+  const cleanup = await p.outcome;
+  assert.throws(cleanup, /guard dispose failed/);
+  assert.deepEqual([...p.disposals].sort(), ["create.before", "evaluate"]);
+  assert.equal(p.subscriptions[1]?.signal.aborted, true);
+});
+
 await test("the plugins this file started stop", () => {
   for (const stop of cleanups) {
     stop();
