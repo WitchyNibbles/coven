@@ -248,3 +248,39 @@ await test("a child that turned busy after the plugin started still does", async
   await tracker.onEvent(end("pm1"));
   assert.deepEqual(world.prompts, []);
 });
+
+await test("one pm turn end reads the session once", async () => {
+  const { world, tracker } = rig();
+  const reads: string[] = [];
+  const get = world.get.bind(world);
+  world.get = (input) => {
+    reads.push(input.sessionID);
+    return get(input);
+  };
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(
+    reads.filter((id) => id === "pm1"),
+    ["pm1"],
+  );
+  assert.equal(world.prompts.length, 1);
+});
+
+await test("a busy first child ends the walk: no deeper level is read", async () => {
+  const { world, tracker, logs } = rig([
+    { id: "kid1", parentID: "pm1", time: { busy: 900 } },
+    { id: "kid2", parentID: "kid1", time: { busy: 900 } },
+  ]);
+  const asked: (string | undefined)[] = [];
+  const list = world.list.bind(world);
+  world.list = (input) => {
+    asked.push(input.parentID);
+    return list(input);
+  };
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+  assert.deepEqual(
+    asked.filter((id) => id !== undefined),
+    ["pm1"],
+  );
+  assert.match(logs[0] ?? "", /held back for pm-acme: child kid1 is busy/);
+});

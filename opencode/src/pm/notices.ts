@@ -1,6 +1,6 @@
 import type { SessionApi, SessionLike } from "../context.ts";
 import { isPlainObject, messageOf, ownString } from "../join/fields.ts";
-import { descendants, isBusy } from "./busy.ts";
+import { isBusy, walkTree } from "./busy.ts";
 import { findGm } from "./find.ts";
 import { isRoot, resolveRole } from "./role.ts";
 import type { SharedState } from "./state.ts";
@@ -93,19 +93,20 @@ export class NoticeTracker {
         messaged: messaged.has(sessionID),
         stopped: stopped.has(sessionID),
       };
-      await this.ended(sessionID, outcome, marks);
+      await this.ended(sessionID, await this.owner(sessionID), outcome, marks);
     }
   }
 
   private async ended(
     sessionID: string,
+    owner: Owner,
     outcome: Outcome,
     marks: Marks,
   ): Promise<void> {
-    const code = await this.pmCode(sessionID);
-    if (code === undefined || marks.stopped) {
+    if (owner.kind !== "pm" || marks.stopped) {
       return;
     }
+    const { code } = owner;
     // a failure is always news; anything else is quiet after a message or while a child works
     if (outcome !== "failed" && (await this.quiet(sessionID, code, marks))) {
       return;
@@ -123,12 +124,6 @@ export class NoticeTracker {
     );
   }
 
-  /** The code of the PM in `directory` this session is, or `undefined` for any other session. */
-  private async pmCode(sessionID: string): Promise<string | undefined> {
-    const owner = await this.owner(sessionID);
-    return owner.kind === "pm" ? owner.code : undefined;
-  }
-
   /** Whether this copy owns the session; a lookup that fails is its own answer, and is logged. */
   private async owner(sessionID: string): Promise<Owner> {
     let session;
@@ -143,7 +138,12 @@ export class NoticeTracker {
     if (!isRoot(session) || session.location?.directory !== this.directory) {
       return { kind: "other" };
     }
-    const role = await resolveRole(sessionID, () => Promise.resolve(session));
+    // the session just read answers for itself: a root's role is its own, so no second `get`
+    const role = await resolveRole(sessionID, (id) =>
+      id === sessionID
+        ? Promise.resolve(session)
+        : this.deps.session.get({ sessionID: id }),
+    );
     return role?.role === "pm" && role.code !== undefined
       ? { kind: "pm", code: role.code }
       : { kind: "other" };
@@ -167,14 +167,21 @@ export class NoticeTracker {
     return child !== undefined;
   }
 
-  /** A session below the PM that works. A tree that cannot be read counts as none: the notice goes out. */
+  /**
+   * The first session below the PM that works, found level by level without reading past it. A
+   * tree that cannot be read counts as none: the notice goes out.
+   */
   private async busyChild(
     sessionID: string,
     code: string,
   ): Promise<SessionLike | undefined> {
     try {
-      const tree = await descendants(this.deps.session, sessionID);
-      return tree.find((child) => isBusy(child, this.deps.startedAt));
+      for await (const child of walkTree(this.deps.session, sessionID)) {
+        if (isBusy(child, this.deps.startedAt)) {
+          return child;
+        }
+      }
+      return undefined;
     } catch (error) {
       this.deps.log(
         `coven notice: cannot read the children of pm-${code}: ${messageOf(error)}`,
