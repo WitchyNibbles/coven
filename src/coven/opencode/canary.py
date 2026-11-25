@@ -36,16 +36,27 @@ SETTLE: Final = 10.0
 POLL: Final = 0.1
 
 
+def basic_auth(password: str) -> str:
+    """The `Authorization` header value for the server's one user and `password`."""
+    token = base64.b64encode(f"{USERNAME}:{password}".encode()).decode()
+    return f"Basic {token}"
+
+
+def listening_url(line: str) -> str | None:
+    """The server's URL when `line` is its `server listening on ...` line, else None."""
+    match = LISTENING.match(line.strip())
+    return match.group(1) if match else None
+
+
 def http_json(method: str, url: str, password: str) -> object:
     """One request with basic auth; the parsed JSON body, or None when the body is empty."""
     parts = urlsplit(url)
-    token = base64.b64encode(f"{USERNAME}:{password}".encode()).decode()
     what = f"{method} {parts.path}"
     connection = http.client.HTTPConnection(
         parts.hostname or "", parts.port or 80, timeout=HTTP_TIMEOUT
     )
     try:
-        connection.request(method, parts.path, headers={"Authorization": f"Basic {token}"})
+        connection.request(method, parts.path, headers={"Authorization": basic_auth(password)})
         response = connection.getresponse()
         body = response.read()
     except (OSError, http.client.HTTPException) as error:
@@ -68,6 +79,8 @@ class ServerView:
 
     plugins: list[dict[str, object]]
     skills: list[dict[str, object]]
+    # The operationIds of the server's OpenAPI document.
+    operations: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -107,9 +120,8 @@ def _watch(stream: Iterable[str], found: queue.Queue[str | None]) -> None:
     """Pass on the server's URL, then keep draining so a chatty server never blocks on a pipe."""
     try:
         for line in stream:
-            match = LISTENING.match(line.strip())
-            if match:
-                found.put(match.group(1))
+            if url := listening_url(line):
+                found.put(url)
     except (OSError, ValueError):
         pass
     found.put(None)
@@ -133,18 +145,32 @@ def _wait_for_url(found: queue.Queue[str | None], timeout: float) -> str:
     return url
 
 
-def _items(payload: object, path: str) -> list[dict[str, object]]:
+def data_items(payload: object, path: str) -> list[dict[str, object]]:
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, list):
         raise OpencodeError(f"GET {path} returned no data list")
     return [item for item in data if isinstance(item, dict)]
 
 
-def _loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, object]]:
+def operation_ids(document: object) -> frozenset[str]:
+    """Every operationId in an OpenAPI document."""
+    paths = document.get("paths") if isinstance(document, dict) else None
+    if not isinstance(paths, dict):
+        return frozenset()
+    found: set[str] = set()
+    for item in paths.values():
+        for operation in item.values() if isinstance(item, dict) else ():
+            name = operation.get("operationId") if isinstance(operation, dict) else None
+            if isinstance(name, str):
+                found.add(name)
+    return frozenset(found)
+
+
+def loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, object]]:
     """The plugin list once coven is in it; 2.3.2 lists none until they have loaded (~0.5 s)."""
     deadline = time.monotonic() + SETTLE
     while True:
-        plugins = _items(fetch("GET", f"{url}/api/plugin", password), "/api/plugin")
+        plugins = data_items(fetch("GET", f"{url}/api/plugin", password), "/api/plugin")
         if any(plugin.get("id") == COVEN_PLUGIN for plugin in plugins):
             return plugins
         if time.monotonic() >= deadline:
@@ -155,9 +181,10 @@ def _loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, obj
 def _read_view(url: str, password: str, fetch: Fetch) -> ServerView:
     # Skills planted before boot only show after a reload (probe 2).
     fetch("POST", f"{url}/api/location/reload", password)
-    plugins = _loaded_plugins(url, password, fetch)
-    skills = _items(fetch("GET", f"{url}/api/skill", password), "/api/skill")
-    return ServerView(plugins, skills)
+    plugins = loaded_plugins(url, password, fetch)
+    skills = data_items(fetch("GET", f"{url}/api/skill", password), "/api/skill")
+    operations = operation_ids(fetch("GET", f"{url}/openapi.json", password))
+    return ServerView(plugins, skills, operations)
 
 
 def _start(binary: Path, env: Mapping[str, str], cwd: Path) -> subprocess.Popen[str]:

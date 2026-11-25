@@ -16,6 +16,14 @@ from coven.opencode.profile import OpencodeError
 LISTENING_URL = "http://127.0.0.1:1"
 PLUGINS: list[dict[str, object]] = [{"id": "coven", "state": {"status": "active"}}]
 SKILLS: list[dict[str, object]] = [{"id": "opencode", "path": "skill://opencode/SKILL.md"}]
+# Two operations, one of them under a path that holds a non-operation entry.
+OPENAPI = {
+    "paths": {
+        "/api/session": {"get": {"operationId": "session.list"}, "parameters": []},
+        "/api/session/{id}": {"patch": {"operationId": "session.update"}},
+    }
+}
+OPERATIONS = frozenset({"session.list", "session.update"})
 
 
 class Fetches:
@@ -33,6 +41,8 @@ class Fetches:
             return {"data": PLUGINS}
         if url.endswith("/api/skill"):
             return {"data": SKILLS}
+        if url.endswith("/openapi.json"):
+            return OPENAPI
         return None
 
 
@@ -76,11 +86,12 @@ def test_read_server_returns_the_view_and_kills_a_server_that_ignores_term(
     began = time.monotonic()
     view = start(tmp_path, "ignore-term", fetch, start_timeout=10.0, grace=0.2)
     assert time.monotonic() - began < 3
-    assert view == ServerView(PLUGINS, SKILLS)
+    assert view == ServerView(PLUGINS, SKILLS, OPERATIONS)
     assert [(method, url) for method, url, _ in fetch.calls] == [
         ("POST", f"{LISTENING_URL}/api/location/reload"),
         ("GET", f"{LISTENING_URL}/api/plugin"),
         ("GET", f"{LISTENING_URL}/api/skill"),
+        ("GET", f"{LISTENING_URL}/openapi.json"),
     ]
     assert len(spawned) == 1
     assert spawned[0].process.poll() is not None
@@ -94,23 +105,26 @@ class Loading:
         self.calls: list[str] = []
 
     def __call__(self, method: str, url: str, password: str) -> object:
-        self.calls.append(f"{method} {url.rsplit('/api', 1)[1]}")
+        self.calls.append(f"{method} {url.removeprefix(LISTENING_URL).removeprefix('/api')}")
         if url.endswith("/api/plugin"):
             self.empty -= 1
             return {"data": [] if self.empty >= 0 else PLUGINS}
+        if url.endswith("/openapi.json"):
+            return OPENAPI
         return {"data": SKILLS} if url.endswith("/api/skill") else None
 
 
 def test_read_server_waits_for_the_plugins_to_finish_loading(tmp_path: Path, spawned: list[Spawn]):
     loading = Loading(empty=2)
     view = start(tmp_path, "ok", loading, start_timeout=10.0, grace=0.5)
-    assert view == ServerView(PLUGINS, SKILLS)
+    assert view == ServerView(PLUGINS, SKILLS, OPERATIONS)
     assert loading.calls == [
         "POST /location/reload",
         "GET /plugin",
         "GET /plugin",
         "GET /plugin",
         "GET /skill",
+        "GET /openapi.json",
     ]
 
 
@@ -119,7 +133,7 @@ def test_read_server_gives_up_waiting_for_coven_and_returns_what_it_saw(
 ):
     monkeypatch.setattr(canary, "SETTLE", 0.3)
     view = start(tmp_path, "ok", Loading(empty=10**6), start_timeout=10.0, grace=0.5)
-    assert view == ServerView([], SKILLS)
+    assert view == ServerView([], SKILLS, OPERATIONS)
     assert spawned[0].process.poll() is not None
 
 

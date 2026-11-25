@@ -16,6 +16,13 @@ export default {
     covenSetup(
       ctx,
       { now: () => Date.now(), log: (line) => console.error(line) },
-      { covenRoot: COVEN_ROOT, keyEnv: "COVEN_E2E_KEY" },
+      {
+        covenRoot: COVEN_ROOT,
+        keyEnv: "COVEN_E2E_KEY",
+        profileDir: "/tmp/coven-test/profile",
+        serveDir: "/tmp/coven-test/profile/state/serve",
+        store: null,
+        secretRules: [],
+      },
     ),
 };

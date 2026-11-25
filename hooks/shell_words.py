@@ -28,6 +28,9 @@ anything left as code holds a `$` or a backtick (`cd $HOME/r`, `echo $[$_]`): ba
 last word of the previous command, a blanked message or the self-check's words, and arithmetic on
 `a[$(...)]` runs it. Any other line comes back unchanged.
 
+`quoted_heredoc_spans(command)` gives where each (quoted) heredoc body of a line is, for the
+OpenCode server guard, which reads such a body as literal text.
+
 `heredoc_bodies(command)` hands prod-guard's relative-glob check the command with its heredoc bodies
 blanked, the bodies as written and the first word of each command that reads one (`program_name`:
 `~/x/python` as written), or None when the scanner cannot follow the line or it has a pipe (see its
@@ -337,6 +340,8 @@ class _Lexer:
         self.comments = comments
         self.substitutions = substitutions  # read a plain `$(...)` as part of a word
         self.comment_spans: list[tuple[int, int]] = []
+        # Where each heredoc body is, `$(cat <<'X' ...)` included: all quoted (`_redirect`).
+        self.body_spans: list[tuple[int, int]] = []
 
     def tokenize(self) -> list[_Token]:
         while self.pos < len(self.text):
@@ -416,6 +421,7 @@ class _Lexer:
         """The bodies of the heredocs started on the line that just ended, in order."""
         for heredoc in self.pending:
             end = _find_body(self.text, self.pos, heredoc)
+            self.body_spans.append(heredoc.body)
             self.pos = min(end + 1, len(self.text))
         self.pending.clear()
 
@@ -578,6 +584,7 @@ class _Lexer:
         if not text.startswith(")", close):
             raise _GiveUp
         self.pos = close + 1
+        self.body_spans.append(heredoc.body)
         return text[heredoc.body[0] : heredoc.body[1]].rstrip("\n")
 
     def _quoted_delimiter(self, pos: int) -> tuple[str, int]:
@@ -1201,6 +1208,19 @@ def heredoc_bodies(command: str) -> HeredocBodies | None:
         bodies=[command[start:end] for start, end in spans],
         readers=[program_name(c.words[0]) if c.words else None for c in readers],
     )
+
+
+def quoted_heredoc_spans(command: str) -> list[tuple[int, int]] | None:
+    """Where the body of each heredoc of `command` is (`text[start:end]`), in line order, the
+    `$(cat <<'X' ...)` form included. Every one has a quoted delimiter (`<<'X'`, `<<"X"`, `<<\\X`,
+    `<<-'X'`), so its body is literal text: the scanner gives up on an unquoted one, whose body
+    expands. None when the scanner cannot follow the command."""
+    lexer = _Lexer(command, comments=True, substitutions=True)
+    try:
+        lexer.tokenize()
+    except _GiveUp:
+        return None
+    return list(lexer.body_spans)
 
 
 def without_patterns(command: str) -> str:

@@ -662,3 +662,50 @@ def test_a_crash_behind_the_gate_is_reported_and_logged_as_prod_guard(
     log = Path(os.environ["XDG_CACHE_HOME"]) / "coven" / "logs" / "prod-guard.jsonl"
     assert json.loads(log.read_text().splitlines()[-1])["error"] == "exit 1"
     assert not (log.parent / "prod-guard-gate.jsonl").exists()
+
+
+SERVER_GUARD = HOOKS / "opencode_server_guard.py"
+SERVER_GUARD_ARGS = ("--profile", "/p", "--serve", "/p/state/serve", "--coven-root", "/c")
+
+
+@pytest.mark.parametrize("python", ["old_python", "no_python"])
+def test_old_python_refuses_for_the_opencode_server_guard(
+    request: pytest.FixtureRequest, run_hook: Run, python: str
+) -> None:
+    env: dict[str, str] = request.getfixturevalue(python)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "session_id": "s1"}
+    proc = run_hook(WRAPPER, payload, env, args=(str(SERVER_GUARD), *SERVER_GUARD_ARGS))
+    assert proc.returncode == 2
+    assert "coven opencode-server-guard: " in proc.stderr
+    assert "Python 3.12" in proc.stderr
+
+
+def test_old_python_refuses_the_opencode_server_guard_on_every_call_of_a_session(
+    run_hook: Run, old_python: dict[str, str]
+) -> None:
+    payload = {"tool_name": "Read", "tool_input": {"file_path": "/p/a"}, "session_id": "s1"}
+    for _ in range(2):
+        proc = run_hook(WRAPPER, payload, old_python, args=(str(SERVER_GUARD),))
+        assert proc.returncode == 2
+        assert "opencode-server-guard" in proc.stderr
+
+
+def test_the_opencode_server_guard_runs_through_the_wrapper(
+    run_hook: Run, tmp_path: Path, modern_python: dict[str, str]
+) -> None:
+    profile = tmp_path / "profile"
+    args = (
+        str(SERVER_GUARD),
+        "--profile",
+        str(profile),
+        "--serve",
+        str(profile / "state" / "serve"),
+        "--coven-root",
+        str(tmp_path / "coven"),
+    )
+    ok = {"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": str(tmp_path)}
+    assert run_hook(WRAPPER, ok, modern_python, args=args).returncode == 0
+    refused = {**ok, "tool_input": {"command": "opencode db"}}
+    proc = run_hook(WRAPPER, refused, modern_python, args=args)
+    assert proc.returncode == 2
+    assert "coven_pm_list" in proc.stderr

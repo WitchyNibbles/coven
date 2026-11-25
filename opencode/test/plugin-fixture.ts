@@ -17,6 +17,14 @@ import { joinSetup } from "../src/plugin.ts";
 import { exits, fakeSpawn } from "./guard-fake.ts";
 import type { Behaviour } from "./guard-fake.ts";
 
+/** The options setup always writes besides `covenRoot` and `keyEnv`; placeholder paths. */
+export const PROFILE_OPTIONS = {
+  profileDir: "/tmp/coven-test/profile",
+  serveDir: "/tmp/coven-test/profile/state/serve",
+  store: null,
+  secretRules: [],
+};
+
 export const LEAD = "ses_lead";
 export const KID = "ses_kid";
 export const DIRECTORY = "/work/session";

@@ -14,6 +14,9 @@
     "final-reviewer": {
       "model": "litellm/big"
     },
+    "project-manager": {
+      "model": "litellm/big"
+    },
     "title": {
       "model": "litellm/small"
     }
@@ -44,6 +47,41 @@
       "options": {
         "covenRoot": "<COVEN_ROOT>",
         "keyEnv": "GATEWAY_KEY",
+        "profileDir": "<P>",
+        "serveDir": "<P>/state/serve",
+        "store": "<STORE>",
+        "secretRules": [
+          {
+            "action": "read",
+            "resource": "*.env",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "*.env.*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "*.env.example",
+            "effect": "allow"
+          },
+          {
+            "action": "edit",
+            "resource": "*.env",
+            "effect": "deny"
+          },
+          {
+            "action": "edit",
+            "resource": "*.env.*",
+            "effect": "deny"
+          },
+          {
+            "action": "edit",
+            "resource": "<P>/config/opencode/skills/*",
+            "effect": "deny"
+          }
+        ],
         "toolChoiceAuto": [
           "litellm"
         ],

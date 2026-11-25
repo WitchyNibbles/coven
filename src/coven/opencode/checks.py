@@ -10,8 +10,9 @@ from typing import Final
 
 from coven.doctor import one_line
 from coven.errors import CovenError
+from coven.opencode import serve
 from coven.opencode.canary import read_server
-from coven.opencode.check_types import Context, Outcome, Read, Server
+from coven.opencode.check_types import Context, Live, Outcome, Read, Server
 from coven.opencode.checks_runtime import (
     config_check,
     coven_root_check,
@@ -22,7 +23,14 @@ from coven.opencode.checks_runtime import (
     runtime_check,
     superpowers_check,
 )
-from coven.opencode.checks_server import plugin_check, skills_check
+from coven.opencode.checks_server import (
+    operations_check,
+    password_check,
+    plugin_check,
+    python3_check,
+    server_check,
+    skills_check,
+)
 from coven.opencode.profile import Layout, OpencodeError, Profile, load_profile
 from coven.opencode.runtime import binary_path, isolated_env, run_env
 
@@ -35,8 +43,12 @@ CHECKS: Final[tuple[tuple[str, Check], ...]] = (
     ("paths", paths_check),
     ("config", config_check),
     ("key", key_check),
+    ("python3", python3_check),
+    ("server", server_check),
+    ("password", password_check),
     ("plugin", plugin_check),
     ("skills", skills_check),
+    ("operations", operations_check),
     ("coven root", coven_root_check),
     ("project config", project_config_check),
     ("superpowers", superpowers_check),
@@ -65,11 +77,16 @@ def _profile(layout: Layout) -> tuple[Profile | None, str]:
         return None, one_line(str(error))
 
 
+def _running(layout: Layout) -> Live | None:
+    info = serve.running(layout)
+    return Live(info, layout) if info else None
+
+
 def _context(layout: Layout, cwd: Path, base: Mapping[str, str], read: Read) -> Context:
     profile, note = _profile(layout)
     env = run_env(profile, layout, base, offline=True) if profile else isolated_env(layout, base)
     binary = binary_path(layout)
-    server = Server(read, binary, env, layout.config_dir)
+    server = Server(read, binary, env, layout.config_dir, _running(layout))
     return Context(layout, cwd, base, profile, note, env, binary, server)
 
 

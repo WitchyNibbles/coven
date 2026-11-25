@@ -137,8 +137,8 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   none. The preset
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
   value) and `--model lead=ID`; the preset `opencode` takes only models and reads
-  `OPENCODE_API_KEY`. Roles are lead, implementer, reviewer, explorer, final-reviewer and title,
-  and a role with no model uses the lead's. `--limit ID=CONTEXT[:OUTPUT]` (litellm only, repeat it
+  `OPENCODE_API_KEY`. Roles are lead, implementer, reviewer, explorer, final-reviewer, title and
+  project-manager, and a role with no model uses the lead's. `--limit ID=CONTEXT[:OUTPUT]` (litellm only, repeat it
   per model) writes the model's context and output size in tokens into the config; without one
   OpenCode assumes 200000 tokens of context and 32000 of output, so a model with a smaller window
   overflows before OpenCode compacts. Setup prints one warning naming the litellm models with no limit.

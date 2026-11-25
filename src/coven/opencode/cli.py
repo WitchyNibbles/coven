@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from coven import paths
-from coven.opencode import checks, generate, install, runtime, superpowers
+from coven.opencode import checks, generate, install, runtime, serve, superpowers
+from coven.opencode.canary import AUTH_VAR, USERNAME_ENV, http_json, loaded_plugins
 from coven.opencode.checkout import needs_checkout
+from coven.opencode.checks_server import plugin_outcome
 from coven.opencode.profile import (
     ASSUMED_CONTEXT,
     PINNED_VERSION,
     ROLES,
+    Layout,
     OpencodeError,
     Profile,
     layout,
@@ -21,7 +25,17 @@ from coven.opencode.profile import (
     make_profile,
 )
 
+type ExecFn = Callable[[str, list[str], dict[str, str]], object]
+
 FLAGS_NEED_PRESET = "pass --preset with the other flags, or no flags to regenerate"
+
+
+def _profile_at(home: Layout) -> Profile:
+    """The saved profile (Raise OpencodeError when setup has not run)."""
+    saved = load_profile(home)
+    if saved is None:
+        raise OpencodeError(runtime.NO_PROFILE)
+    return saved
 
 
 def _chosen_profile(args: argparse.Namespace) -> Profile:
@@ -29,10 +43,7 @@ def _chosen_profile(args: argparse.Namespace) -> Profile:
     if args.preset is None:
         if args.base_url is not None or args.key_env is not None or args.model or args.limit:
             raise OpencodeError(FLAGS_NEED_PRESET)
-        saved = load_profile(layout())
-        if saved is None:
-            raise OpencodeError(runtime.NO_PROFILE)
-        return saved
+        return _profile_at(layout())
     return make_profile(args.preset, args.base_url, args.key_env, args.model, args.limit)
 
 
@@ -88,9 +99,44 @@ def run_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+RUN_REFUSED = "a coven server is running; use `coven opencode gm`"
+
+
 def run_run(args: argparse.Namespace) -> int:
+    # `run` and the server share the profile's database; two OpenCode processes writing it is unsafe.
+    if serve.running(layout()) is not None:
+        raise OpencodeError(RUN_REFUSED)
     passed = args.opencode_args
     return runtime.run(passed[1:] if passed[:1] == ["--"] else passed, exec_fn=os.execve)
+
+
+PLUGIN_INACTIVE = "coven's plugin is not active on the server"
+
+
+def _attach_target() -> tuple[str, str]:
+    """The URL and password of the coven server, started first when none runs."""
+    home = layout()
+    profile = _profile_at(home)
+    info = serve.running(home) or serve.start(home, profile)
+    return f"http://{serve.HOST}:{info.port}", serve.read_password(home)
+
+
+def _with_login(password: str, exec_fn: ExecFn) -> ExecFn:
+    """`exec_fn` with the server password added to the env it execs, and nowhere else."""
+
+    def attach(path: str, argv: list[str], env: dict[str, str]) -> object:
+        login = {k: v for k, v in env.items() if k != USERNAME_ENV} | {AUTH_VAR: password}
+        return exec_fn(path, argv, login)
+
+    return attach
+
+
+def run_gm(_args: argparse.Namespace) -> int:
+    url, password = _attach_target()
+    plugins = loaded_plugins(url, password, http_json)
+    if (active := plugin_outcome(plugins)).status != "ok":
+        raise OpencodeError(f"{PLUGIN_INACTIVE} ({active.detail}); run `coven opencode doctor`")
+    return runtime.run(["--server", url], exec_fn=_with_login(password, os.execve))
 
 
 def run_install(args: argparse.Namespace) -> int:
@@ -104,6 +150,40 @@ def run_doctor_command(_args: argparse.Namespace) -> int:
     for line in checks.render(results):
         print(line)
     return checks.exit_code(results)
+
+
+def run_serve_start(args: argparse.Namespace) -> int:
+    home = layout()
+    info = serve.start(home, _profile_at(home), args.port)
+    print(f"running pid {info.pid} port {info.port}")
+    return 0
+
+
+def run_serve_stop(_args: argparse.Namespace) -> int:
+    print("stopped" if serve.stop(layout()) else "no server was running")
+    return 0
+
+
+def run_serve_status(_args: argparse.Namespace) -> int:
+    for line in serve.status(layout()):
+        print(line)
+    return 0
+
+
+def _register_serve(commands: Any) -> None:
+    parser = commands.add_parser(
+        "serve", help="start, stop and look at coven's long-lived OpenCode server"
+    )
+    actions = parser.add_subparsers(dest="serve_command", required=True, metavar="ACTION")
+    start = actions.add_parser(
+        "start", help="start the server (127.0.0.1, password in the profile)"
+    )
+    start.add_argument("--port", type=int, metavar="N", help="a fixed port; default: any free one")
+    start.set_defaults(handler=needs_checkout(run_serve_start))
+    stop = actions.add_parser("stop", help="stop the server, keep its password")
+    stop.set_defaults(handler=needs_checkout(run_serve_stop))
+    status = actions.add_parser("status", help="say whether it runs, with the PM sessions")
+    status.set_defaults(handler=needs_checkout(run_serve_status))
 
 
 def register(subparsers: Any) -> None:
@@ -139,6 +219,10 @@ def register(subparsers: Any) -> None:
     )
     run.add_argument("opencode_args", nargs=argparse.REMAINDER, metavar="-- ARGS")
     run.set_defaults(handler=needs_checkout(run_run))
+    gm = commands.add_parser(
+        "gm", help="open the TUI on coven's server as the GM (starts the server if needed)"
+    )
+    gm.set_defaults(handler=needs_checkout(run_gm))
     install_parser = commands.add_parser(
         "install",
         help="install the pinned OpenCode (npm) and superpowers v7.0.2 (git) into the profile",
@@ -151,3 +235,4 @@ def register(subparsers: Any) -> None:
         "doctor", help="check the runtime, the profile's isolation and coven's plugin"
     )
     doctor.set_defaults(handler=needs_checkout(run_doctor_command))
+    _register_serve(commands)

@@ -5,7 +5,9 @@ approved that exact command.
 Reads the hook payload on stdin and runs under fail-closed.sh like deny-secrets. Exit 2 refuses the
 call and shows stderr to the agent; exit 0 lets it through. `prod_guard.py --check <guard.json>`
 validates a file with the same rules before it is committed: it prints `ok: N targets` and exits 0,
-or prints the reason and exits 1; it never reads stdin.
+or prints the reason and exits 1; it never reads stdin. `prod_guard.py --no-approvals` is the
+deny-only mode for a PM on OpenCode: approvals are treated as absent (never read), so a target is
+always refused and the refusal says to send the step to the GM; nothing else changes.
 
 When it acts. The hook reads coven's config (`~/.config/coven/config.json`, as plain JSON, the way
 memory-context does) for `memory_path` (default `~/coven-memory`, and it must be absolute) and
@@ -164,8 +166,10 @@ UNFOLLOWED_CD_HINT = (
     " given to a program that is not a reader, may match a name in the zone: use"
     " `cd /literal/path` or an absolute glob."
 )
-USAGE = "usage: prod_guard.py | prod_guard.py --check <guard.json>"
+USAGE = "usage: prod_guard.py [--no-approvals] | prod_guard.py --check <guard.json>"
 CHECK_FLAG = "--check"
+NO_APPROVALS_FLAG = "--no-approvals"
+DENY_ONLY_NOTE = "a PM on OpenCode never runs a production step: send it to the GM as a PROD-STEP"
 ROLE_VAR = "COVEN_SESSION_ROLE"
 GUARD_FILE = Path(GUARD_FILE_NAME)
 APPROVALS_DIR = "approvals"
@@ -208,7 +212,9 @@ SHELL_SPLIT = re.compile(r"[\s;&|<>()`'\"=,{}]+")
 COMMAND_SPLIT = re.compile(r"[;&|()`{}\n]")
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
 SHELL_STRING_RUNNERS = frozenset({"sh", "bash", "zsh", "dash"})  # `sh -c STRING`, read as a text
-SHELLS = frozenset({"sh", "bash", "zsh", "dash", "fish", "ksh"})
+# The wrapper tables are shared with opencode_server_guard.py (wrapper_commands.py).
+_WRAPPER_COMMANDS: ModuleType = hook_support.sibling("wrapper_commands")
+SHELLS: frozenset[str] = _WRAPPER_COMMANDS.SHELLS
 # Words that read a heredoc body as shell commands, or start a shell without naming one: a body
 # fed by a line with one of them is shell text, and its globs are real.
 SHELL_READERS = frozenset(
@@ -272,38 +278,19 @@ PIPE_FILTERS = frozenset(
     }
 )
 CLASS_ESCAPE = re.compile(r"\\[wWdDsS]")  # a regex's `\w`: it can match any one name character
-# Commands that run their arguments as a command, so `<wrapper> ... claude` starts claude. A
-# command string (`sh -c`, `su -c`, `script -c`) is read as the option's value, quotes dropped.
-WRAPPERS = frozenset(
-    {
-        *("exec", "env", "nohup", "command", "builtin", "sudo", "doas", "setsid", "time"),
-        *("timeout", "xargs", "nice", "stdbuf", "watch", "parallel", "npx", "bunx"),
-        *("script", "screen", "tmux", "flock", "systemd-run", "runuser", "su", "busybox"),
-        *("chrt", "ionice", "taskset", "strace", "ltrace", "unbuffer"),
-        *SHELLS,
-        *("if", "then", "else", "elif", "do", "while", "until", "!", "eval", "coproc", "{", "}"),
-    }
-)
-# Wrappers that take one positional argument before the command: timeout's duration, flock's lock
-# file, chrt's priority, taskset's mask, su's and runuser's user, script's log file.
-POSITIONAL_WRAPPERS = frozenset({"timeout", "flock", "chrt", "taskset", "su", "runuser", "script"})
-# Wrappers whose command may follow any of their own words (`tmux new-session -d -s pm 'claude'`).
-ANYWHERE_WRAPPERS = frozenset({"tmux"})
-# Commands that run a program named later in their arguments (`uv run ssh`, `uvx`, `pipx run`,
-# `python -m`, `poetry run`, `hatch run`, `pdm run`, `conda run -n env`, `mise exec --`, `direnv
-# exec <dir>`, `nix-shell --run '...'`, `nix develop -c`, `nix shell <installable> -c`). The head
-# walk reads one as a wrapper. Where one has a run word (LAUNCHER_RUN_WORDS), every word between
-# the launcher and that word is skipped, whatever options it holds (`poetry -C dir run`); else
-# a subcommand word may follow it (LAUNCHER_COMMANDS) and, for direnv, a directory. The
+# Commands that run their arguments as a command, so `<wrapper> ... claude` starts claude (the
+# names are wrapper_commands.WRAPPERS). A command string (`sh -c`, `su -c`, `script -c`) is read as
+# the option's value, quotes dropped.
+WRAPPERS: frozenset[str] = _WRAPPER_COMMANDS.WRAPPERS
+POSITIONAL_WRAPPERS: frozenset[str] = _WRAPPER_COMMANDS.POSITIONAL_WRAPPERS
+ANYWHERE_WRAPPERS: frozenset[str] = _WRAPPER_COMMANDS.ANYWHERE_WRAPPERS
+# Commands that run a program named later in their arguments (wrapper_commands.LAUNCHERS). The
+# head walk reads one as a wrapper. Where one has a run word (LAUNCHER_RUN_WORDS), every word
+# between the launcher and that word is skipped, whatever options it holds (`poetry -C dir run`);
+# else a subcommand word may follow it (LAUNCHER_COMMANDS) and, for direnv, a directory. The
 # store-writing check also reads every word after one as a program it may run.
-LAUNCHER_RUN_WORDS = {
-    **dict.fromkeys(("uv", "poetry", "hatch", "pdm", "conda"), frozenset({"run"})),
-    "mise": frozenset({"--"}),
-    "direnv": frozenset({"exec"}),
-    "nix": frozenset({"-c", "--command"}),
-    "nix-shell": frozenset({"--run", "--command"}),
-}
-LAUNCHERS = frozenset({"uvx", "pipx", *LAUNCHER_RUN_WORDS})
+LAUNCHER_RUN_WORDS: Mapping[str, frozenset[str]] = _WRAPPER_COMMANDS.LAUNCHER_RUN_WORDS
+LAUNCHERS: frozenset[str] = _WRAPPER_COMMANDS.LAUNCHERS
 PYTHON = re.compile(r"python[\d.]*")
 LAUNCHER_COMMANDS = frozenset({"run", "exec", "tool", "develop", "x"})
 DIRECTORY_LAUNCHERS = frozenset({"direnv"})  # `direnv exec <dir> <program>`
@@ -460,7 +447,7 @@ PLAIN_REFERENCE = re.compile(r"\$([A-Za-z_]\w*)")  # `$NAME`, which a bound valu
 SPLITTING = frozenset(" \t\n*?[")  # in an unquoted value: it splits or globs
 EXPANDING = frozenset("$`*?[]{}~")  # in a word whose value is unknown: this part may expand
 # Wrappers that run a command string given after an option holding `c` (`sh -c`, `su -lc`).
-COMMAND_STRING_RUNNERS = frozenset({*SHELLS, "su", "runuser", "script", "flock"})
+COMMAND_STRING_RUNNERS: frozenset[str] = _WRAPPER_COMMANDS.COMMAND_STRING_RUNNERS
 MAX_SHELL_DEPTH = 3  # command strings inside command strings, followed this deep
 # ssh's `-o` settings that name a host, and those that run a command (read as a command string).
 HOST_SETTINGS = frozenset({"hostname", "proxyjump"})
@@ -5816,12 +5803,15 @@ def _grants(approval: Approval, hit_system: str, via: str, call: Call, now: date
     return call.bash is not None and call.bash.command.strip() in approval.commands
 
 
-def _hits(call: Call, targets: Sequence[Target], store: Path, now: datetime) -> list[Hit]:
-    """Every target the call reaches. Approvals are read only when it reaches one: StoreError."""
+def _hits(
+    call: Call, targets: Sequence[Target], store: Path, now: datetime, *, use_approvals: bool = True
+) -> list[Hit]:
+    """Every target the call reaches. Approvals are read only when it reaches one: StoreError.
+    With `use_approvals` False they are treated as absent and never read."""
     reached = [(t, via, trigger) for t in targets for via, trigger in _triggers(call, t)]
     if not reached:
         return []
-    found = approvals(store)
+    found = approvals(store) if use_approvals else []
     return [
         Hit(
             target["system"],
@@ -5834,16 +5824,20 @@ def _hits(call: Call, targets: Sequence[Target], store: Path, now: datetime) -> 
     ]
 
 
-def _target_refusal(hits: Sequence[Hit], note: str) -> Refused | None:
+def _target_refusal(
+    hits: Sequence[Hit], note: str, *, use_approvals: bool = True
+) -> Refused | None:
     """Why the call may not reach the targets it hits: no live approval names it for each."""
     needed = dict.fromkeys(
         (h.system, f"'{h.system}' is {h.kind}") for h in hits if h.approval is None
     )
     if not needed:
         return None
+    deny_only = "" if use_approvals else f"; {DENY_ONLY_NOTE}"
     return Refused(
         f"{PREFIX} {' and '.join(text for _system, text in needed)}; this exact step needs the"
-        f" user's approval (send a PROD-STEP; the GM approves it with coven approve){note}",
+        f" user's approval (send a PROD-STEP; the GM approves it with coven approve){note}"
+        f"{deny_only}",
         ",".join(dict.fromkeys(system for system, _text in needed)),
     )
 
@@ -5870,7 +5864,7 @@ def _no_valid_guard_reading(call: Call, store: Path, exc: GuardError) -> _Readin
     return _Reading([], everyone=refusal)
 
 
-def _read_store(call: Call, store: Path, now: datetime) -> _Reading:
+def _read_store(call: Call, store: Path, now: datetime, *, use_approvals: bool = True) -> _Reading:
     out = _reaches_out(call)
     try:
         enforced = load_targets(store)
@@ -5890,13 +5884,14 @@ def _read_store(call: Call, store: Path, now: datetime) -> _Reading:
         return _Reading([], restricted_only=missing if out else None)
     note = _fallback_note(enforced)
     try:
-        hits = _hits(call, enforced.targets, store, now)
+        hits = _hits(call, enforced.targets, store, now, use_approvals=use_approvals)
     except StoreError as exc:
         # Only a call that reaches a target reads approvals: refuse it, whatever tool it is.
         return _Reading(
             [], note, everyone=_unreadable_store(store, exc), unreadable=_store_problem(store, exc)
         )
-    return _Reading(hits, note, everyone=_target_refusal(hits, note))
+    refusal = _target_refusal(hits, note, use_approvals=use_approvals)
+    return _Reading(hits, note, everyone=refusal)
 
 
 def _verdict(everyone: Refused | None, restricted: Refused | None) -> Verdict:
@@ -5906,7 +5901,12 @@ def _verdict(everyone: Refused | None, restricted: Refused | None) -> Verdict:
 
 
 def explain(
-    payload: Mapping[str, object], store: Path, role: str | None, now: datetime
+    payload: Mapping[str, object],
+    store: Path,
+    role: str | None,
+    now: datetime,
+    *,
+    use_approvals: bool = True,
 ) -> Explanation:
     """What the guard decides for this tool call and why; PayloadError on a bad payload.
 
@@ -5914,7 +5914,7 @@ def explain(
     unknown included, restricts it. `restricted` is the refusal a restricted session meets even
     when `role` is None, and `message` is the refusal this session meets."""
     call = _call(payload)
-    reading = _read_store(call, store, now)
+    reading = _read_store(call, store, now, use_approvals=use_approvals)
     rule = _restricted_refusal(call, store, ASSUMED_ROLE if role is None else role, now)
     restricted = rule or reading.restricted_only
     chosen = restricted if role is not None and restricted else reading.everyone
@@ -6002,9 +6002,11 @@ def _refuse_bad_input(exc: PayloadError) -> int:
     return 2
 
 
-def _guard(store: Path, role: str | None, stdin: TextIO) -> int:
+def _guard(store: Path, role: str | None, stdin: TextIO, *, use_approvals: bool) -> int:
     try:
-        found = explain(_payload(stdin), store, role, datetime.now(UTC))
+        found = explain(
+            _payload(stdin), store, role, datetime.now(UTC), use_approvals=use_approvals
+        )
     except PayloadError as exc:
         return _refuse_bad_input(exc)
     _record(found, role)
@@ -6043,8 +6045,9 @@ def _unreadable_config(exc: ConfigError, role: str | None, stdin: TextIO) -> int
 
 
 def _check(argv: Sequence[str]) -> int:
-    """`--check <guard.json>`: 0 and `ok: N targets` for a valid file, 1 and the reason if not."""
-    if len(argv) != 1:
+    """`--check <guard.json>`: 0 and `ok: N targets` for a valid file, 1 and the reason if not.
+    An option in place of the file (`--check --no-approvals`) is a usage error."""
+    if len(argv) != 1 or argv[0].startswith("--"):
         print(f"{PREFIX} {USAGE}", file=sys.stderr)
         return 2
     try:
@@ -6058,7 +6061,7 @@ def _check(argv: Sequence[str]) -> int:
 def run(argv: Sequence[str], stdin: TextIO, environ: Mapping[str, str]) -> int:
     if argv[:1] == [CHECK_FLAG]:
         return _check(argv[1:])
-    if argv:
+    if list(argv) not in ([], [NO_APPROVALS_FLAG]):
         print(f"{PREFIX} {USAGE}; blocking", file=sys.stderr)
         return 2
     role = environ.get(ROLE_VAR)
@@ -6068,7 +6071,7 @@ def run(argv: Sequence[str], stdin: TextIO, environ: Mapping[str, str]) -> int:
         return _unreadable_config(exc, role, stdin)
     if off_reason(config) is not None:
         return 0
-    return _guard(config.store, role, stdin)
+    return _guard(config.store, role, stdin, use_approvals=NO_APPROVALS_FLAG not in argv)
 
 
 def _checked(argv: Sequence[str], stdin: TextIO, environ: Mapping[str, str]) -> int:

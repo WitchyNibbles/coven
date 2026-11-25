@@ -1,10 +1,19 @@
 import { isAbsolute } from "node:path";
+import type { PermissionRule } from "./context.ts";
 import { isPlainObject, show } from "./join/fields.ts";
 
 export interface CovenOptions {
   covenRoot: string;
   /** The name of the environment variable that holds the provider key; never its value. */
   keyEnv: string;
+  /** The profile folder. */
+  profileDir: string;
+  /** The folder of the server's port and password files. */
+  serveDir: string;
+  /** The memory folder, or null when there is none (the key is still required). */
+  store: string | null;
+  /** The secret rules and the skills edit deny, as the generated config holds them. */
+  secretRules: readonly PermissionRule[];
   toolChoiceAuto: readonly string[];
   guardTimeoutMs: number;
 }
@@ -22,6 +31,10 @@ const MAX_GUARD_TIMEOUT_MS = 600_000;
 const KNOWN = new Set([
   "covenRoot",
   "keyEnv",
+  "profileDir",
+  "serveDir",
+  "store",
+  "secretRules",
   "toolChoiceAuto",
   "guardTimeoutMs",
 ]);
@@ -49,6 +62,52 @@ function parseKeyEnv(raw: unknown): string {
     );
   }
   return raw;
+}
+
+function parseDir(raw: unknown, name: string): string {
+  if (raw === undefined) {
+    throw new OptionsError(`${name} is missing; run coven opencode setup`);
+  }
+  if (typeof raw !== "string" || !isAbsolute(raw)) {
+    throw new OptionsError(
+      `${name} must be a non-empty absolute path, got ${show(raw)}`,
+    );
+  }
+  return raw;
+}
+
+function parseFolder(raw: unknown): string | null {
+  return raw === null ? null : parseDir(raw, "store");
+}
+
+const EFFECTS: ReadonlySet<unknown> = new Set(["allow", "deny", "ask"]);
+
+function parseRule(raw: unknown): PermissionRule {
+  if (
+    !isPlainObject(raw) ||
+    typeof raw["action"] !== "string" ||
+    typeof raw["resource"] !== "string" ||
+    !EFFECTS.has(raw["effect"])
+  ) {
+    throw new OptionsError(
+      `secretRules must hold {action, resource, effect} rules, got ${show(raw)}`,
+    );
+  }
+  return {
+    action: raw["action"],
+    resource: raw["resource"],
+    effect: raw["effect"] as PermissionRule["effect"],
+  };
+}
+
+function parseRules(raw: unknown): readonly PermissionRule[] {
+  if (raw === undefined) {
+    throw new OptionsError("secretRules is missing; run coven opencode setup");
+  }
+  if (!Array.isArray(raw)) {
+    throw new OptionsError(`secretRules must be an array, got ${show(raw)}`);
+  }
+  return (raw as unknown[]).map(parseRule);
 }
 
 function parseProviders(raw: unknown): readonly string[] {
@@ -102,6 +161,10 @@ export function parseOptions(raw: unknown): CovenOptions {
   return {
     covenRoot: parseRoot(fields["covenRoot"]),
     keyEnv: parseKeyEnv(fields["keyEnv"]),
+    profileDir: parseDir(fields["profileDir"], "profileDir"),
+    serveDir: parseDir(fields["serveDir"], "serveDir"),
+    store: parseFolder(fields["store"]),
+    secretRules: parseRules(fields["secretRules"]),
     toolChoiceAuto: parseProviders(fields["toolChoiceAuto"]),
     guardTimeoutMs: parseTimeout(fields["guardTimeoutMs"]),
   };

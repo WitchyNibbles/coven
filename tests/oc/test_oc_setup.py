@@ -71,6 +71,7 @@ def test_setup_writes_config_profile_and_plugin(
         "explorer: small",
         "final-reviewer: big",
         "title: small",
+        "project-manager: big",
         NO_LIMIT_WARNING,
         "superpowers: Claude Code plugin",
         "next: coven opencode doctor",
@@ -123,6 +124,18 @@ def test_rerun_without_flags_regenerates_the_same_bytes(home: Path):
 
 def test_no_profile_and_no_flags_fails(home: Path, capsys: pytest.CaptureFixture[str]):
     assert setup() == 1
+    assert (
+        capsys.readouterr().err.strip()
+        == "coven: no profile yet; run coven opencode setup --preset ..."
+    )
+    assert not home.exists()
+
+
+@pytest.mark.parametrize("command", [["serve", "start"], ["gm"]], ids=["serve-start", "gm"])
+def test_a_command_that_needs_the_server_fails_without_a_profile(
+    home: Path, command: list[str], capsys: pytest.CaptureFixture[str]
+):
+    assert cli.main(["opencode", *command]) == 1
     assert (
         capsys.readouterr().err.strip()
         == "coven: no profile yet; run coven opencode setup --preset ..."
@@ -223,7 +236,7 @@ def test_limits_reach_the_config_the_profile_and_the_summary(
         "small": {"context": 50000},
     }
     lines = capsys.readouterr().out.splitlines()
-    first = lines.index("title: small") + 1
+    first = lines.index("project-manager: big") + 1
     assert lines[first : first + 2] == [
         "limit big: 100000 context, 8000 output",
         "limit small: 50000 context",

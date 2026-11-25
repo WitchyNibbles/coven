@@ -5,9 +5,19 @@ import { setImmediate as tick } from "node:timers/promises";
 import type { ExecuteBeforeEvent } from "../src/context.ts";
 import { exits, never } from "./guard-fake.ts";
 import type { Behaviour } from "./guard-fake.ts";
-import { DIRECTORY, LEAD, bootCoven } from "./plugin-fixture.ts";
+import {
+  DIRECTORY,
+  LEAD,
+  PROFILE_OPTIONS,
+  bootCoven,
+} from "./plugin-fixture.ts";
 
-const COVEN = { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: ["litellm"] };
+const COVEN = {
+  covenRoot: "/c",
+  keyEnv: "K",
+  ...PROFILE_OPTIONS,
+  toolChoiceAuto: ["litellm"],
+};
 
 function executeBefore(tool: string, input: unknown): ExecuteBeforeEvent {
   return {

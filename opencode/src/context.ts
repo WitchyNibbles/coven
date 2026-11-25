@@ -1,5 +1,12 @@
 import type { PluginContext } from "./join/context.ts";
 
+/** One permission rule as the generated config writes it (`_rule` in `generate.py`). */
+export interface PermissionRule {
+  action: string;
+  resource: string;
+  effect: "allow" | "deny" | "ask";
+}
+
 /** 2.3.2 `promise/session.ts` `http.request`, with `Model.Ref` from `schema/src/model.ts`. */
 export interface HttpRequestEvent {
   readonly sessionID: string;

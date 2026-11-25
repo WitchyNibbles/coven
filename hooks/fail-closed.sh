@@ -16,10 +16,11 @@
 #
 # Hooks need Python 3.12 or later, and some systems ship an older python3 (macOS has 3.9) or none.
 # On 86 (or with no python3 at all) deny_secrets.py falls back to a plain text check of the raw
-# payload (below), prod_guard.py to a plain check of whether the guard is on (further below), and
-# every other hook exits 0 (allowed, skipped). Either way the script prints, once per session, how
-# to fix it. The payload is read only then: an old Python never touched stdin. A python3 older than
-# 3.4 does not know `-I` and exits 2, which is a block, not this fallback.
+# payload (below), prod_guard.py to a plain check of whether the guard is on (further below),
+# opencode_server_guard.py to a refusal of every call it is run for, and every other hook exits 0
+# (allowed, skipped). Either way the script prints, once per session, how to fix it. The payload
+# is read only then: an old Python never touched stdin. A python3 older than 3.4 does not know
+# `-I` and exits 2, which is a block, not this fallback.
 #
 # prod_guard_gate.py, the entry hooks.json runs for the production guard, is the prod guard for
 # this script: the same fallback and the same log name.
@@ -109,15 +110,32 @@ guard_is_on() {
     [ -e "$store/systems/guard.json" ] || [ -L "$store/systems/guard.json" ]
 }
 
+# Tell once that python3 is too old, print why this call is refused, and refuse it.
+fallback_block() {
+    tell_once "$1"
+    printf '%s\n' "$2" >&2
+    return 2
+}
+
 fallback_prod_guard() {
     payload=$1
-    tell_once "$payload"
-    guard_is_on || return 0
-    printf '%s' "$payload" | grep -E -q '"tool_name"[[:space:]]*:[[:space:]]*"(Bash|mcp__[^"]*)"'
-    found=$?
-    [ "$found" -eq 1 ] && return 0
-    printf '%s\n' "coven prod-guard: this python3 is too old to run the production guard; Bash and MCP tools are blocked until Python 3.12+ is installed" >&2
-    return 2
+    found=1
+    if guard_is_on; then
+        printf '%s' "$payload" | grep -E -q '"tool_name"[[:space:]]*:[[:space:]]*"(Bash|mcp__[^"]*)"'
+        found=$?
+    fi
+    if [ "$found" -eq 1 ]; then
+        tell_once "$payload"
+        return 0
+    fi
+    fallback_block "$payload" "coven prod-guard: this python3 is too old to run the production guard; Bash and MCP tools are blocked until Python 3.12+ is installed"
+}
+
+# The OpenCode server guard keeps a session away from the server's password and API. Skipping
+# it would open both on the machines where nobody sees the message, so with no usable python3
+# it refuses every call it is run for (the plugin runs it for every session, the GM's included).
+fallback_opencode_server_guard() {
+    fallback_block "$1" "coven opencode-server-guard: this python3 is too old to check this call; blocking until Python 3.12+ is installed"
 }
 
 # Append one line to the hook's log, unless it already holds 1 MB (the hooks rotate their own).
@@ -156,6 +174,10 @@ old_python_fallback() {
     fi
     if [ "$name" = "prod-guard" ]; then
         fallback_prod_guard "$payload"
+        exit $?
+    fi
+    if [ "$name" = "opencode-server-guard" ]; then
+        fallback_opencode_server_guard "$payload"
         exit $?
     fi
     tell_once "$payload"

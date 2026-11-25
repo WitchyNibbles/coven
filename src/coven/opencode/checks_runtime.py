@@ -12,8 +12,8 @@ from coven.doctor import one_line
 from coven.opencode.check_types import RESET, SETUP, Context, Outcome
 from coven.opencode.generate import CONFIG_FILE, config_data
 from coven.opencode.profile import (
-    AGENT_ROLES,
     ASSUMED_CONTEXT,
+    MODEL_ROLES,
     PINNED_VERSION,
     Layout,
     OpencodeError,
@@ -97,7 +97,7 @@ def _field(data: object, *path: str) -> object:
 
 def _watched(profile: Profile) -> Fields:
     fields: Fields = [("model", ("model",))]
-    for role in (*AGENT_ROLES, "title"):
+    for role in MODEL_ROLES:
         fields.append((f"agents.{role}.model", ("agents", role, "model")))
     fields.append(("plugins.0.options.keyEnv", ("plugins", "0", "options", "keyEnv")))
     if profile.preset == "litellm":
