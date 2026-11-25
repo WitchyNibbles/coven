@@ -117,6 +117,7 @@ await test('resume prompts "RESUMED by gm\\n<text>" on a live PM without touchin
 
 await test("resume unarchives then prompts, and forgets an earlier stop", async () => {
   const world = gmWorld([GM, PM1]);
+  world.updateArchives = true;
   world.archived.add("pm1");
   sharedState().stopped.add("pm1");
   await resume(world, { code: "acme-1", text: "back" });
@@ -158,15 +159,45 @@ await test("stop interrupts, marks the stop in sharedState and keeps the session
   );
 });
 
-await test("stop with archive true archives after the interrupt", async () => {
+await test("stop with archive true archives after the interrupt, and says so once the session reads back archived", async () => {
   sharedState().stopped.clear();
   const world = gmWorld([GM, PM1]);
-  await stop(world, { code: "acme-1", archive: true });
+  world.updateArchives = true;
+  const out = await stop(world, { code: "acme-1", archive: true });
   assert.deepEqual(
     world.calls.filter((each) => /^(interrupt|archive)/.test(each)),
     ["interrupt:pm1", "archive:pm1:true"],
   );
   assert.ok(world.archived.has("pm1"));
+  assert.equal(out, "stopped pm-acme-1 and archived it");
+});
+
+await test("stop with archive true is a tool error when the update leaves the session unarchived, as on 2.3.2", async () => {
+  sharedState().stopped.clear();
+  const world = gmWorld([GM, PM1]);
+  await assert.rejects(
+    stop(world, { code: "acme-1", archive: true }),
+    (error: unknown) =>
+      error instanceof ToolError &&
+      /stopped pm-acme-1 but .*not archive/.test(error.message) &&
+      !/archived it/.test(error.message),
+  );
+  // the stop itself was done
+  assert.deepEqual(world.interrupts, ["pm1"]);
+  assert.equal(sharedState().stopped.has("pm1"), true);
+});
+
+await test("resume of an archived PM is a tool error, and sends nothing, when the update leaves it archived, as on 2.3.2", async () => {
+  const world = gmWorld([GM, PM1]);
+  world.archived.add("pm1");
+  sharedState().stopped.add("pm1");
+  await assert.rejects(
+    resume(world, { code: "acme-1", text: "back" }),
+    (error: unknown) =>
+      error instanceof ToolError && /still archived/.test(error.message),
+  );
+  assert.equal(world.prompts.length, 0);
+  assert.equal(sharedState().stopped.has("pm1"), true);
 });
 
 await test("stop is a tool error for an unknown code or a failed interrupt, which leaves no stop mark", async () => {

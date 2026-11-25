@@ -22,7 +22,14 @@ export interface SessionLike {
    * Epoch milliseconds, read from 2.3.2 in the e2e: `busy` is when the session last turned busy,
    * `idle` when its last turn ended (later than `busy` while the session rests).
    */
-  time?: { created?: number; updated?: number; busy?: number; idle?: number };
+  time?: {
+    created?: number;
+    updated?: number;
+    busy?: number;
+    idle?: number;
+    /** When the session was archived; missing while it is not. */
+    archived?: number;
+  };
 }
 
 /** What `ctx.session.create` takes (checked live in Task 0, step 6). */
@@ -48,7 +55,11 @@ export interface SessionPromptInput {
   resume?: boolean;
 }
 
-/** What `ctx.session.update` changes (`PATCH /api/session/{id}`); it resolves to nothing (204). */
+/**
+ * What `ctx.session.update` changes (`PATCH /api/session/{id}`); it resolves to nothing (204).
+ * 2.3.2's plugin side applies `title`, `metadata` and `permissions` and ignores `archived`
+ * (only the HTTP route archives), so a caller reads the session back (`time.archived`).
+ */
 export interface SessionUpdateInput {
   sessionID: string;
   title?: string;
