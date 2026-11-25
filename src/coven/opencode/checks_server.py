@@ -19,8 +19,9 @@ from coven.opencode.runtime import probe
 # The 2.3.2 operationIds of every API route coven calls over HTTP: the plugin and the CLI's session
 # create, list, get, prompt, interrupt, update, permission list and reply, and the event stream;
 # `serve status` (session.active); the canary and `gm` (location.reload, plugin.list, skill.list).
-# The plugin's `ctx.session.wait` and `ctx.session.context` run in-process, but they are the same
-# operations of the same API (matched by name), so a runtime that drops them breaks the join too.
+# The plugin's `ctx.session.wait` and `ctx.session.context` run in-process; they are assumed (not
+# verified) to be the same operations of the same API, matched by name, so a runtime that drops
+# them is assumed to break the join too.
 REQUIRED_OPERATIONS: Final = (
     "session.create",
     "session.list",

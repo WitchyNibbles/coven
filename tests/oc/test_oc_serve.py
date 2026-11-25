@@ -1,6 +1,8 @@
 """`coven opencode serve`: start, stop and status against a fake `opencode` that binds 127.0.0.1."""
 
+import os
 import re
+import signal
 import socket
 import stat
 import subprocess
@@ -13,6 +15,7 @@ from serve_kit import Procs, install_fake, start
 
 from coven import cli
 from coven.opencode import serve
+from coven.opencode.profile import OpencodeError
 
 PASSWORD_SHAPE = re.compile(r"[0-9a-f]{64}")
 
@@ -87,6 +90,97 @@ def test_stop_kills_and_removes_pid_and_port_keeps_password(fake: Good, procs: P
     assert serve.stop(fake.layout) is False
 
 
+def no_sigkill(pid: int, signum: int) -> None:
+    """A kill that never delivers SIGKILL, so a server that ignores SIGTERM does not stop."""
+    if signum != signal.SIGKILL:
+        os.kill(pid, signum)
+
+
+def test_stop_keeps_the_files_of_a_server_that_does_not_stop(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_fake(tmp_path, monkeypatch, ignore_term=True)
+    info = start(good, procs)
+    monkeypatch.setattr(serve, "KILL_WAIT", 0.2)
+
+    with pytest.raises(serve.ServeError, match=f"process {info.pid} did not stop"):
+        serve.stop(good.layout, grace_s=0.2, kill=no_sigkill)
+
+    files = serve.files(good.layout)
+    assert files.pid.is_file()
+    assert files.port.is_file()
+    assert serve.running(good.layout) == info
+
+
+def test_the_stop_command_reports_a_server_that_does_not_stop(
+    good: Good,
+    procs: Procs,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_fake(tmp_path, monkeypatch, ignore_term=True)
+    info = start(good, procs)
+    monkeypatch.setattr(serve, "KILL_WAIT", 0.2)
+    assert serve.stop.__kwdefaults__ is not None
+    monkeypatch.setitem(serve.stop.__kwdefaults__, "kill", no_sigkill)
+    monkeypatch.setitem(serve.stop.__kwdefaults__, "grace_s", 0.2)
+
+    assert cli.main(["opencode", "serve", "stop"]) == 1
+
+    assert f"process {info.pid} did not stop" in capsys.readouterr().err
+    assert serve.running(good.layout) == info
+
+
+def test_a_second_start_while_one_is_starting_is_refused(fake: Good, procs: Procs) -> None:
+    lock = serve.files(fake.layout).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_text(f"{os.getpid()}\n")
+
+    with pytest.raises(serve.ServeError, match="a server is starting"):
+        start(fake, procs)
+
+    assert procs.started == []
+    assert lock.read_text() == f"{os.getpid()}\n"
+
+
+def test_a_stale_start_lock_is_replaced_and_released(fake: Good, procs: Procs) -> None:
+    gone = subprocess.Popen(["true"])
+    gone.wait()
+    lock = serve.files(fake.layout).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_text(f"{gone.pid}\n")
+
+    info = start(fake, procs)
+
+    assert serve.running(fake.layout) == info
+    assert not lock.exists()
+
+
+def test_the_server_env_has_no_username(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENCODE_SERVER_USERNAME", "someone")
+
+    start(fake, procs)
+
+    env = procs.envs[0]
+    assert "OPENCODE_SERVER_USERNAME" not in env
+    assert PASSWORD_SHAPE.fullmatch(env["OPENCODE_SERVER_PASSWORD"])
+
+
+def test_read_password_reads_the_saved_password(fake: Good, procs: Procs) -> None:
+    start(fake, procs)
+
+    saved = serve.files(fake.layout).password.read_text().strip()
+    assert serve.read_password(fake.layout) == saved
+
+
+def test_read_password_names_a_missing_password(fake: Good) -> None:
+    with pytest.raises(OpencodeError, match="cannot read the server password"):
+        serve.read_password(fake.layout)
+
+
 def test_start_times_out_with_log_path(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -97,7 +191,20 @@ def test_start_times_out_with_log_path(
 
     assert str(serve.files(good.layout).log) in str(caught.value)
     assert not serve.files(good.layout).pid.exists()
+    assert not serve.files(good.layout).lock.exists()
     assert procs.started[0].wait(timeout=5) != 0
+
+
+def test_a_server_that_exits_at_once_is_named_with_its_log(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_fake(tmp_path, monkeypatch, exit_at_once=True)
+    log = serve.files(good.layout).log
+
+    with pytest.raises(serve.ServeError, match=f"the server exited before it listened; see {log}"):
+        start(good, procs)
+
+    assert not serve.files(good.layout).lock.exists()
 
 
 def test_explicit_port_in_use_is_named(fake: Good, procs: Procs) -> None:
@@ -167,6 +274,31 @@ def test_status_shows_a_waiting_ask(
     assert "idle" in lines[1]
     assert "ASK WAITING (bug)" in lines[1]
     assert "per_42" in lines[1]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [({"requestID": "req_7"}, "req_7"), ({"tool": "bash"}, "unknown id")],
+)
+def test_status_names_an_ask_by_its_request_id_or_says_it_has_none(
+    good: Good,
+    procs: Procs,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[dict[str, str], str],
+) -> None:
+    ask, shown = case
+    routes = {
+        "/api/session": {"data": [pm_session("x1")], "cursor": None},
+        "/api/session/active": {"data": []},
+        "/api/session/ses_x1/permission": {"data": [ask]},
+    }
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert f"ASK WAITING (bug) {shown}" in lines[1]
 
 
 def test_status_warns_when_the_session_list_has_another_page(

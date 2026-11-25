@@ -79,7 +79,7 @@ def _profile(layout: Layout) -> tuple[Profile | None, str]:
 
 def _running(layout: Layout) -> Live | None:
     info = serve.running(layout)
-    return Live(info, serve.files(layout).password) if info else None
+    return Live(info, layout) if info else None
 
 
 def _context(layout: Layout, cwd: Path, base: Mapping[str, str], read: Read) -> Context:

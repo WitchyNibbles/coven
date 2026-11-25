@@ -114,11 +114,7 @@ def _attach_target() -> tuple[str, str]:
     if profile is None:
         raise OpencodeError(runtime.NO_PROFILE)
     info = serve.running(home) or serve.start(home, profile)
-    try:
-        password = serve.files(home).password.read_text().strip()
-    except OSError as error:
-        raise OpencodeError(f"cannot read the server password: {error}") from error
-    return f"http://{serve.HOST}:{info.port}", password
+    return f"http://{serve.HOST}:{info.port}", serve.read_password(home)
 
 
 def _with_login(password: str, exec_fn: ExecFn) -> ExecFn:

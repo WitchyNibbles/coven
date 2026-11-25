@@ -22,11 +22,13 @@ ACTIVE_PLUGINS = {"data": [{"id": "coven", "state": {"status": "active"}}]}
 SKILLS = {"data": [{"id": "opencode", "path": "skill://opencode/SKILL.md"}]}
 
 # The stand-in for the 2.3.2 binary. `routes` maps a request path to the JSON it answers with,
-# once the basic-auth password matches. `mute` makes it listen to nothing and print nothing.
+# once the basic-auth password matches. `mute` makes it listen to nothing and print nothing;
+# `ignore_term` makes it ignore SIGTERM; `exit_at_once` makes it exit before it listens.
 FAKE_OPENCODE = """#!%(python)s
 import base64
 import json
 import os
+import signal
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -55,6 +57,10 @@ def main(argv):
     if argv[:1] == ["--version"]:
         print("opencode v2.3.2")
         return 0
+    if CONFIG.get("exit_at_once"):
+        return 1
+    if CONFIG.get("ignore_term"):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
     if CONFIG.get("mute"):
         time.sleep(600)
         return 0
@@ -69,12 +75,14 @@ sys.exit(main(sys.argv[1:]))
 
 
 class Procs:
-    """Every process a test started, killed in teardown."""
+    """Every process a test started (and the env it got), killed in teardown."""
 
     def __init__(self) -> None:
         self.started: list[subprocess.Popen[bytes]] = []
+        self.envs: list[dict[str, str]] = []
 
     def spawn(self, *args: Any, **named: Any) -> subprocess.Popen[bytes]:
+        self.envs.append(dict(named.get("env") or {}))
         process = subprocess.Popen(*args, **named)
         self.started.append(process)
         return process

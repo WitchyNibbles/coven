@@ -8,7 +8,8 @@ import signal
 import socket
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -27,6 +28,7 @@ from coven.opencode.canary import (
 from coven.opencode.profile import Layout, OpencodeError, Profile
 
 type Spawn = Callable[..., subprocess.Popen[bytes]]
+type Kill = Callable[[int, int], None]
 
 HOST: Final = "127.0.0.1"
 POLL: Final = 0.05
@@ -34,6 +36,8 @@ POLL: Final = 0.05
 KILL_WAIT: Final = 5.0
 PM_ROLE: Final = "pm"
 MORE_SESSIONS: Final = "more sessions exist; this list may be incomplete"
+STARTING: Final = "a server is starting"
+UNKNOWN_ASK: Final = "unknown id"
 
 
 class ServeError(OpencodeError):
@@ -46,6 +50,7 @@ class ServeFiles:
     port: Path
     pid: Path
     log: Path
+    lock: Path
 
 
 @dataclass(frozen=True)
@@ -56,7 +61,9 @@ class ServerInfo:
 
 def files(layout: Layout) -> ServeFiles:
     folder = layout.serve_dir
-    return ServeFiles(folder / "password", folder / "port", folder / "pid", folder / "log")
+    return ServeFiles(
+        folder / "password", folder / "port", folder / "pid", folder / "log", folder / "start.lock"
+    )
 
 
 def server_exe(layout: Layout) -> Path:
@@ -83,6 +90,14 @@ def running(layout: Layout) -> ServerInfo | None:
     if pid is None or port is None or not _is_server(pid, layout):
         return None
     return ServerInfo(pid, port)
+
+
+def read_password(layout: Layout) -> str:
+    """The saved server password (Raise OpencodeError when it cannot be read)."""
+    try:
+        return files(layout).password.read_text().strip()
+    except OSError as error:
+        raise OpencodeError(f"cannot read the server password: {error}") from error
 
 
 def _password(paths: ServeFiles) -> str:
@@ -143,7 +158,8 @@ def _wait_for[T](
     wait_s: float,
     log: Path,
 ) -> T:
-    """Poll `attempt` until it gives a value; fail when the server exits or `wait_s` runs out."""
+    """Poll `attempt` until it gives a value; fail when the server exits or `wait_s` runs out.
+    `what` is a verb in the past tense (`listened`)."""
     deadline = time.monotonic() + wait_s
     while True:
         found = attempt()
@@ -152,7 +168,7 @@ def _wait_for[T](
         if process.poll() is not None:
             raise ServeError(f"the server exited before it {what}; see {log}")
         if time.monotonic() >= deadline:
-            raise ServeError(f"the server did not {what} within {wait_s:g} s; see {log}")
+            raise ServeError(f"the server had not {what} within {wait_s:g} s; see {log}")
         time.sleep(POLL)
 
 
@@ -180,23 +196,67 @@ def start(
     wait_s: float = 20.0,
 ) -> ServerInfo:
     """Start the server detached and return once it answers with the saved password."""
-    if (info := running(layout)) is not None:
-        raise ServeError(f"a server is already running on port {info.port}")
-    if port is not None:
-        _require_free(port)
-    binary = runtime.checked_binary(layout, os.environ)
     paths = files(layout)
-    password = _password(paths)
-    process = _spawn(spawn, binary, port or 0, _server_env(profile, layout, password), layout)
-    try:
-        bound = _wait_for(lambda: _listening_port(paths.log), process, "listen", wait_s, paths.log)
-        _wait_for(lambda: _answers(bound, password), process, "answer", wait_s, paths.log)
-    except BaseException:
-        stop_server(process, GRACE)
-        raise
-    paths.pid.write_text(f"{process.pid}\n")
-    paths.port.write_text(f"{bound}\n")
+    with _start_lock(paths.lock):
+        if (info := running(layout)) is not None:
+            raise ServeError(f"a server is already running on port {info.port}")
+        if port is not None:
+            _require_free(port)
+        binary = runtime.checked_binary(layout, os.environ)
+        password = _password(paths)
+        env = _server_env(profile, layout, password)
+        process = _spawn(spawn, binary, port or 0, env, layout)
+        log = paths.log
+        try:
+            bound = _wait_for(lambda: _listening_port(log), process, "listened", wait_s, log)
+            _wait_for(lambda: _answers(bound, password), process, "answered", wait_s, log)
+            paths.pid.write_text(f"{process.pid}\n")
+            paths.port.write_text(f"{bound}\n")
+        except BaseException:
+            stop_server(process, GRACE)
+            raise
     return ServerInfo(process.pid, bound)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _create_lock(lock: Path) -> int:
+    return os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+
+@contextmanager
+def _start_lock(lock: Path) -> Iterator[None]:
+    """Hold the start lock, a file made with O_EXCL that names its holder's pid, around the check
+    that no server runs and the spawn. A live holder refuses with STARTING, and so does a lock
+    still being written (no pid yet); a lock whose pid is gone is replaced."""
+    lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        handle = _create_lock(lock)
+    except FileExistsError:
+        holder = _read_int(lock)
+        if holder is None or _alive(holder):
+            raise ServeError(STARTING) from None
+        # shortcut: two starts that find the same stale lock at once can both replace it; add an
+        # fcntl lock if concurrent starts right after a crashed one ever matter.
+        lock.unlink(missing_ok=True)
+        try:
+            handle = _create_lock(lock)
+        except FileExistsError:
+            raise ServeError(STARTING) from None
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write(f"{os.getpid()}\n")
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def _gone(pid: int, layout: Layout, seconds: float) -> bool:
@@ -208,29 +268,28 @@ def _gone(pid: int, layout: Layout, seconds: float) -> bool:
     return True
 
 
-def _terminate(pid: int, layout: Layout, grace_s: float) -> None:
-    """SIGTERM, then SIGKILL once `grace_s` has passed."""
+def _terminate(pid: int, layout: Layout, grace_s: float, kill: Kill) -> None:
+    """SIGTERM, then SIGKILL once `grace_s` has passed (Raise ServeError if it still runs)."""
     try:
-        os.kill(pid, signal.SIGTERM)
+        kill(pid, signal.SIGTERM)
         if _gone(pid, layout, grace_s):
             return
-        os.kill(pid, signal.SIGKILL)
+        kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         return
     if not _gone(pid, layout, KILL_WAIT):
         raise ServeError(f"process {pid} did not stop")
 
 
-def stop(layout: Layout, *, grace_s: float = 10.0) -> bool:
-    """Stop the running server; True when there was one. Removes the pid and port, keeps the password."""
+def stop(layout: Layout, *, grace_s: float = 10.0, kill: Kill = os.kill) -> bool:
+    """Stop the running server; True when there was one. Once it is gone, removes the pid and
+    port and keeps the password; a server that does not stop keeps them (Raise ServeError)."""
     paths = files(layout)
     info = running(layout)
-    try:
-        if info is not None:
-            _terminate(info.pid, layout, grace_s)
-    finally:
-        paths.pid.unlink(missing_ok=True)
-        paths.port.unlink(missing_ok=True)
+    if info is not None:
+        _terminate(info.pid, layout, grace_s, kill)
+    paths.pid.unlink(missing_ok=True)
+    paths.port.unlink(missing_ok=True)
     return info is not None
 
 
@@ -245,6 +304,12 @@ def _pm_code(session: dict[str, object]) -> str | None:
     coven = _sub(session.get("metadata"), "coven")
     code = _sub(coven, "code")
     return code if _sub(coven, "role") == PM_ROLE and isinstance(code, str) else None
+
+
+def _ask_id(ask: dict[str, object]) -> str:
+    """A waiting ask's `id`, else its `requestID`, else UNKNOWN_ASK."""
+    found = (ask.get(key) for key in ("id", "requestID"))
+    return next((each for each in found if isinstance(each, str) and each), UNKNOWN_ASK)
 
 
 def _pm_line(code: str, session: dict[str, object], busy: bool, asks: list[str]) -> str:
@@ -272,7 +337,7 @@ def _pm_lines(info: ServerInfo, password: str) -> list[str]:
         code, session_id = _pm_code(session), session.get("id")
         if code is None or not isinstance(session_id, str):
             continue
-        asks = [str(ask.get("id")) for ask in get(f"/api/session/{session_id}/permission")]
+        asks = [_ask_id(ask) for ask in get(f"/api/session/{session_id}/permission")]
         lines.append(_pm_line(code, session, session_id in busy, asks))
     # The cursor's request parameter is unverified, so a longer list is reported, not followed.
     if _sub(listing, "cursor"):
@@ -287,7 +352,6 @@ def status(layout: Layout) -> list[str]:
         return ["stopped"]
     head = f"running pid {info.pid} port {info.port}"
     try:
-        password = files(layout).password.read_text().strip()
-        return [head, *_pm_lines(info, password)]
-    except (OpencodeError, OSError) as error:
+        return [head, *_pm_lines(info, read_password(layout))]
+    except OpencodeError as error:
         return [head, f"sessions unavailable: {error}"]

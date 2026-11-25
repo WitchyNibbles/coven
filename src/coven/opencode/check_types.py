@@ -9,7 +9,7 @@ from typing import Final, Literal
 
 from coven.opencode.canary import ServerOptions, ServerView, data_items, http_json, operation_ids
 from coven.opencode.profile import RESET_HINT, Layout, OpencodeError, Profile
-from coven.opencode.serve import HOST, ServerInfo
+from coven.opencode.serve import HOST, ServerInfo, read_password
 
 type Status = Literal["ok", "warn", "fail"]
 type Read = Callable[[Path, Mapping[str, str], Path, ServerOptions], ServerView]
@@ -28,10 +28,10 @@ class Outcome:
 
 @dataclass(frozen=True)
 class Live:
-    """The coven server that already runs, and the file that holds its password."""
+    """The coven server that already runs, and the profile layout that holds its password."""
 
     info: ServerInfo
-    password_file: Path
+    layout: Layout
 
 
 class Server:
@@ -64,10 +64,7 @@ class Server:
         """GET `path` from the running server with its saved password."""
         if self.live is None:
             raise OpencodeError("no coven server is running")
-        try:
-            password = self.live.password_file.read_text().strip()
-        except OSError as error:
-            raise OpencodeError(f"cannot read the server password: {error}") from error
+        password = read_password(self.live.layout)
         return http_json("GET", f"http://{HOST}:{self.live.info.port}{path}", password)
 
     def _read_live(self) -> ServerView:
