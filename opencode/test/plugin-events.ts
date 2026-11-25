@@ -1,7 +1,13 @@
-/** The 2.3.2 events and errors the plugin tests feed the fake context. */
-export function notFound(): Error {
-  return Object.assign(new Error("session not found"), {
+/**
+ * The 2.3.2 events and errors the plugin tests feed the fake context. `notFound` is what
+ * `session.get` throws for a deleted session, as the e2e saw it: name and `_tag`
+ * `Session.NotFoundError`, an empty message, no status, and the `sessionID` key.
+ */
+export function notFound(sessionID = "ses_gone"): Error {
+  return Object.assign(new Error(""), {
+    name: "Session.NotFoundError",
     _tag: "Session.NotFoundError",
+    sessionID,
   });
 }
 
