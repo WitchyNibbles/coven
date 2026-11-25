@@ -414,3 +414,26 @@ def test_the_command_starts_reports_and_stops_a_server(
     assert serve.running(fake.layout) is None
     assert cli.main(["opencode", "serve", "stop"]) == 0
     assert capsys.readouterr().out == "no server was running\n"
+
+
+def test_the_server_log_is_emptied_then_shared_with_other_writers(good: Good) -> None:
+    layout = good.layout
+    log = serve.files(layout).log
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("a line of an earlier run\n")
+
+    def spawn(*_args: Any, **named: Any) -> Any:
+        out = named["stdout"]
+        assert "a" in out.mode
+        assert log.read_text() == ""
+        out.write(b"server line 1\n")
+        out.flush()
+        with log.open("ab") as other:  # the plugin's serve log writer
+            other.write(b"coven notice\n")
+        out.write(b"server line 2\n")
+        out.flush()
+        return None
+
+    serve._spawn(spawn, Path("/opencode"), 0, {}, layout)
+
+    assert log.read_text() == "server line 1\ncoven notice\nserver line 2\n"

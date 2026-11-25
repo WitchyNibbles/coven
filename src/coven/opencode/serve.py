@@ -138,7 +138,10 @@ def _spawn(
     argv = [str(binary), "serve", "--hostname", HOST, "--port", str(port)]
     log = files(layout).log
     try:
-        with log.open("wb") as output:
+        # emptied first so `_listening_port` reads only this run; opened for append so the
+        # plugin's own writes to the log (undelivered notices) are not overwritten by the server's
+        log.write_bytes(b"")
+        with log.open("ab") as output:
             return spawn(
                 argv,
                 env=env,
