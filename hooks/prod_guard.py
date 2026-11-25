@@ -158,6 +158,12 @@ hook_support = importlib.import_module("hook_support")
 
 HOOK = "prod-guard"
 PREFIX = "coven prod-guard:"
+# Added to a zone refusal that only a `cd` the guard cannot follow caused (`_zone_rule`).
+UNFOLLOWED_CD_HINT = (
+    "After a `cd` the guard cannot follow (`cd $VAR`), a relative glob such as `*.json`,"
+    " given to a program that is not a reader, may match a name in the zone: use"
+    " `cd /literal/path` or an absolute glob."
+)
 USAGE = "usage: prod_guard.py | prod_guard.py --check <guard.json>"
 CHECK_FLAG = "--check"
 ROLE_VAR = "COVEN_SESSION_ROLE"
@@ -5285,10 +5291,12 @@ def _interpreter_names_zone(command: str, zone: _Zone) -> bool:
     )
 
 
-def _bash_touches(call: Call, zone: _Zone) -> bool:
+def _bash_touches(call: Call, zone: _Zone, *, follow_cds: bool = False) -> bool:
     """A command run in the zone, or whose text reaches it. For a zone a session may read
     (`writes_only`), every word that only reads or runs a file is blanked first
-    (`_read_spans`): what is left reaches it only by a write."""
+    (`_read_spans`): what is left reaches it only by a write. With `follow_cds`, every `cd` of
+    the text counts as one the guard can follow, from a start folder that is clear of the zone: what
+    is asked is whether a `cd` it cannot follow is the only reason for a touch."""
     cwd = os.path.realpath(call.cwd)
     bash = _bash(call)
     if zone.writes_only and _only_reads_text(bash.command, zone, call.cwd):
@@ -5303,7 +5311,9 @@ def _bash_touches(call: Call, zone: _Zone) -> bool:
         code, glob_code = _blank(code, spans), _blank(glob_code, spans)
     if zone.writes_inside and _odd_job_mention(code):
         return True  # CLAUDE_JOB_DIR used otherwise than as written out: where it goes is unknown
-    clear = zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
+    clear = (follow_cds and _clear_folder(cwd, zone)) or (
+        zone.shell_reads and _cds_clear(bash.command, call.cwd, zone, _glob_climb(glob_code))
+    )
     where = _Where(call.cwd, cds_clear=clear)
     variants = _loop_variants(bash.command, code, glob_code) if zone.writes_inside else []
     return any(
@@ -5458,19 +5468,22 @@ def _tool_writes(call: Call, zone: _Zone) -> bool:
     return False
 
 
-def _zone_refusal(zone: _Zone, role: str) -> Refused:
+def _zone_refusal(zone: _Zone, role: str, *, unfollowed_cd: bool = False) -> Refused:
+    """The refusal of a zone, with a hint when only a `cd` the guard cannot follow caused it."""
     reach = (
         "nor reach it through MCP tools; in Bash it may only read it (cat, ls, grep, find) and run"
         " its scripts"
         if zone.writes_only
         else "nor reach it through Bash or MCP tools (use Read)"
     )
-    return Refused(
+    message = (
         f"{PREFIX} a '{role}' session cannot write to {zone.label}, {reach}; only the GM session"
         " may: ask the GM. In Bash, glob-like text in a heredoc body or a script counts too"
-        " (`**x**`, `.c*`): write the script with the Write tool and run it in its own Bash call",
-        zone.name,
+        " (`**x**`, `.c*`): write the script with the Write tool and run it in its own Bash call"
     )
+    if unfollowed_cd:
+        message += ". " + UNFOLLOWED_CD_HINT
+    return Refused(message, zone.name)
 
 
 def _bash(call: Call) -> Bash:
@@ -5696,8 +5709,11 @@ def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> Refused | 
     write."""
     for each in _zones(store):
         zone = _with_own(each, call)
-        if _bash_touches(_job_written_out(call, zone), zone):
-            return _zone_refusal(zone, role)
+        written = _job_written_out(call, zone)
+        if _bash_touches(written, zone):
+            # Only a zone with `shell_reads` follows a literal `cd`: for the others one never helps.
+            unfollowed = zone.shell_reads and not _bash_touches(written, zone, follow_cds=True)
+            return _zone_refusal(zone, role, unfollowed_cd=unfollowed)
     return None
 
 
