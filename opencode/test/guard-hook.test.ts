@@ -139,8 +139,22 @@ await test("a call with no workdir carries the session directory", async () => {
 
 await test("a tool the guard does not check starts no child", async () => {
   const { p, hook } = await guardHook();
-  await hook.callback(executeBefore("webfetch", { url: "https://x" }));
+  await hook.callback(executeBefore("coven_ping", {}));
   assert.deepEqual(p.spawned, []);
+});
+
+await test("webfetch is checked: both guards read its url", async () => {
+  const { p, hook } = await guardHook();
+  await hook.callback(executeBefore("webfetch", { url: "https://x" }));
+  assert.equal(p.spawned.length, 2);
+  for (const child of p.spawned) {
+    assert.deepEqual(JSON.parse(child.stdin), {
+      tool_name: "WebFetch",
+      tool_input: { url: "https://x" },
+      cwd: DIRECTORY,
+      hook_event_name: "PreToolUse",
+    });
+  }
 });
 
 await test("a checked tool with a non-object input is refused", async () => {

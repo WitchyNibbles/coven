@@ -160,7 +160,7 @@ await test("a pm guard that fails with any other exit refuses", async () => {
 
 await test("a tool no guard covers starts no child and no lookup", async () => {
   const { p, run } = await booted();
-  await run(toolEvent(PM, { url: "https://x" }, "webfetch"));
+  await run(toolEvent(PM, {}, "coven_ping"));
   assert.deepEqual(p.spawned, []);
   assert.deepEqual(p.lookups, []);
 });

@@ -54,6 +54,8 @@ const MAPPINGS: ReadonlyMap<string, Mapping> = new Map([
     },
   ],
   ["glob", { name: "Glob", fields: { pattern: "pattern", path: "path" } }],
+  // the server guard's FETCH mode reads only this `url`
+  ["webfetch", { name: "WebFetch", fields: { url: "url" } }],
 ]);
 
 /**

@@ -193,8 +193,22 @@ await test("a patch without text is refused", () => {
   );
 });
 
+await test("webfetch maps to a WebFetch payload with its url", () => {
+  assert.deepEqual(payloads("webfetch", { url: "https://x" }, CWD), [
+    {
+      tool_name: "WebFetch",
+      tool_input: { url: "https://x" },
+      cwd: CWD,
+      hook_event_name: "PreToolUse",
+    },
+  ]);
+  assert.throws(
+    () => payloads("webfetch", "https://x", CWD),
+    /unreadable webfetch input; blocking/,
+  );
+});
+
 await test("any other tool is unchecked", () => {
-  assert.equal(payloads("webfetch", { url: "https://x" }, CWD), "unchecked");
   assert.equal(payloads("coven_ping", {}, CWD), "unchecked");
   assert.equal(payloads("constructor", {}, CWD), "unchecked");
   assert.equal(payloads("toString", undefined, CWD), "unchecked");
