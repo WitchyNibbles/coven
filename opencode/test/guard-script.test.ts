@@ -29,7 +29,6 @@ async function withClock(body: () => Promise<void>): Promise<void> {
 
 await test("the timeouts are 5 s, 5 s, 15 s and 30 s", () => {
   assert.deepEqual(HOOK_TIMEOUTS_MS, {
-    denySecrets: 5000,
     serverGuard: 5000,
     pmPermissions: 15_000,
     prodGuard: 30_000,

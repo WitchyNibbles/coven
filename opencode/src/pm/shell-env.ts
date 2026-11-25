@@ -1,11 +1,8 @@
-import type {
-  ExecuteBeforeEvent,
-  SessionLike,
-  ShellCreateEvent,
-} from "../context.ts";
+import type { ExecuteBeforeEvent, ShellCreateEvent } from "../context.ts";
 import { isPlainObject } from "../join/fields.ts";
-import { ROLE_ENV, resolveRole } from "./role.ts";
-import type { Role } from "./role.ts";
+import { givenWorkdir } from "../workdir.ts";
+import { ROLE_ENV } from "./role.ts";
+import type { Role, RoleLookup } from "./role.ts";
 
 /** How long a recorded call waits for its shell to start. */
 const EXPIRY_MS = 30_000;
@@ -17,7 +14,6 @@ const SHELL_TOOLS: ReadonlySet<string> = new Set(["shell", "bash"]);
 const MIXED: Role = "pm";
 
 export interface ShellCall {
-  sessionID: string;
   role: Role | undefined;
   command: string;
   cwd: string;
@@ -114,7 +110,6 @@ export interface ShellEnvDeps {
   /** Shell events already taken for, shared by every plugin copy (`SharedState.taken`). */
   taken: WeakSet<object>;
   now: () => number;
-  get: (id: string) => Promise<SessionLike | undefined>;
 }
 
 /** The `command` and `workdir` strings of a shell call, or `undefined` when it has no command. */
@@ -130,8 +125,9 @@ function shellCall(
   if (typeof command !== "string") {
     return undefined;
   }
-  if (typeof workdir === "string" && workdir !== "") {
-    return { command, cwd: workdir };
+  const given = givenWorkdir(workdir);
+  if (given !== undefined) {
+    return { command, cwd: given };
   }
   // an empty workdir is no workdir, as the guard's `callCwd` reads it; which string the shell
   // event then carries (`""` or the location directory) is not known, so a call keeps both
@@ -141,27 +137,24 @@ function shellCall(
 }
 
 /**
- * The two shell hooks. `executeBefore` notes which role a shell call belongs to; `createBefore`
+ * The two shell hooks. `executeBefore` notes which role a shell call belongs to (the call's one
+ * role lookup, shared with the guards); `createBefore`
  * scrubs the environment of the shell that starts, then gives a PM's shell `ROLE_ENV`. A throw
  * from `createBefore` stops the shell. Every plugin copy hooks the same shell event, so only
  * the first to run takes a queue entry; each still scrubs. A GM's shell gets no `ROLE_ENV`: the memory store's
  * pre-commit hook refuses a commit whenever it is set, and the GM writes the store.
  */
 export function shellEnvHooks(deps: ShellEnvDeps): {
-  executeBefore(event: ExecuteBeforeEvent): Promise<void>;
+  executeBefore(event: ExecuteBeforeEvent, role: RoleLookup): Promise<void>;
   createBefore(event: ShellCreateEvent): void;
 } {
   return {
-    async executeBefore(event) {
+    async executeBefore(event, role) {
       const call = shellCall(event, deps.directory);
       if (call === undefined) {
         return;
       }
-      const info = await resolveRole(event.sessionID, deps.get);
-      deps.queue.record(
-        { sessionID: event.sessionID, role: info?.role, ...call },
-        deps.now(),
-      );
+      deps.queue.record({ role: (await role())?.role, ...call }, deps.now());
     },
     createBefore(event) {
       scrubEnv(event.env, deps.keyEnv);

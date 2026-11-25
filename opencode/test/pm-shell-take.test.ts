@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { SessionLike, ShellCreateEvent } from "../src/context.ts";
-import { ROLE_ENV } from "../src/pm/role.ts";
+import type {
+  ExecuteBeforeEvent,
+  SessionLike,
+  ShellCreateEvent,
+} from "../src/context.ts";
+import { ROLE_ENV, resolveRole } from "../src/pm/role.ts";
 import { ShellQueue, shellEnvHooks } from "../src/pm/shell-env.ts";
 import { sharedState } from "../src/pm/state.ts";
 
@@ -17,15 +21,23 @@ const PM_SESSION: SessionLike = {
 function copies() {
   const queue = new ShellQueue();
   const taken = new WeakSet<object>();
-  const make = () =>
-    shellEnvHooks({
+  const make = () => {
+    const hooks = shellEnvHooks({
       keyEnv: KEY,
       directory: "/loc",
       queue,
       taken,
       now: () => 1_000_000,
-      get: () => Promise.resolve(PM_SESSION),
     });
+    return {
+      ...hooks,
+      // the plugin hands the hook the call's one role lookup; here it is made the same way
+      executeBefore: (event: ExecuteBeforeEvent) =>
+        hooks.executeBefore(event, () =>
+          resolveRole(event.sessionID, () => Promise.resolve(PM_SESSION)),
+        ),
+    };
+  };
   return { first: make(), second: make() };
 }
 
@@ -86,10 +98,7 @@ await test("the shared state hangs on globalThis under a symbol key", () => {
 function queueWith(roles: ("pm" | "gm")[]): ShellQueue {
   const queue = new ShellQueue();
   roles.forEach((role, index) => {
-    queue.record(
-      { sessionID: `ses_${index}`, role, command: "ls", cwd: "/w" },
-      1000 + index,
-    );
+    queue.record({ role, command: "ls", cwd: "/w" }, 1000 + index);
   });
   return queue;
 }

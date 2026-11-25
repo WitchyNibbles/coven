@@ -184,6 +184,37 @@ await test("a guard refusal on a shell call records nothing for its shell", asyn
   assert.equal(event.env[ROLE_ENV], undefined);
 });
 
+await test("a shell call looks its role up once, for the guards and for its shell", async () => {
+  const { p, run } = await booted();
+  await run(toolEvent(PM, { command: "echo once" }));
+  assert.deepEqual(p.lookups, [PM]);
+  const shell = p.shellHooks[0];
+  assert.ok(shell !== undefined);
+  const event = {
+    command: "echo once",
+    cwd: DIRECTORY,
+    env: {} as Record<string, string>,
+  };
+  await shell.callback(event);
+  assert.equal(event.env[ROLE_ENV], "pm");
+});
+
+await test("a failed role lookup on a shell call still gives the shell a pm", async () => {
+  const { p, run } = await booted();
+  p.sessions.set("ses_down", new Error("down"));
+  await run(toolEvent("ses_down", { command: "echo down" }));
+  assert.deepEqual(p.lookups, ["ses_down"]);
+  const shell = p.shellHooks[0];
+  assert.ok(shell !== undefined);
+  const event = {
+    command: "echo down",
+    cwd: DIRECTORY,
+    env: {} as Record<string, string>,
+  };
+  await shell.callback(event);
+  assert.equal(event.env[ROLE_ENV], "pm");
+});
+
 await test("the plugins the guard tests started stop", () => {
   for (const stop of cleanups) {
     stop();

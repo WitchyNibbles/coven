@@ -258,16 +258,19 @@ async function guardsFor(resolve: () => never | Promise<never>) {
       profileDir: "/p",
       serveDir: "/p/state/serve",
     },
-    { directory: "/w", resolve, spawn },
+    { directory: "/w", spawn },
   );
-  await hook({
-    tool: "shell",
-    sessionID: "ses_x",
-    agent: "build",
-    messageID: "msg_1",
-    id: "call_1",
-    input: { command: "ls" },
-  });
+  await hook(
+    {
+      tool: "shell",
+      sessionID: "ses_x",
+      agent: "build",
+      messageID: "msg_1",
+      id: "call_1",
+      input: { command: "ls" },
+    },
+    resolve,
+  );
   return calls.map((call) => basename(call.args[1] ?? ""));
 }
 

@@ -4,7 +4,6 @@ import type { SpawnFn } from "./guard.ts";
 import { joinSetup } from "./plugin.ts";
 import { parseOptions } from "./options.ts";
 import { pingTool } from "./ping.ts";
-import { resolveRole } from "./pm/role.ts";
 import { pmSetup } from "./pm/setup.ts";
 import { toolChoiceHook } from "./tool-choice.ts";
 
@@ -67,8 +66,6 @@ export async function covenSetup(
       ...(deps.serveLog === undefined ? {} : { serveLog: deps.serveLog }),
       beforeTool: guardsHook(options, {
         directory: ctx.location.directory,
-        resolve: (sessionID) =>
-          resolveRole(sessionID, (id) => ctx.session.get({ sessionID: id })),
         ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
       }),
     });

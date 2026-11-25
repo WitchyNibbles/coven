@@ -14,6 +14,12 @@ export interface RoleInfo {
   code?: string;
 }
 
+/**
+ * The role of the session a tool call belongs to. One call makes one lookup and hands this to
+ * every hook that needs the role, so they all see the same answer and the server is asked once.
+ */
+export type RoleLookup = () => Promise<RoleInfo | undefined>;
+
 const ROLES: ReadonlySet<unknown> = new Set<Role>(["gm", "pm", "former-gm"]);
 
 function isRole(value: unknown): value is Role {

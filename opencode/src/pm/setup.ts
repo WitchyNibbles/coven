@@ -6,7 +6,7 @@ import type {
   ExecuteBeforeEvent,
   Registration,
 } from "../context.ts";
-import { messageOf } from "../join/fields.ts";
+import { isPlainObject, messageOf } from "../join/fields.ts";
 import { createHost } from "../join/host.ts";
 import { follow } from "../join/subscription.ts";
 import type { CovenOptions } from "../options.ts";
@@ -15,6 +15,7 @@ import { pmLaunchTool } from "./launch.ts";
 import { pmListTool, pmResumeTool, pmStopTool } from "./manage.ts";
 import { NoticeTracker } from "./notices.ts";
 import { resolveRole } from "./role.ts";
+import type { RoleInfo, RoleLookup } from "./role.ts";
 import { shellEnvHooks } from "./shell-env.ts";
 import { sharedState } from "./state.ts";
 import { serverStatus } from "./status.ts";
@@ -26,8 +27,11 @@ export interface PmDeps {
   log: (line: string) => void;
   /** Where a notice that cannot be delivered goes; the serve folder's `log` unless a test stands in. */
   serveLog?: (line: string) => void;
-  /** The guards of every tool call: deny-secrets, the server guard and, for a PM tree, the PM hooks. */
-  beforeTool: (event: ExecuteBeforeEvent) => Promise<void>;
+  /**
+   * The guards of every tool call: deny-secrets, the server guard and, for a PM tree, the PM
+   * hooks. `role` is the call's one role lookup.
+   */
+  beforeTool: (event: ExecuteBeforeEvent, role: RoleLookup) => Promise<void>;
 }
 
 /** Appends a stamped line to `<serveDir>/log`; a line that cannot be written goes to `deps.log`. */
@@ -47,9 +51,15 @@ export function serveLogger(
 
 /** Removes a hook registration, when the runtime handed back one that can be removed. */
 function dispose(registration: unknown): void {
-  if (typeof registration === "object" && registration !== null) {
+  if (isPlainObject(registration)) {
     (registration as Partial<Registration>).dispose?.();
   }
+}
+
+/** A lookup that runs on first use and gives every later caller the same promise. */
+function once(make: () => Promise<RoleInfo | undefined>): RoleLookup {
+  let lookup: Promise<RoleInfo | undefined> | undefined;
+  return () => (lookup ??= make());
 }
 
 /**
@@ -65,6 +75,7 @@ export async function pmSetup(
   const startedAt = deps.now();
   const get = (sessionID: string) => ctx.session.get({ sessionID });
   const host = createHost(ctx, deps.now);
+  const lastText = (id: string) => host.lastAssistantText(id);
   const toolDeps = { session: ctx.session, resolve: resolveRole };
   const state = sharedState();
   const shell = shellEnvHooks({
@@ -73,12 +84,11 @@ export async function pmSetup(
     queue: state.queue,
     taken: state.taken,
     now: deps.now,
-    get,
   });
   const status = serverStatus({
     session: ctx.session,
     permission: ctx.permission,
-    lastText: (id) => host.lastAssistantText(id),
+    lastText,
     now: deps.now,
   });
   await ctx.tool.transform((editor) => {
@@ -99,8 +109,10 @@ export async function pmSetup(
     editor.add(pmStopTool(toolDeps));
   });
   const guard = await ctx.tool.hook("execute.before", async (event) => {
-    await deps.beforeTool(event);
-    await shell.executeBefore(event);
+    // looked up when a hook first asks, so a call no hook needs a role for makes no lookup
+    const role = once(() => resolveRole(event.sessionID, get));
+    await deps.beforeTool(event, role);
+    await shell.executeBefore(event, role);
   });
   const stop = new AbortController();
   const registrations: unknown[] = [];
@@ -128,7 +140,7 @@ export async function pmSetup(
     const tracker = new NoticeTracker(ctx.location.directory, {
       session: ctx.session,
       state,
-      lastText: (id) => host.lastAssistantText(id),
+      lastText,
       startedAt,
       log: deps.serveLog ?? serveLogger(options.serveDir, deps),
     });

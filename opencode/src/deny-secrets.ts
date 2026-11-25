@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 
 import { isPlainObject } from "./join/fields.ts";
+import { givenWorkdir } from "./workdir.ts";
 
 /** What `hooks/deny_secrets.py` reads on stdin: the Claude Code `PreToolUse` shape. */
 export interface Payload {
@@ -114,10 +115,8 @@ function patchPaths(input: Input): string[] {
  */
 function callCwd(mapping: Mapping, input: Input, directory: string): string {
   const field = mapping.fields["workdir"];
-  const workdir = field === undefined ? undefined : input[field];
-  return typeof workdir === "string" && workdir !== ""
-    ? resolve(directory, workdir)
-    : directory;
+  const workdir = givenWorkdir(field === undefined ? undefined : input[field]);
+  return workdir === undefined ? directory : resolve(directory, workdir);
 }
 
 /**

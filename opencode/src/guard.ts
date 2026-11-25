@@ -6,8 +6,8 @@ import { payloads } from "./deny-secrets.ts";
 import type { Payload } from "./deny-secrets.ts";
 import { messageOf } from "./join/fields.ts";
 import { inPmTree } from "./pm/asks.ts";
-import type { RoleResolver } from "./pm/asks.ts";
 import { ROLE_ENV } from "./pm/role.ts";
+import type { RoleLookup } from "./pm/role.ts";
 
 /** The part of a child process the guard uses; `ChildProcess` fits, so a test can stand in for it. */
 export interface GuardChild {
@@ -35,11 +35,10 @@ export type SpawnFn = (
 ) => GuardChild;
 
 /**
- * How long each hook may run, as in `hooks/hooks.json`. `denySecrets` is the default of the
- * `guardTimeoutMs` option, which still sets deny-secrets' own timeout.
+ * How long each hook may run, as in `hooks/hooks.json`. Deny-secrets' own timeout is the
+ * `guardTimeoutMs` option, which starts at 5 000 ms.
  */
 export const HOOK_TIMEOUTS_MS = {
-  denySecrets: 5000,
   serverGuard: 5000,
   pmPermissions: 15_000,
   prodGuard: 30_000,
@@ -220,74 +219,84 @@ export interface GuardsDeps {
   /** The session's directory: relative paths in a call resolve against it. */
   directory: string;
   spawn?: SpawnFn;
-  /** The role of a session; a failed lookup counts as a PM. */
-  resolve: RoleResolver;
 }
 
 /** The child env of the PM-tree hooks: the role variable the Claude Code hooks read. */
 const PM_ENV: NodeJS.ProcessEnv = { [ROLE_ENV]: "pm" };
 
+/** One hook script and how it runs. */
+interface Step {
+  script: string;
+  extraArgs: readonly string[];
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}
+
 /**
  * The `execute.before` hook of every session. For each mapped payload it runs deny-secrets and
  * the server guard; a session in a PM tree (a failed role lookup included) also gets
  * pm-permissions and the production guard, which run without approvals and with the role set in
- * their env. The first refusal throws, and the hooks after it do not run. It never catches: a
- * refusal, a crash of a guard and a timeout all throw, which fails the tool call before OpenCode
- * asks for permission.
+ * their env. `role` is the call's one role lookup, made only for a call the guards cover. The
+ * first refusal throws, and the hooks after it do not run. It never catches: a refusal, a crash
+ * of a guard and a timeout all throw, which fails the tool call before OpenCode asks for
+ * permission.
  */
 export function guardsHook(
   options: GuardsOptions,
   deps: GuardsDeps,
-): (event: ExecuteBeforeEvent) => Promise<void> {
+): (event: ExecuteBeforeEvent, role: RoleLookup) => Promise<void> {
   const { covenRoot } = options;
-  const serverArgs = [
-    "--profile",
-    options.profileDir,
-    "--serve",
-    options.serveDir,
-    "--coven-root",
-    covenRoot,
+  const everySession: readonly Step[] = [
+    {
+      script: "deny_secrets.py",
+      extraArgs: [],
+      timeoutMs: options.guardTimeoutMs,
+    },
+    {
+      script: "opencode_server_guard.py",
+      extraArgs: [
+        "--profile",
+        options.profileDir,
+        "--serve",
+        options.serveDir,
+        "--coven-root",
+        covenRoot,
+      ],
+      timeoutMs: HOOK_TIMEOUTS_MS.serverGuard,
+    },
   ];
-  return async (event) => {
+  const pmTreeOnly: readonly Step[] = [
+    {
+      script: "pm_permissions.py",
+      extraArgs: ["--pre-tool-use"],
+      timeoutMs: HOOK_TIMEOUTS_MS.pmPermissions,
+      env: PM_ENV,
+    },
+    {
+      script: "prod_guard.py",
+      extraArgs: ["--no-approvals"],
+      timeoutMs: HOOK_TIMEOUTS_MS.prodGuard,
+      env: PM_ENV,
+    },
+  ];
+  return async (event, role) => {
     const checked = payloads(event.tool, event.input, deps.directory);
     if (checked === "unchecked") {
       return;
     }
-    const pm = await inPmTree(deps.resolve, event.sessionID);
+    const steps = (await inPmTree(role))
+      ? [...everySession, ...pmTreeOnly]
+      : everySession;
     for (const payload of checked) {
-      const run = (
-        script: string,
-        extraArgs: readonly string[],
-        timeoutMs: number,
-        env?: NodeJS.ProcessEnv,
-      ): Promise<void> =>
-        runHookScript(
+      for (const step of steps) {
+        await runHookScript(
           covenRoot,
-          script,
-          extraArgs,
+          step.script,
+          step.extraArgs,
           payload,
-          timeoutMs,
-          env,
+          step.timeoutMs,
+          step.env,
           deps.spawn,
-        );
-      await run("deny_secrets.py", [], options.guardTimeoutMs);
-      await run(
-        "opencode_server_guard.py",
-        serverArgs,
-        HOOK_TIMEOUTS_MS.serverGuard,
-      );
-      if (pm) {
-        await run(
-          "pm_permissions.py",
-          ["--pre-tool-use"],
-          HOOK_TIMEOUTS_MS.pmPermissions,
-          PM_ENV,
-        );
-        await run(
-          "prod_guard.py",
-          ["--no-approvals"],
-          HOOK_TIMEOUTS_MS.prodGuard,
-          PM_ENV,
         );
       }
     }
