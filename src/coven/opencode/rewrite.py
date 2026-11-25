@@ -15,6 +15,7 @@ from coven.opencode.profile import AGENT_ROLES
 COVEN_SKILLS: Final = (
     "ceo-review",
     "clean-code",
+    "manager",
     "office-hours",
     "project-standard",
     "shared-memory",

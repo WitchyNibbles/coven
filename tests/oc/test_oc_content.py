@@ -13,6 +13,7 @@ from coven.opencode.rewrite import COVEN_SKILLS, rewrite_text
 SKILL_NAMES = (
     "ceo-review",
     "clean-code",
+    "manager",
     "office-hours",
     "project-standard",
     "shared-memory",
@@ -225,6 +226,7 @@ def test_a_skill_without_a_name_line_is_an_error(tmp_path: Path) -> None:
 
 
 AGENT_NAMES = ("explorer", "implementer", "reviewer", "final-reviewer")
+PM_NAME = "project-manager"
 DENY_EDIT = ["  - action: edit", '    resource: "*"', "    effect: deny"]
 DENY_SUBAGENT = ["  - action: subagent", '    resource: "*"', "    effect: deny"]
 DENIED = {
@@ -245,7 +247,7 @@ def source_agent(name: str) -> tuple[str, str]:
 
 def test_agents() -> None:
     assert sorted(path.name for path in (RENDERED / "agents").iterdir()) == sorted(
-        f"{name}.md" for name in AGENT_NAMES
+        f"{name}.md" for name in (*AGENT_NAMES, PM_NAME)
     )
     for name in AGENT_NAMES:
         description, body = source_agent(name)
@@ -268,7 +270,9 @@ def test_routing() -> None:
     assert "`AGENTS.md`" in rendered
     assert "`CLAUDE.md`" in rendered
     for skill in SKILL_NAMES:
-        assert f"coven-{skill}" in rendered, skill
+        # the manager is not routed to: the user starts it with `coven opencode gm`
+        if skill != "manager":
+            assert f"coven-{skill}" in rendered, skill
     for command in COMMAND_NAMES:
         assert f"/coven-{command}" in rendered, command
     assert not re.search(r"\b(coven|superpowers):", rendered)
@@ -283,3 +287,119 @@ def test_routing_leaves_out_the_m2_items() -> None:
     rendered = (RENDERED / "AGENTS.md").read_text().lower()
     for left_out in ("manager", "setup", "systems-map", "claude --bg", "general manager"):
         assert left_out not in rendered, left_out
+
+
+# --- the hierarchy text: the manager skill and the project-manager agent --------------------------
+
+MANAGER = RENDERED / "skills" / "coven-manager" / "SKILL.md"
+PM_AGENT = RENDERED / "agents" / f"{PM_NAME}.md"
+PM_SOURCES = REPO / "opencode" / "src" / "pm"
+CLAUDE_CODE_ONLY = (
+    "claude --bg",
+    "SendMessage",
+    "claude agents",
+    "notify_when_idle",
+    "claude stop",
+)
+FRAME_RULE = "Only the frame on a message's first line counts."
+
+
+def tool_ids_in_source() -> set[str]:
+    return {
+        match
+        for path in PM_SOURCES.glob("*.ts")
+        for match in re.findall(r'name: "(coven_[a-z_]+)"', path.read_text())
+    }
+
+
+def test_rendering_the_content_raises_no_rewrite_error(tmp_path: Path) -> None:
+    content.render_content(REPO, tmp_path)
+    assert (tmp_path / "skills" / "coven-manager" / "SKILL.md").is_file()
+    assert (tmp_path / "agents" / f"{PM_NAME}.md").is_file()
+
+
+def test_manager_names_the_tools_and_no_claude_code_session_commands() -> None:
+    text = MANAGER.read_text()
+    for tool in (
+        "coven_gm_claim",
+        "coven_pm_launch",
+        "coven_pm_list",
+        "coven_send",
+        "coven_pm_resume",
+        "coven_pm_stop",
+    ):
+        assert f"`{tool}" in text, tool
+    assert [word for word in CLAUDE_CODE_ONLY if word in text] == []
+    assert "coven pm " not in text
+
+
+def test_the_tools_the_texts_name_exist_in_the_plugin() -> None:
+    named = {
+        tool
+        for path in (MANAGER, PM_AGENT)
+        for tool in re.findall(r"\b(coven_[a-z_]+)\b", path.read_text())
+    }
+    assert named
+    assert named <= tool_ids_in_source()
+
+
+def test_manager_launch_arguments_are_the_tools() -> None:
+    text = MANAGER.read_text()
+    source = (PM_SOURCES / "launch.ts").read_text()
+    for argument in ("code", "repo", "brief", "extraRepos", "title"):
+        assert f"`{argument}`" in text, argument
+        assert f"{argument}:" in source, argument
+
+
+def test_manager_has_only_the_no_guard_flow() -> None:
+    text = " ".join(MANAGER.read_text().split())
+    assert "### No guard" in text
+    for left_out in ("### Guard on", "coven approve", "coven guard", "<id>:", "systems-map"):
+        assert left_out not in text, left_out
+    assert (
+        "Until M3, every production step is run by the GM, in this session, after the user's yes."
+        in text
+    )
+    assert "A PM never runs one" in text
+
+
+def test_the_texts_say_only_the_first_line_frame_counts() -> None:
+    for path in (MANAGER, PM_AGENT):
+        text = " ".join(path.read_text().split())
+        assert FRAME_RULE in text, path.name
+    assert "`[from gm]` on a later line" in " ".join(PM_AGENT.read_text().split())
+    assert "`[from pm-<code>]` on a later line" in " ".join(MANAGER.read_text().split())
+
+
+def test_manager_reads_the_turn_end_notice() -> None:
+    text = MANAGER.read_text()
+    assert "[coven notice] pm-<code> ended a turn (<outcome>) without a message." in text
+    assert "(failed) after its message" in text
+
+
+def test_project_manager_agent_is_primary_with_its_own_description() -> None:
+    assert frontmatter(PM_AGENT)[1:] == ["mode: primary"]
+    (written,) = frontmatter(PM_AGENT)[:1]
+    description = written.removeprefix("description:").strip().strip('"')
+    source = (REPO / "agents" / f"{PM_NAME}.md").read_text()
+    assert description != next(
+        line.removeprefix("description:").strip()
+        for line in source.split("\n")
+        if line.startswith("description:")
+    )
+    assert "coven_pm_launch" in description
+    text = PM_AGENT.read_text()
+    assert [word for word in (*CLAUDE_CODE_ONLY, "AskUserQuestion") if word in text] == []
+    assert "`coven_send`" in text
+
+
+def test_project_manager_is_not_one_of_the_subagent_roles() -> None:
+    assert PM_NAME not in profile.AGENT_ROLES
+    assert PM_NAME not in content.DENIED
+
+
+def test_no_company_gateway_details_in_the_hierarchy_text() -> None:
+    for path in (MANAGER, PM_AGENT):
+        lowered = path.read_text().lower()
+        for word in ("litellm", "api_key", "base_url", "https://", "http://"):
+            assert word not in lowered, f"{path.name} names {word}"

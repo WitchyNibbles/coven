@@ -72,7 +72,6 @@ def test_lines_without_a_match_come_back_unchanged(text: str) -> None:
         "subagent_type",
         "ToolSearch",
         "TaskList",
-        "coven:manager",
         "coven:setup",
         "coven:systems-map",
         "coven:project-manager",

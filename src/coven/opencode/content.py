@@ -179,6 +179,22 @@ def _agents(repo: Path, out: Path) -> None:
         _agent(repo, name, out)
 
 
+PM_AGENT: Final = "project-manager"
+
+
+def _pm_agent(repo: Path, out: Path) -> None:
+    """The project manager as a primary agent, from its override: no source line passes through.
+
+    The source names `claude --bg`, so the override has its own description and body. The agent
+    file holds no deny rules: the PM's rules are the session permissions `coven_pm_launch` sets.
+    """
+    path = repo / OVERRIDES_REL / "agents" / f"{PM_AGENT}.md"
+    source = path.relative_to(repo).as_posix()
+    front, body = _split_frontmatter(_read(path, source))
+    head = f"---\n{_description(front, source)}\nmode: primary\n---\n"
+    (out / "agents" / f"{PM_AGENT}.md").write_text(head + body)
+
+
 def _routing(repo: Path, out: Path) -> None:
     path = repo / OVERRIDES_REL / "routing" / "AGENTS.md"
     out.joinpath("AGENTS.md").write_text(_read(path, path.relative_to(repo).as_posix()))
@@ -193,6 +209,7 @@ def render_content(repo: Path, out: Path) -> None:
     for command in COMMANDS:
         _command(repo, command, out)
     _agents(repo, out)
+    _pm_agent(repo, out)
     _routing(repo, out)
 
 
