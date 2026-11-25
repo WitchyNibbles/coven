@@ -72,14 +72,22 @@ export function gmClaimTool(deps: ToolDeps): ToolDefinition {
     input: { type: "object", properties: {}, additionalProperties: false },
     options: { codemode: false },
     execute: async (_raw, context) => {
-      // no await between the check and the flag: two simultaneous claims cannot both pass
+      const { me, role } = await caller(deps, context.sessionID);
+      if (!isRoot(me)) {
+        throw new ToolError("only a root session can claim the GM role");
+      }
+      if (role?.role === "pm") {
+        throw new ToolError("a PM cannot claim the GM role");
+      }
+      // refused callers never hold the flag; no await between the check and the flag, so two
+      // simultaneous claims cannot both pass
       const state = sharedState();
       if (state.claiming) {
         throw new ToolError("a claim is already running");
       }
       state.claiming = true;
       try {
-        return await claim(deps, context.sessionID);
+        return await takeOver(deps, me, role);
       } finally {
         state.claiming = false;
       }
@@ -87,17 +95,11 @@ export function gmClaimTool(deps: ToolDeps): ToolDefinition {
   };
 }
 
-async function claim(
+async function takeOver(
   deps: ToolDeps,
-  sessionID: string,
+  me: SessionLike,
+  role: RoleInfo | undefined,
 ): Promise<{ content: string }> {
-  const { me, role } = await caller(deps, sessionID);
-  if (!isRoot(me)) {
-    throw new ToolError("only a root session can claim the GM role");
-  }
-  if (role?.role === "pm") {
-    throw new ToolError("a PM cannot claim the GM role");
-  }
   const others = await findOtherGms(deps.session, me.id);
   // every other GM steps down first: a claim that fails after this leaves no GM, never two
   for (const other of others) {

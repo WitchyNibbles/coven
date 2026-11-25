@@ -206,6 +206,8 @@ export function pmLaunchTool(deps: LaunchDeps): ToolDefinition {
     options: { codemode: false },
     execute: (raw, context) =>
       asToolError(async () => {
+        // the GM check comes first: a refused caller never parses, never holds a lock
+        await requireGm(deps, context.sessionID, "coven_pm_launch");
         const input = parseLaunch(raw);
         // no await between the check and the add: two launches of one code cannot both pass
         const { launching } = sharedState();
@@ -214,7 +216,6 @@ export function pmLaunchTool(deps: LaunchDeps): ToolDefinition {
         }
         launching.add(input.code);
         try {
-          await requireGm(deps, context.sessionID, "coven_pm_launch");
           await check(deps, input);
           return { content: await launch(deps, input) };
         } finally {

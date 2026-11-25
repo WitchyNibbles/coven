@@ -5,18 +5,19 @@ import { isValidCode } from "../src/pm/code.ts";
 import { pmLaunchTool } from "../src/pm/launch.ts";
 import { resolveRole } from "../src/pm/role.ts";
 import { ToolError } from "../src/pm/tools.ts";
+import { coven } from "./pm-fake-session.ts";
 import { GM, SECRET, call, gitRepo, gmWorld, plainDir } from "./pm-gm-world.ts";
 import type { World } from "./pm-gm-world.ts";
 
 const PROFILE = "/placeholder/profile";
 
-function launch(world: World, input: unknown) {
+function launch(world: World, input: unknown, as = "gm1") {
   const tool = pmLaunchTool({
     session: world,
     resolve: resolveRole,
     options: { store: null, profileDir: PROFILE, secretRules: SECRET },
   });
-  return call(tool, "gm1", input);
+  return call(tool, as, input);
 }
 
 await test("two launches of one code at once create exactly one session", async () => {
@@ -103,4 +104,27 @@ await test("a git that cannot run is a git failure, not a missing checkout", asy
     }
   }
   assert.equal(world.created.length, 0);
+});
+
+await test("a pm calling launch with a malformed input gets the GM-only refusal", async () => {
+  const world = gmWorld([GM, { id: "pm1", metadata: coven("pm", "x") }]);
+  for (const input of [
+    null,
+    { code: 3 },
+    { code: "x", repo: "r", brief: "" },
+  ]) {
+    await assert.rejects(launch(world, input, "pm1"), /only the GM can/);
+  }
+});
+
+await test("a pm launch running with a GM launch of the same code does not make the GM's fail", async () => {
+  const world = gmWorld([GM, { id: "pm1", metadata: coven("pm", "x") }]);
+  const input = { code: "acme-1", repo: gitRepo(), brief: "go" };
+  const [refused, made] = await Promise.allSettled([
+    launch(world, input, "pm1"),
+    launch(world, input),
+  ]);
+  assert.equal(refused.status, "rejected");
+  assert.equal(made.status, "fulfilled");
+  assert.equal(world.created.length, 1);
 });

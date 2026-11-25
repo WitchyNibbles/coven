@@ -213,3 +213,14 @@ await test("a failed claim frees the lock", async () => {
   await claim(fake, "s1");
   assert.equal((await findGm(fake))?.id, "s1");
 });
+
+await test("a pm claim running with a real claim does not make the real one fail", async () => {
+  const fake = fakeSession([root("pm1", coven("pm", "x")), root("s2")]);
+  const [refused, made] = await Promise.allSettled([
+    claim(fake, "pm1"),
+    claim(fake, "s2"),
+  ]);
+  assert.equal(refused.status, "rejected");
+  assert.equal(made.status, "fulfilled");
+  assert.equal((await findGm(fake))?.id, "s2");
+});
