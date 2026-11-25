@@ -4,7 +4,7 @@
 > this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** a GM in an OpenCode TUI attached to a coven-owned `opencode serve` runs PMs as served
-sessions in their own worktrees, through coven plugin tools, with no prompt that waits on nobody
+sessions in their repos (making their own worktrees), through coven plugin tools, with no prompt that waits on nobody
 and no model able to reach the server, its password, the provider key or production.
 
 **Architecture:** Python owns the server lifecycle (`coven opencode serve`, `gm`, doctor) and the
@@ -30,7 +30,7 @@ on Node (`node --test`), OpenCode 2.3.2 plugin API; the offline fake-model e2e h
 - The server binds `127.0.0.1` only. The password is 32 random bytes, hex, file mode 0600.
 - PM prefixes: PM to GM `QUESTION`, `PROD-STEP`, `DRAFT`, `DONE`, `BLOCKED`; GM to PM `ANSWER`,
   `APPROVED`, `DENIED`, `TASK` (from `src/coven/pm/text.py`).
-- Metadata shape: `{"coven": {"role": "gm" | "pm", "code": "<code>", "gm": "<GM session id>"}}`.
+- Metadata shape: `{"coven": {"role": "gm" | "pm" | "former-gm", "code": "<code>"}}`; a PM finds the GM as the live session holding `role: gm`.
 - Notice text: `[coven notice] pm-<code> ended a turn (<outcome>) without a message. Last line: <first 200 chars>`.
 - Checks: `python3 .coven/check.py fast <files>` during a task; the e2e by hand with
   `npm run e2e` (in `opencode/`), output pasted in the PR. No suppressions.
@@ -44,7 +44,7 @@ on Node (`node --test`), OpenCode 2.3.2 plugin API; the offline fake-model e2e h
 3. A PM turn interrupted by `coven_pm_stop`: no notice (Task 10).
 4. A stale pid file after a crash, with a different process now on that pid: `serve start`
    must not refuse forever (Task 2, `test_stale_pid_of_other_process_is_replaced`).
-5. A GM session archived while a PM still runs: the PM's `coven_send` gets a clear tool error,
+5. The user opens a new GM session while PMs run: after its claim, PM messages and notices reach it, and a PM with no GM gets a clear tool error,
    not a silent drop (Task 8).
 
 ## File structure
@@ -63,7 +63,7 @@ Python:
 TypeScript, under `opencode/src/`:
 - `options.ts`, `guard.ts`, `coven.ts`, `context.ts` (modify).
 - `pm/role.ts`, `pm/shell-env.ts`, `pm/asks.ts`, `pm/prefixes.ts`, `pm/tools.ts`,
-  `pm/worktree.ts`, `pm/notices.ts`, `pm/setup.ts` (create).
+  `pm/notices.ts`, `pm/setup.ts` (create).
 - Tests in `opencode/test/pm-*.test.ts`; e2e in `opencode/test/e2e/hierarchy/` and
   `opencode/test/e2e/served/`.
 
@@ -177,7 +177,8 @@ a check for it.
   - `test_gm_stops_when_plugin_not_active`: `/api/plugin` without `coven` active → exit 1,
     "coven's plugin is not active on the server", no exec.
   - doctor: `test_doctor_server_password_mode`, `test_doctor_openapi_has_required_operations`
-    (one missing id → the check fails naming it).
+    (one missing id → the check fails naming it), `test_doctor_uses_the_running_server_and_starts_no_canary`
+    (with a server running, the canary's `serve` is never spawned), `test_doctor_starts_the_canary_when_no_server_runs`.
 - [ ] **Step 2: Run** `python3 .coven/check.py fast tests/oc/test_oc_gm.py tests/oc/test_oc_doctor_server.py`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the same. Expected: PASS.
@@ -190,8 +191,9 @@ a check for it.
 - Test: `tests/hooks/test_opencode_server_guard.py`
 
 **Interfaces:**
-- Produces: `refusal(payload: dict, profile: Path, serve: Path, port: int | None) -> str | None`;
-  `main(argv) -> int` reading the payload on stdin, `--profile DIR --serve DIR`, exit 0 allow,
+- Produces: `refusal(payload: dict, profile: Path, serve: Path, coven_root: Path, port: int | None) -> str | None`;
+  `main(argv) -> int` reading the payload on stdin, `--profile DIR --serve DIR --coven-root DIR`
+  (Task 7 passes all three from the plugin options), exit 0 allow,
   exit 2 with the text on stderr. The port comes from `<serve>/port` at call time. Command parsing
   reuses `hooks/shell_words` (as `pm_permissions.py` does), including nested `bash -c`/`sh -c`
   and pipelines. In the tests below `<serve>` is a tmp folder inside `<profile>`.
@@ -202,10 +204,16 @@ a check for it.
     `curl localhost:<port>`, `bash -c "curl 127.0.0.1:<port>"`, `cat <serve>/password`,
     `grep -r . <serve>`, `cat /proc/123/environ`, `ps eww`, `ps -E`, `ps aux e`,
     Read tool on `<serve>/password`, Write/Edit on `<profile>/config/opencode/opencode.jsonc`,
-    `echo x > <profile>/config/opencode/agents/a.md`.
+    `echo x > <profile>/config/opencode/agents/a.md`, Write on `<profile>/plugin/coven/index.ts`,
+    `sqlite3 <profile>/data/opencode/opencode.db`, Edit of `<profile>/profile.json`, Write on
+    `<coven-root>/hooks/deny_secrets.py`, Edit of `<coven-root>/opencode/src/guard.ts`,
+    `coven opencode setup --model lead=x`, `coven opencode serve stop`, `coven opencode gm`,
+    `coven opencode install`.
   - Allowed: `opencode --version`, `curl http://127.0.0.1:8080/` (another port), `ps aux`,
-    `cat /proc/cpuinfo`, Read of `<profile>/config/opencode/AGENTS.md` (reading config is fine;
-    writing it is not), `npm test`.
+    `cat /proc/cpuinfo`, Read of `<profile>/config/opencode/AGENTS.md` (reading config with the
+    Read tool is fine; writing it is not), `npm test`, Write on `<profile>/tmp/body.md`, Write on
+    `<profile>/home/notes.txt`, Edit of `<other>/coven-worktree/hooks/deny_secrets.py` (a worktree
+    of the coven repo outside `<coven-root>`), `coven opencode doctor`, `coven pm --help`.
   - `test_no_port_file_still_refuses_opencode_api`.
   - `test_refusal_text_points_to_gm_tools`: contains "coven_pm_list".
 - [ ] **Step 2: Run** `python3 .coven/check.py fast tests/hooks/test_opencode_server_guard.py`. Expected: FAIL.
@@ -246,7 +254,7 @@ a check for it.
 **Interfaces:**
 - Produces:
   - `ROLE_ENV: string` (equal to the Python constant; contract test reads `src/coven/pm/profile.py`).
-  - `type Role = "gm" | "pm"`; `interface RoleInfo { role: Role; code?: string; gm?: string }`.
+  - `type Role = "gm" | "pm" | "former-gm"`; `interface RoleInfo { role: Role; code?: string; gm?: string }`.
   - `resolveRole(sessionID: string, get: (id: string) => Promise<SessionLike | undefined>): Promise<RoleInfo | undefined>`
     (own `metadata.coven`, then up the `parentID` chain; a cycle or more than 32 hops returns `pm`
     if any hop had it, else undefined).
@@ -262,6 +270,7 @@ a check for it.
     `no entry sets no role`.
   - `scrub removes password and key, keeps PATH and HOME`.
   - `createBefore sets ROLE_ENV for a pm shell and scrubs first`.
+  - `a gm shell gets no ROLE_ENV` (the store's pre-commit hook refuses any value).
   - `ROLE_ENV matches the Python constant`.
 - [ ] **Step 2: Run** `node --test test/pm-role.test.ts test/pm-shell-env.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -282,7 +291,7 @@ a check for it.
   - `SpawnFn = (command: string, args: readonly string[], env?: NodeJS.ProcessEnv) => GuardChild`.
   - `runHookScript(covenRoot: string, script: string, extraArgs: readonly string[], payload: Payload, timeoutMs: number, env?: NodeJS.ProcessEnv, spawn?: SpawnFn): Promise<void>`.
   - One `execute.before` hook that, per mapped payload, runs in order: `deny_secrets.py` (all
-    sessions), `opencode_server_guard.py --profile <profileDir> --serve <serveDir>` (all sessions), then for PM-tree
+    sessions), `opencode_server_guard.py --profile <profileDir> --serve <serveDir> --coven-root <covenRoot>` (all sessions), then for PM-tree
     sessions `pm_permissions.py --pre-tool-use` with `ROLE_ENV=pm` in the child env, and
     `prod_guard.py --no-approvals --pre-tool-use`.
   - `askToDeny(resolve): (event: EvaluateEvent) => Promise<void>`: `effect "ask"` → `"deny"` for
@@ -313,11 +322,12 @@ a check for it.
 
 - [ ] **Step 1: Write the failing tests**
   - `prefix lists match src/coven/pm/text.py` (reads the file, extracts both tuples).
-  - claim: `first claim sets metadata role gm`; `second claim refused while the first GM is live`;
-    `claim refused for a session with parentID`; `claim refused for a pm`.
+  - claim: `first claim sets metadata role gm`; `a second claim takes over: the old GM becomes
+    former-gm, a PM's send now reaches the new GM`; `claim refused for a session with parentID`;
+    `claim refused for a pm`.
   - send: `gm to pm by code with ANSWER queues "[from gm] ANSWER ..."`; `pm to gm with DONE
     queues "[from pm-x1] DONE ..."`; `bad prefix is a tool error, nothing sent`; `a pm child
-    cannot send`; `unknown code`; `the GM session is archived → "the GM session is gone; end the
+    cannot send`; `unknown code`; `no live session holds role gm → "no GM session; end the
     turn with the full message"`; `send marks the turn as messaged` (calls `sent`).
 - [ ] **Step 2: Run** `node --test test/pm-prefixes.test.ts test/pm-send.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement**; `delivery: "queue"` always.
@@ -327,30 +337,28 @@ a check for it.
 ### Task 9: PM launch, list, resume, stop
 
 **Files:**
-- Create: `opencode/src/pm/worktree.ts`; extend `opencode/src/pm/tools.ts`
-- Test: `opencode/test/pm-launch.test.ts`, `opencode/test/pm-worktree.test.ts`
+- Extend: `opencode/src/pm/tools.ts`
+- Test: `opencode/test/pm-launch.test.ts`
 
 **Interfaces:**
 - Consumes: `resolveRole`, `sendTool` deps (Tasks 6, 8).
 - Produces:
-  - `pmRules(store: string | null): PermissionRule[]` (the spec's "PM rules on the session" list,
-    in that order).
-  - `makeWorktree(repo: string, code: string, run: RunFn): Promise<string>` (path
-    `<repo>/.claude/worktrees/pm-<code>`, branch `pm/<code>` from the default branch:
-    `git symbolic-ref --short refs/remotes/origin/HEAD`, else `main`).
+  - `pmRules(o: {store: string | null; tmp: string; extraRepos: readonly string[]}): PermissionRule[]`
+    (the spec's "PM rules on the session" list in that order, then an `external_directory` allow
+    for `tmp` and each extra repo).
   - `pmLaunchTool`, `pmListTool`, `pmResumeTool`, `pmStopTool`; GM-only.
 
 - [ ] **Step 1: Write the failing tests** (fake `ctx.session`, a real `git init` repo in a tmp dir)
-  - launch: `creates worktree, session with agent project-manager, location = worktree, metadata
-    {role pm, code, gm}, permissions = pmRules, title pm-<code>, then prompts the brief`;
-    `refused for a live code`; `refused when the worktree or branch exists (names it)`;
+  - launch: `creates a session with agent project-manager, location = the repo checkout, metadata
+    {role pm, code}, permissions = pmRules, title pm-<code>, then prompts the brief`;
+    `extraRepos become external_directory allows`; `refused for a live code`;
     `refused for a non-git repo`; `invalid code refused` (codes from `test_text.py`'s cases);
     `refused from a non-GM session`.
   - list: `shows code, id, busy/idle, outcome, ASK WAITING (bug) with request id, missing`.
   - resume: `unarchives then prompts "RESUMED by gm\n<text>"`.
   - stop: `interrupts; archive true archives; marks the stop for the notice tracker`.
   - `pmRules denies force pushes, main pushes, gh pr merge, store edits, webfetch, question`.
-- [ ] **Step 2: Run** `node --test test/pm-launch.test.ts test/pm-worktree.test.ts`. Expected: FAIL.
+- [ ] **Step 2: Run** `node --test test/pm-launch.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the same. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(opencode): GM tools to launch, list, resume and stop PMs`.
@@ -372,6 +380,7 @@ a check for it.
   - `a pm turn with no message queues one notice into the GM with the exact text`.
   - `no notice when the pm sent to the GM in that turn`; `no notice for a child (parentID)`;
     `no notice for a session in another directory`; `no notice after coven_pm_stop`;
+    `no notice while the PM has a busy child`;
     `failed and interrupted outcomes are named`; `a missing GM writes the notice to the log`.
   - `plugin registers coven_gm_claim, coven_send, coven_pm_launch, coven_pm_list,
     coven_pm_resume, coven_pm_stop` (selfCheck fails if one is missing).

@@ -56,6 +56,10 @@ Also from the GM: the PM todo list is out of M2.
   D5). M2 has only the deny-only guard for PM trees (D7).
 - The PM todo list in status. aquelarre (M4). OpenCode 1.x.
 - Holding an ask for the GM to answer (D3).
+- `coven pm status/health/resume` (the Claude Code commands) reading OpenCode sessions. An
+  OpenCode GM's project state records hold `pm-<code>` names, not Claude session ids, so
+  `coven pm health` on Claude Code does not read them; switching tools mid-project on one store
+  is not supported in M2.
 
 ## Anti-goals
 
@@ -136,18 +140,25 @@ plan.
   one fails in doctor, not in a PM).
 - `coven opencode run` refuses while the server is running ("a coven server is running; use
   `coven opencode gm`"): `run` and `serve` share the profile's database, and two OpenCode
-  processes writing it at once is not something 2.3.2 promises to handle.
+  processes writing it at once is not something 2.3.2 promises to handle. For the same reason
+  `doctor` runs its server checks against the running server instead of starting its canary
+  server, and starts the canary only when no server runs.
 
 ### Roles and the GM session (D1)
 
-- Roles live in session metadata: `{"coven": {"role": "gm"|"pm", "code": "<project code>",
-  "gm": "<GM session id>"}}`. Children copy it, so a PM's implementer is in the PM tree.
+- Roles live in session metadata: `{"coven": {"role": "gm"|"pm", "code": "<project code>"}}`.
+  Children copy it, so a PM's implementer is in the PM tree.
 - The GM session is the lead TUI session. It has no metadata at creation, so the GM marks itself
   with a `coven_gm_claim` tool (sets `role: gm` on its own session). The manager skill calls it
-  first. A second claim while another GM session holds the role and is not archived is refused,
-  and so is a claim from a session that has a `parentID` or already has a role (a PM or its
-  child can never become the GM). (My call: the TUI creates the session, so coven cannot tag it
-  at create time.)
+  first. A claim takes over: the previous GM session, if any, loses the role (its metadata
+  becomes `{"coven": {"role": "former-gm"}}`), so a user who opens a new TUI session tomorrow
+  becomes the GM without archiving anything. A PM never stores the GM's id: `coven_send` to the
+  GM and the notices go to the session that holds `role: gm` when they are sent. A claim from a
+  session that has a `parentID` or a role (`pm`) is refused, so a PM or its child can never
+  become the GM. (My calls: the TUI creates the session, so coven cannot tag it at create time;
+  takeover instead of refusal, after the builder check.)
+- Only PM-tree shells get the role variable. The GM's shells get none, because the memory store's
+  pre-commit hook refuses a commit whenever the variable is set, and the GM writes the store.
 - A new profile role `project-manager` joins `ROLES`, with a model from `--model
   project-manager=ID` and the lead's model as default (D6). The GM uses the lead role.
 - The PM agent is generated from `agents/project-manager.md` with an OpenCode override for the
@@ -162,7 +173,7 @@ metadata, then the `parentID` chain).
 | Tool | Does |
 |---|---|
 | `coven_gm_claim` | marks the calling session as the GM |
-| `coven_pm_launch {code, repo, brief, title?}` | makes a git worktree for the PM (`<repo>/.claude/worktrees/pm-<code>` on a new branch from the repo's default branch; my call, the folder coven already uses), then `ctx.session.create` with agent `project-manager`, `location.directory` = the worktree, metadata `{role: pm, code, gm}`, the PM rules as session `permissions`, title `pm-<code>`; then `ctx.session.prompt` with the brief. Refuses a code that already has a live PM. |
+| `coven_pm_launch {code, repo, brief, extraRepos?, title?}` | `ctx.session.create` with agent `project-manager`, `location.directory` = the repo's checkout, metadata `{role: pm, code}`, the PM rules as session `permissions` (with an `external_directory` allow for each of `extraRepos` and the profile's `tmp`), title `pm-<code>`; then `ctx.session.prompt` with the brief. The PM makes its own worktrees under `<repo>/.claude/worktrees/`, inside its location, as on Claude Code, one per task, so parallel tasks and one PR per task stay. Refuses a code that already has a live PM, a repo that is not a git checkout, and an invalid code. (My call, after the builder check: a worktree fixed at launch would rule out per-task worktrees.) |
 | `coven_pm_list` | the PM sessions: code, id, busy/idle, outcome, waiting asks, last message head |
 | `coven_send {to, text}` | `ctx.session.prompt(..., delivery: "queue")` to a PM by code (from the GM) or to the GM (from a PM; `to` is ignored there). Checks the first line's prefix: GM to PM `ANSWER|APPROVED|DENIED|TASK`, PM to GM `QUESTION|PROD-STEP|DRAFT|DONE|BLOCKED`. Prefixes the text with `[from pm-<code>]` or `[from gm]`. |
 | `coven_pm_resume {code, text}` | unarchives the PM if needed and prompts it with `RESUMED by gm` plus the text |
@@ -221,8 +232,16 @@ every session, with the same payload and fail-closed rules. It refuses:
   (port from the port file at call time) in any form the guard's command parser sees;
 - any read, grep, glob or shell read of `<profile>/serve/` and of `/proc/*/environ`, and `ps`
   with an option that prints other processes' env (`e`, `-E`, `eww`);
-- any edit, write or patch under the profile folder (the config, agents, plugin and skills) and
-  shell commands that write there (the profile config guard).
+- any edit, write or patch, and any shell command that names the path, under the protected set
+  (the profile config guard): the profile's `config/`, `plugin/`, `runtime/`, `data/` (the
+  session database: a model with `sqlite3` could rewrite its own metadata or rules), `profile.json`
+  and the serve folder, plus coven's own `hooks/` and `opencode/src/` under the plugin's
+  `covenRoot` (the guards themselves). A PM's worktree of the coven repo is another path, so work
+  on coven is not blocked. The profile's `tmp/` and `home/` stay writable (`TMPDIR` and `HOME`
+  point there);
+- `coven opencode setup`, `install`, `serve` and `gm` from any model shell, the GM's included:
+  a config write hot-reloads the plugin, and `serve stop` needs no password. The user runs these
+  in a terminal; after a server restart the GM resumes PMs with its tools.
 
 The refusal text says the server is coven's and the GM's tools are the way to reach PMs. The
 guard reads its profile path and port from the plugin options and the port file; with no port
@@ -255,7 +274,9 @@ The plugin follows `ctx.event` (reusing `join/subscription.ts`). On
 only the plugin instance whose location is that session's directory acts, so one notice goes out
 per turn. If the PM called `coven_send` to the GM during that turn (tracked per session from the
 `session.execution.started` event to the end event), or the turn ended because the GM called
-`coven_pm_stop`, no notice. Otherwise it queues into the GM
+`coven_pm_stop`, or the PM still has a busy child session (its report will wake the PM, so the PM
+has not stopped; my call refining D4 after the builder check, since a notice there costs a GM
+turn for a PM that is still working), no notice. Otherwise it queues into the GM
 `[coven notice] pm-<code> ended a turn (<outcome>) without a message. Last line: <first 200
 chars>`.
 
@@ -299,15 +320,14 @@ Two new e2e groups in `opencode/test/e2e/`, run by `npm run e2e`, offline in `un
 - A GM tool called by a non-GM session, a bad prefix or an unknown code is a tool error with the
   reason; nothing is sent.
 - A PM whose session was deleted shows as `missing` in `coven_pm_list`.
-- A PM's `coven_send` to a GM session that is gone or archived is a tool error ("the GM session
-  is gone; end the turn with the full message"), so the message stays in the PM's log, as on
-  Claude Code. A notice that cannot be delivered is written to `serve/log`.
+- A PM's `coven_send` when no live session holds `role: gm` is a tool error ("no GM session;
+  end the turn with the full message"), so the message stays in the PM's log, as on Claude Code.
+  A notice that cannot be delivered is written to `serve/log`.
 - A waiting ask in a PM tree means the evaluate hook missed it: `serve status` and
-  `coven_pm_list` show it as `ASK WAITING (bug)` with the request id, and the GM can reject it with
-  the API reply (`coven_pm_stop` also clears it).
-- `coven_pm_launch` refuses when the worktree folder or branch already exists, naming it, and
-  when the repo is not a git checkout. An invalid code is refused with the rule from
-  `pm/text.py` (`is_valid_code`).
+  `coven_pm_list` show it as `ASK WAITING (bug)` with the request id, and `coven_pm_stop` clears
+  it (the interrupt ends the waiting turn). The GM has no API access of its own.
+- `coven_pm_launch` refuses when the repo is not a git checkout. An invalid code is refused with
+  the rule from `pm/text.py` (`is_valid_code`).
 - `serve start` retries once when the picked port is taken between the check and the bind.
 
 ## Tests
