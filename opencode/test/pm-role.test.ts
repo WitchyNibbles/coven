@@ -135,8 +135,35 @@ await test("a coven entry that is not a known role → pm", async () => {
   }
 });
 
+await test("null or non-object metadata is no role of its own", async () => {
+  for (const metadata of [null, "gm", 5, ["coven"]]) {
+    const { get } = lookup({
+      b: session("b", {
+        parentID: "a",
+        metadata: metadata as unknown as Record<string, unknown>,
+      }),
+      a: session("a", { metadata: coven("pm", "proj") }),
+    });
+    assert.deepEqual(await resolveRole("b", get), {
+      role: "pm",
+      code: "proj",
+    });
+  }
+  const { get } = lookup({
+    a: session("a", { metadata: null }),
+  });
+  assert.equal(await resolveRole("a", get), undefined);
+});
+
+await test("a null parentID ends the chain like a missing one", async () => {
+  const { get, asked } = lookup({ a: session("a", { parentID: null }) });
+  assert.equal(await resolveRole("a", get), undefined);
+  assert.deepEqual(asked, ["a"]);
+});
+
 await test("isRoot is true only without a parent", () => {
   assert.equal(isRoot(session("a")), true);
+  assert.equal(isRoot(session("a", { parentID: null })), true);
   assert.equal(isRoot(session("a", { parentID: "b" })), false);
 });
 

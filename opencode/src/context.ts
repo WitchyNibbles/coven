@@ -10,10 +10,11 @@ export interface PermissionRule {
 /** One session as the plugin reads it from `ctx.session.get` and `list`. */
 export interface SessionLike {
   id: string;
-  parentID?: string;
-  directory: string;
-  /** `{coven: {role, code?}}` once coven has marked the session. */
-  metadata?: Record<string, unknown>;
+  /** Missing or null for a session with no parent. */
+  parentID?: string | null;
+  directory?: string;
+  /** `{coven: {role, code?}}` once coven has marked the session; null or missing before that. */
+  metadata?: Record<string, unknown> | null;
 }
 
 /** What `ctx.session.create` takes (checked live in Task 0, step 6). */

@@ -40,11 +40,9 @@ await test("two module copies see one sharedState", async () => {
 });
 
 await test("the shared state hangs on globalThis under a symbol key", () => {
-  sharedState();
-  const symbols = Object.getOwnPropertySymbols(globalThis).filter(
-    (symbol) => symbol.description?.startsWith("coven") === true,
-  );
-  assert.equal(symbols.length, 1);
+  const state = sharedState();
+  const holder = globalThis as Record<symbol, unknown>;
+  assert.equal(holder[Symbol.for("coven.opencode.shared")], state);
 });
 
 await test("take returns the role recorded for the command and cwd", () => {
@@ -140,6 +138,9 @@ await test("scrub removes password and key, keeps PATH and HOME", () => {
     OPENCODE_API_TOKEN: "t",
     OPENCODE_SIGNING_KEY: "s",
     OPENCODE_ADMIN_PASSWORD: "a",
+    OPENCODE_TOKEN: "t",
+    OPENCODE_KEY: "k",
+    OPENCODE_X_TOKEN: "x",
     PATH: "/bin",
     HOME: "/h",
   };

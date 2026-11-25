@@ -23,8 +23,8 @@ type Outcome = RoleInfo | "none" | "unreadable";
 
 /** The role a session's own metadata holds; `unreadable` when `coven` is there but not a role. */
 function ownRole(session: SessionLike): Outcome {
-  const metadata = session.metadata;
-  if (metadata === undefined || !("coven" in metadata)) {
+  const metadata: unknown = session.metadata;
+  if (!isPlainObject(metadata) || !("coven" in metadata)) {
     return "none";
   }
   const coven = metadata["coven"];
@@ -69,12 +69,12 @@ export async function resolveRole(
     if (found !== "none") {
       return found;
     }
-    next = session.parentID;
+    next = session.parentID ?? undefined;
   }
   return undefined;
 }
 
-/** True for a session with no parent: a lead session, not a child. */
+/** True for a session with no parent (a missing or null `parentID`): a lead session, not a child. */
 export function isRoot(session: SessionLike): boolean {
-  return session.parentID === undefined;
+  return session.parentID === undefined || session.parentID === null;
 }

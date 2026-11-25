@@ -11,7 +11,7 @@ import type { Role } from "./role.ts";
 const EXPIRY_MS = 30_000;
 const SERVER_PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
 const PROFILE_PASSWORD_ENV = "OPENCODE_PASSWORD";
-const SECRET_NAME = /^OPENCODE_.*_(PASSWORD|TOKEN|KEY)$/;
+const SECRET_NAME = /^OPENCODE(_.*)?_(PASSWORD|TOKEN|KEY)$/;
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["shell", "bash"]);
 /** The role a shell gets when its recorded calls disagree: the strictest. */
 const MIXED: Role = "pm";
