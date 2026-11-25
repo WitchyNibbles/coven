@@ -27,6 +27,36 @@ export function coven(role: string, code?: string): Record<string, unknown> {
   return { coven: { role, ...(code === undefined ? {} : { code }) } };
 }
 
+/**
+ * One page of `list` as OpenCode 2.3.2 serves it: a page with sessions has a string `cursor.next`
+ * (even the last one), the page after answers `{previous: null, next: null}`, and a `null` cursor
+ * in the query is refused as the SDK refuses it. `endless` hands out a next cursor forever.
+ */
+export function realPage(
+  all: readonly SessionLike[],
+  query: { cursor?: string | null | undefined },
+  size: number,
+  endless = false,
+): Promise<SessionPage> {
+  if (query.cursor === null) {
+    return Promise.reject(
+      new Error('Expected SessionsCursor | undefined at ["cursor"]'),
+    );
+  }
+  const start = Number(query.cursor ?? 0);
+  const data = all.slice(start, start + size);
+  const more = endless || data.length > 0;
+  return Promise.resolve({
+    data,
+    cursor: more
+      ? {
+          previous: String(start),
+          next: String(endless ? 0 : start + size),
+        }
+      : { previous: null, next: null },
+  });
+}
+
 /** An in-memory `ctx.session`: no server, no network. `update` replaces the metadata it is given. */
 export function fakeSession(initial: readonly SessionLike[]): FakeSession {
   const sessions = new Map(initial.map((item) => [item.id, item]));
@@ -59,14 +89,7 @@ export function fakeSession(initial: readonly SessionLike[]): FakeSession {
       const all = [...sessions.values()].filter(
         (each) => parentID === undefined || each.parentID === parentID,
       );
-      const start = cursor === undefined ? 0 : Number(cursor);
-      const data = all.slice(start, start + fake.pageSize);
-      const end = start + fake.pageSize;
-      const more = fake.endless || end < all.length;
-      return Promise.resolve({
-        data,
-        cursor: more ? { next: String(fake.endless ? 0 : end) } : {},
-      });
+      return realPage(all, { cursor }, fake.pageSize, fake.endless);
     },
     prompt(input: SessionPromptInput): Promise<unknown> {
       fake.calls.push(`prompt:${input.sessionID}`);

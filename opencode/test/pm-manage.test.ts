@@ -234,7 +234,8 @@ await test("list reads the live sessions once, for the PM roots and the busy set
     { id: "pm2", metadata: coven("pm", "beta"), time: { busy: 5 } },
   ]);
   const out = await list(world);
-  assert.equal(world.calls.filter((each) => each === "list").length, 1);
+  // one walk of the live listing: the page with the sessions and the empty page 2.3.2 ends with
+  assert.equal(world.calls.filter((each) => each === "list").length, 2);
   assert.deepEqual(out.split("\n"), [
     "pm-acme-1  pm1  idle  last succeeded",
     "pm-beta  pm2  busy",
