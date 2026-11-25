@@ -532,12 +532,16 @@ class Call:
 
 @dataclass(frozen=True)
 class Segment:
-    """The words of one command, whether a `|` directly precedes it, and the separator token right
-    before it (`&&`, `||`, `;`, `|`, `(` or `)`; "" for the first segment)."""
+    """The words of one command and the separator token right before it (`&&`, `||`, `;`, `|`, `(`
+    or `)`; "" for the first segment)."""
 
     words: list[str]
-    piped: bool
-    after: str = ""
+    after: str
+
+    @property
+    def piped(self) -> bool:
+        """Whether a `|` directly precedes the segment."""
+        return self.after == "|"
 
 
 @dataclass(frozen=True)
@@ -669,7 +673,6 @@ def _segments(tokens: Iterable[str]) -> list[Segment]:
     return [
         Segment(
             part,
-            piped=index > 0 and breaks[index - 1] == "|",
             after=breaks[index - 1] if index > 0 else "",
         )
         for index, part in enumerate(parts)
