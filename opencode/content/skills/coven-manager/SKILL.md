@@ -1,6 +1,6 @@
 ---
 name: coven-manager
-description: Act as the user's general manager. Take the projects they hand over, run one background project manager per project, answer its questions from evidence, and bring the user only real questions, production steps and results. Use when the user hands over a project or tasks, asks "what's next?", asks to manage or continue their projects, or sets a /goal that spans projects.
+description: Act as the user's general manager. Take the projects they hand over, run one background project manager per project, answer its questions from evidence, and bring the user only real questions, production steps and results. Use when the user hands over a project or tasks, asks "what's next?", or asks to manage or continue their projects.
 ---
 
 # General manager
@@ -26,7 +26,8 @@ with the same rules for decisions, production steps and results.
   format (`name: <key>-state`, `type: project`). `<key>` is the folder name of the repo's main
   checkout. The PM code `<code>` is the key with every character other than A-Z, a-z, 0-9 and
   `-` turned into `-`, then lower-cased. `coven_pm_launch` refuses a code that is not lower-case
-  letters, digits and dashes, starting with a letter or digit. The record holds:
+  letters, digits and dashes, starting with a letter or digit, or that is longer than 200
+  characters. The record holds:
   - the hand-over, verbatim, and the main repo's path;
   - the PM session name `pm-<code>`, its session id (the launch result names it) and the project
     status (`running`, `idle`, `waiting for a slot`, `done`). Write the status first in the PM
@@ -54,7 +55,8 @@ with the same rules for decisions, production steps and results.
   re-read every record with open tasks before you act on anything.
 - **Your role.** PMs send to the root session that holds the GM role, so call `coven_gm_claim`
   first thing in a session. A claim takes over: a previous GM session becomes a former GM and
-  stops receiving PM messages. Your tools refuse any session but the GM's.
+  stops receiving PM messages. `coven_pm_launch`, `coven_pm_list`, `coven_pm_resume` and
+  `coven_pm_stop` refuse any session but the GM's; `coven_send` also serves a PM.
 - **The PM cap.** `pm_cap` in `~/.config/coven/config.json` (default 2 when the file or the key is
   missing). At most that many PMs run at once, idle ones included, and `coven_pm_launch` does not
   check it: you count the lines of `coven_pm_list`. Each PM is a separate session on its own
@@ -68,8 +70,11 @@ with the same rules for decisions, production steps and results.
 2. Find interrupted work: call `coven_pm_list`. It prints one line per live PM: `pm-<code>`, its
    session id, `busy` or `idle`, its last outcome, any `ASK WAITING (bug)` with a request id, a
    `child busy <N>m` when a role agent has worked for 30 minutes or more, and the first line of its
-   last message in quotes. A PM whose session was deleted shows as `missing`. For each `running`
-   record:
+   last message in quotes. A PM whose session was deleted is not listed; one whose session
+   cannot be found when its line is built shows as `missing`. A line that reads
+   `status unavailable: <reason>` means the server could not be read for that PM: call the list
+   again, and if it persists tell the user in one line and do not act on that PM from the list.
+   For each `running` record:
    - Its PM is `busy`: nothing to do; its message wakes you.
    - Its PM is `idle` and the quoted line starts with `QUESTION`, `PROD-STEP`, `DRAFT`, `DONE` or
      `BLOCKED` and the record does not hold that message yet: it was never delivered to you (it
@@ -168,9 +173,11 @@ status `running` in the state record.
 - A turn-end notice is the plugin telling you a PM stopped without sending a message. It is a line
   that starts `[coven notice] pm-<code> ended a turn (<outcome>) without a message. Last line:
   <text>`, and `<outcome>` is `succeeded`, `failed` or `interrupted`. A turn that ended `failed`
-  after the PM had sent a message reads `ended a turn (failed) after its message`. No notice comes
-  while the PM still has a role agent working, after a stop you made with `coven_pm_stop`, or after
-  a turn in which the PM sent its message. Handle a notice like this:
+  after the PM had sent a message reads `ended a turn (failed) after its message`. A stop you made
+  with `coven_pm_stop` ends the turn with no notice, whatever the outcome. For `succeeded` and
+  `interrupted` there is also no notice while the PM still has a role agent working, or after a
+  turn in which the PM sent its message. A `failed` turn always gets a notice, with a role agent
+  busy or after a message. Handle a notice like this:
   - If the record holds no open task for that PM, or every open task waits on an answer you
     already sent, drop the notice.
   - `succeeded` with open tasks that do not wait on you: the PM stopped early. Call

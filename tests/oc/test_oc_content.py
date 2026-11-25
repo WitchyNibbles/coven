@@ -346,9 +346,11 @@ def test_the_tools_the_texts_name_exist_in_the_plugin() -> None:
 def test_manager_launch_arguments_are_the_tools() -> None:
     text = MANAGER.read_text()
     source = (PM_SOURCES / "launch.ts").read_text()
-    for argument in ("code", "repo", "brief", "extraRepos", "title"):
+    schema = source.split("properties: {", 1)[1].split("required:", 1)[0]
+    properties = set(re.findall(r"^\s+(\w+): \{", schema, re.MULTILINE))
+    assert properties == {"code", "repo", "brief", "extraRepos", "title"}
+    for argument in properties:
         assert f"`{argument}`" in text, argument
-        assert f"{argument}:" in source, argument
 
 
 def test_manager_has_only_the_no_guard_flow() -> None:
@@ -375,6 +377,10 @@ def test_manager_reads_the_turn_end_notice() -> None:
     text = MANAGER.read_text()
     assert "[coven notice] pm-<code> ended a turn (<outcome>) without a message." in text
     assert "(failed) after its message" in text
+    flat = " ".join(text.split())
+    assert "A `failed` turn always gets a notice" in flat
+    assert "A stop you made with `coven_pm_stop` ends the turn with no notice" in flat
+    assert "`status unavailable: <reason>`" in flat
 
 
 def test_project_manager_agent_is_primary_with_its_own_description() -> None:

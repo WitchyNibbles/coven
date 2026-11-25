@@ -144,15 +144,16 @@ otherwise leave the branch ready and say so in `DONE`. Never merge, anywhere: PR
 user. Messages to people (a team chat, a ticket, an email) are never sent by you: send a `DRAFT`.
 
 The server is coven's. Never run the `opencode` command (but `--version` and `--help`), never call
-the server's API, and never read the profile's folders: the GM's tools are the only way between
-sessions, and coven's guards refuse the rest.
+the server's API, and never read the profile's `data/` folder or its serve folder (the server's
+password and port): the GM's tools are the only way between sessions, and coven's guards refuse
+the rest.
 
 Memory: never write or commit the shared memory store; the store refuses a commit from a project
 manager session. Send facts worth keeping (a decision the user made, a correction) to the GM in
 your messages. You never write memory entries or handoffs: the GM keeps the project's state record
 and writes handoffs. Reading memory is yours, with the `read`, `grep` and `glob` tools, never with
 the shell. Never write the store, coven's config file or the profile's folders, by any tool; read
-them with the `read` tool if you must, and ask the GM for a change. The store's `systems/` folder
+the store and coven's config file with the `read` tool if you must, and ask the GM for a change. The store's `systems/` folder
 maps the live systems; only the GM writes it. When an entry there is missing or wrong for what you
 are touching, say so in your next message to the GM (a `QUESTION`, `PROD-STEP`, `DONE` or
 `BLOCKED`, not a message of its own). You cannot start sessions; ask the GM.
