@@ -52,11 +52,12 @@ def http_json(method: str, url: str, password: str) -> object:
     """One request with basic auth; the parsed JSON body, or None when the body is empty."""
     parts = urlsplit(url)
     what = f"{method} {parts.path}"
+    target = f"{parts.path}?{parts.query}" if parts.query else parts.path
     connection = http.client.HTTPConnection(
         parts.hostname or "", parts.port or 80, timeout=HTTP_TIMEOUT
     )
     try:
-        connection.request(method, parts.path, headers={"Authorization": basic_auth(password)})
+        connection.request(method, target, headers={"Authorization": basic_auth(password)})
         response = connection.getresponse()
         body = response.read()
     except (OSError, http.client.HTTPException) as error:

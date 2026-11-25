@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from doctor_kit import Good
-from serve_kit import Procs, install_fake, start
+from serve_kit import LAST_CURSOR, Procs, install_fake, start
 
 from coven import cli
 from coven.opencode import serve
@@ -363,7 +363,7 @@ def test_status_lists_pm_sessions(
         {"id": "ses_plain", "title": "chat"},
     ]
     routes = {
-        "/api/session": {"data": sessions, "cursor": None},
+        "/api/session": {"data": sessions, "cursor": LAST_CURSOR},
         "/api/session/active": {"data": {"ses_x1": {"type": "running"}}},
         "/api/session/ses_x1/permission": {"data": []},
     }
@@ -392,7 +392,7 @@ def test_status_reads_the_active_sessions_as_an_object_keyed_by_session_id(
 ) -> None:
     active, word = case
     routes = {
-        "/api/session": {"data": [pm_session("x1")], "cursor": None},
+        "/api/session": {"data": [pm_session("x1")], "cursor": LAST_CURSOR},
         "/api/session/active": {"data": active},
         "/api/session/ses_x1/permission": {"data": []},
     }
@@ -409,7 +409,7 @@ def test_status_says_why_when_the_active_sessions_are_not_an_object(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     routes = {
-        "/api/session": {"data": [pm_session("x1")], "cursor": None},
+        "/api/session": {"data": [pm_session("x1")], "cursor": LAST_CURSOR},
         "/api/session/active": {"data": [{"id": "ses_x1"}]},
         "/api/session/ses_x1/permission": {"data": []},
     }
@@ -426,7 +426,7 @@ def test_status_shows_a_waiting_ask(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     routes = {
-        "/api/session": {"data": [pm_session("x1", outcome="succeeded")], "cursor": None},
+        "/api/session": {"data": [pm_session("x1", outcome="succeeded")], "cursor": LAST_CURSOR},
         "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": [{"id": "per_42"}]},
     }
@@ -454,7 +454,7 @@ def test_status_names_an_ask_by_its_request_id_or_says_it_has_none(
 ) -> None:
     ask, shown = case
     routes = {
-        "/api/session": {"data": [pm_session("x1")], "cursor": None},
+        "/api/session": {"data": [pm_session("x1")], "cursor": LAST_CURSOR},
         "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": [ask]},
     }
@@ -466,14 +466,55 @@ def test_status_names_an_ask_by_its_request_id_or_says_it_has_none(
     assert f"ASK WAITING (bug) {shown}" in lines[1]
 
 
-def test_status_warns_when_the_session_list_has_another_page(
+def paged_routes(*pages: tuple[str, list[dict[str, Any]], str | None]) -> dict[str, Any]:
+    """The routes of a listing in pages: (request path, sessions, `cursor.next`) for each page."""
+    routes: dict[str, Any] = {"/api/session/active": {"data": {}}}
+    for path, sessions, after in pages:
+        routes[path] = {"data": sessions, "cursor": {"previous": None, "next": after}}
+        for session in sessions:
+            routes[f"/api/session/{session['id']}/permission"] = {"data": []}
+    return routes
+
+
+def test_status_follows_the_cursor_to_the_page_that_has_none(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    routes = {
-        "/api/session": {"data": [pm_session("x1")], "cursor": "next-page"},
-        "/api/session/active": {"data": {}},
-        "/api/session/ses_x1/permission": {"data": []},
-    }
+    # 2.3.2: a string `next` on every page with sessions, then an empty page whose `next` is null;
+    # the cursor goes into the query encoded
+    routes = paged_routes(
+        ("/api/session", [pm_session("x1")], "c 1+"),
+        ("/api/session?cursor=c+1%2B", [pm_session("x2")], "c2"),
+        ("/api/session?cursor=c2", [], None),
+    )
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert [line.split("  ")[0] for line in lines[1:]] == ["pm-x1", "pm-x2"]
+
+
+def test_status_ends_the_walk_on_an_empty_next(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = paged_routes(("/api/session", [pm_session("x1")], ""))
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 2
+    assert "pm-x1" in lines[1]
+
+
+def test_status_warns_only_when_the_page_cap_stops_the_walk(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a server whose every page says there is another one
+    routes = paged_routes(
+        ("/api/session", [pm_session("x1")], "again"),
+        ("/api/session?cursor=again", [], "again"),
+    )
     install_fake(tmp_path, monkeypatch, routes=routes)
     start(good, procs)
 
@@ -481,7 +522,21 @@ def test_status_warns_when_the_session_list_has_another_page(
 
     assert len(lines) == 3
     assert "pm-x1" in lines[1]
-    assert lines[2] == "more sessions exist; this list may be incomplete"
+    assert lines[2] == serve.MORE_SESSIONS
+    assert serve.MAX_SESSION_PAGES == 20
+
+
+def test_status_is_unavailable_when_a_later_page_fails(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = paged_routes(("/api/session", [pm_session("x1")], "gone"))
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 2
+    assert lines[1].startswith("sessions unavailable")
 
 
 def test_run_refuses_while_server_runs(
