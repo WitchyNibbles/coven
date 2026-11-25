@@ -299,3 +299,38 @@ await test("a child that turned busy after the plugin started still does", async
   await tracker.onEvent(end("pm1"));
   assert.deepEqual(world.prompts, []);
 });
+
+function otherLocation(from: Rig): NoticeTracker {
+  return new NoticeTracker("/work/other", {
+    session: from.world,
+    state: from.state,
+    lastText: () => Promise.resolve("done"),
+    startedAt: 0,
+    log: (line) => from.logs.push(line),
+  });
+}
+
+await test("another location's copy does not clear the marks of a pm it does not own", async () => {
+  const mine = rig();
+  mine.state.messaged.add("pm1");
+  mine.state.stopped.add("pm1");
+  await otherLocation(mine).onEvent(start("pm1"));
+  assert.deepEqual([...mine.state.messaged], ["pm1"]);
+  assert.deepEqual([...mine.state.stopped], ["pm1"]);
+});
+
+await test("a start seen by a foreign copy first does not cause a notice at the owner's end", async () => {
+  const mine = rig();
+  mine.state.messaged.add("pm1");
+  await otherLocation(mine).onEvent(start("pm1"));
+  await mine.tracker.onEvent(end("pm1"));
+  assert.deepEqual(mine.world.prompts, []);
+});
+
+await test("the owning copy still clears the marks on a start", async () => {
+  const mine = rig();
+  mine.state.messaged.add("pm1");
+  await otherLocation(mine).onEvent(start("pm1"));
+  await mine.tracker.onEvent(start("pm1"));
+  assert.deepEqual([...mine.state.messaged], []);
+});

@@ -70,9 +70,16 @@ export class NoticeTracker {
     }
     const { messaged, stopped } = this.deps.state;
     if (type === STARTED) {
-      // a mark outlives its turn when no end event followed it: the stop of an idle PM
-      messaged.delete(sessionID);
-      stopped.delete(sessionID);
+      // a mark outlives its turn when no end event followed it: the stop of an idle PM. Only
+      // the copy that owns the PM clears: another location's copy could do it before the owner
+      // has read the marks of the turn that just ended.
+      if (
+        (messaged.has(sessionID) || stopped.has(sessionID)) &&
+        (await this.pmCode(sessionID)) !== undefined
+      ) {
+        messaged.delete(sessionID);
+        stopped.delete(sessionID);
+      }
       return;
     }
     const outcome = Object.hasOwn(OUTCOMES, type) ? OUTCOMES[type] : undefined;
