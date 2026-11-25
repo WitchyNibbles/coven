@@ -298,9 +298,12 @@ await test("a pm and a gm running one command in one folder both get ROLE_ENV", 
   const w = world({ ses_pm: PM_SESSION, ses_gm: GM_SESSION });
   await w.executeBefore(execEvent("ses_gm", { command: "ls" }));
   await w.executeBefore(execEvent("ses_pm", { command: "ls" }));
-  const event = shellEvent({}, "ls", "/loc");
-  w.createBefore(event);
-  assert.equal(event.env[ROLE_ENV], "pm");
+  const first = shellEvent({}, "ls", "/loc");
+  w.createBefore(first);
+  const second = shellEvent({}, "ls", "/loc");
+  w.createBefore(second);
+  assert.equal(first.env[ROLE_ENV], "pm");
+  assert.equal(second.env[ROLE_ENV], "pm");
 });
 
 await test("executeBefore records the bash tool too", async () => {

@@ -82,3 +82,47 @@ await test("the shared state hangs on globalThis under a symbol key", () => {
   const holder = globalThis as Record<symbol, unknown>;
   assert.equal(holder[Symbol.for("coven.opencode.shared")], state);
 });
+
+function queueWith(roles: ("pm" | "gm")[]): ShellQueue {
+  const queue = new ShellQueue();
+  roles.forEach((role, index) => {
+    queue.record(
+      { sessionID: `ses_${index}`, role, command: "ls", cwd: "/w" },
+      1000 + index,
+    );
+  });
+  return queue;
+}
+
+await test("a pm recorded before a gm gets pm on both takes", () => {
+  const queue = queueWith(["pm", "gm"]);
+  assert.equal(queue.take("ls", "/w", 1010), "pm");
+  assert.equal(queue.take("ls", "/w", 1011), "pm");
+});
+
+await test("a gm recorded before a pm gets pm on both takes", () => {
+  const queue = queueWith(["gm", "pm"]);
+  assert.equal(queue.take("ls", "/w", 1010), "pm");
+  assert.equal(queue.take("ls", "/w", 1011), "pm");
+});
+
+await test("a mixed key is empty after the takes that match its calls", () => {
+  const queue = queueWith(["pm", "gm"]);
+  queue.take("ls", "/w", 1010);
+  queue.take("ls", "/w", 1011);
+  assert.equal(queue.take("ls", "/w", 1012), undefined);
+});
+
+await test("a gm shell that starts first leaves the pm entry for the pm shell", () => {
+  const queue = queueWith(["gm", "pm"]);
+  queue.take("ls", "/w", 1010);
+  assert.equal(queue.take("ls", "/w", 1011), "pm");
+});
+
+await test("an empty workdir pairs on the location directory, as the guard reads it", async () => {
+  const { first } = copies();
+  await first.executeBefore({ ...call, input: { command: "ls", workdir: "" } });
+  const event = shellEvent({});
+  first.createBefore(event);
+  assert.deepEqual(event.env, { [ROLE_ENV]: "pm" });
+});

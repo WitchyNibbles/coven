@@ -116,19 +116,22 @@ async function gitTop(dir: string): Promise<string | undefined> {
   }
 }
 
-/** True when `dir` is the top folder of a git checkout (a worktree counts). */
-async function isCheckout(dir: string): Promise<boolean> {
+/**
+ * The resolved top folder of the git checkout `dir` names (a worktree counts), or undefined when
+ * `dir` is not that top folder.
+ */
+async function checkoutTop(dir: string): Promise<string | undefined> {
   if (!isAbsolute(dir)) {
-    return false;
+    return undefined;
   }
   let real: string;
   try {
     real = await realpath(dir);
   } catch {
-    return false;
+    return undefined;
   }
   const top = await gitTop(real);
-  return top !== undefined && (await realpath(top)) === real;
+  return top !== undefined && (await realpath(top)) === real ? real : undefined;
 }
 
 /** The store with its links resolved, or null when it has none or cannot be resolved. */
@@ -143,7 +146,8 @@ async function resolvedStore(store: string | null): Promise<string | null> {
   }
 }
 
-async function check(deps: LaunchDeps, input: LaunchInput): Promise<void> {
+/** Refuses a launch that cannot go ahead; returns the checkout top folder the PM starts in. */
+async function check(deps: LaunchDeps, input: LaunchInput): Promise<string> {
   if (!isValidCode(input.code)) {
     throw new ToolError(
       `${show(input.code)} is not a project code: lower-case letters, digits and dashes, ` +
@@ -155,18 +159,24 @@ async function check(deps: LaunchDeps, input: LaunchInput): Promise<void> {
       `code ${show(input.code)} already has a live PM; resume or stop it`,
     );
   }
-  if (!(await isCheckout(input.repo))) {
+  const top = await checkoutTop(input.repo);
+  if (top === undefined) {
     throw new ToolError(
       `${show(input.repo)} is not a git checkout (an absolute path to its top folder)`,
     );
   }
+  return top;
 }
 
-async function launch(deps: LaunchDeps, input: LaunchInput): Promise<string> {
+async function launch(
+  deps: LaunchDeps,
+  input: LaunchInput,
+  top: string,
+): Promise<string> {
   const { store, profileDir, secretRules } = deps.options;
   const created = await deps.session.create({
     agent: "project-manager",
-    location: { directory: input.repo },
+    location: { directory: top },
     title: input.title ?? `pm-${input.code}`,
     metadata: { coven: { role: "pm", code: input.code } },
     permissions: pmRules({
@@ -185,7 +195,7 @@ async function launch(deps: LaunchDeps, input: LaunchInput): Promise<string> {
         `delivered: ${messageOf(error)}; resume it with coven_pm_resume`,
     );
   }
-  return `launched pm-${input.code} as session ${created.id} in ${input.repo}`;
+  return `launched pm-${input.code} as session ${created.id} in ${top}`;
 }
 
 export function pmLaunchTool(deps: LaunchDeps): ToolDefinition {
@@ -221,8 +231,8 @@ export function pmLaunchTool(deps: LaunchDeps): ToolDefinition {
         }
         launching.add(input.code);
         try {
-          await check(deps, input);
-          return { content: await launch(deps, input) };
+          const top = await check(deps, input);
+          return { content: await launch(deps, input, top) };
         } finally {
           launching.delete(input.code);
         }

@@ -44,24 +44,22 @@ export class ShellQueue {
   }
 
   /**
-   * The role of the shell that is starting: the oldest live call under the key, which is taken
-   * off the queue. A key whose live calls differ in role gets a PM. `undefined` when no call is
-   * waiting or the call had no role.
+   * The role of the shell that is starting. When the live calls under the key agree, the oldest
+   * is taken off the queue. When they differ in role the shell gets a PM, and the oldest call
+   * that is not a PM's is taken off, so every take while a PM's call waits still returns a PM.
+   * `undefined` when no call is waiting or the call had no role.
    */
   take(command: string, cwd: string, now: number): Role | undefined {
     const key = keyOf(command, cwd);
     const live = this.live(key, now);
-    const oldest = live.shift();
+    const mixed = new Set(live.map((entry) => entry.role)).size > 1;
+    const taken = mixed ? takeNonPm(live) : live.shift();
     if (live.length === 0) {
       this.entries.delete(key);
     } else {
       this.entries.set(key, live);
     }
-    if (oldest === undefined) {
-      return undefined;
-    }
-    const roles = new Set([oldest.role, ...live.map((entry) => entry.role)]);
-    return roles.size > 1 ? MIXED : oldest.role;
+    return mixed ? MIXED : taken?.role;
   }
 
   private live(key: string, now: number): Entry[] {
@@ -69,6 +67,12 @@ export class ShellQueue {
       (entry) => now - entry.at < EXPIRY_MS,
     );
   }
+}
+
+/** Removes and returns the oldest entry whose role is not `pm`. */
+function takeNonPm(live: Entry[]): Entry | undefined {
+  const index = live.findIndex((entry) => entry.role !== MIXED);
+  return live.splice(index, 1)[0];
 }
 
 function keyOf(command: string, cwd: string): string {
@@ -112,7 +116,9 @@ function shellCall(
   if (typeof command !== "string") {
     return undefined;
   }
-  return { command, cwd: typeof workdir === "string" ? workdir : directory };
+  // an empty workdir is no workdir: the guard's `callCwd` reads it the same way
+  const given = typeof workdir === "string" && workdir !== "";
+  return { command, cwd: given ? workdir : directory };
 }
 
 /**

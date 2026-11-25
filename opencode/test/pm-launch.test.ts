@@ -254,3 +254,17 @@ await test("launch is refused when the live PM listing cannot be read", async ()
   );
   assert.equal(world.created.length, 0);
 });
+
+await test("a repo given through a symbolic link starts the PM in the resolved top folder", async () => {
+  const repo = gitRepo();
+  const link = join(plainDir(), "repo-link");
+  symlinkSync(repo, link);
+  const world = gmWorld([GM]);
+  const content = await launch(world, {
+    code: "acme-1",
+    repo: link,
+    brief: "go",
+  });
+  assert.equal(world.created[0]?.location?.directory, repo);
+  assert.match(content, new RegExp(`in ${repo}$`));
+});
