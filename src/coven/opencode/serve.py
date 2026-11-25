@@ -33,6 +33,7 @@ POLL: Final = 0.05
 # After SIGKILL the process is gone within a moment; this only bounds a stuck wait.
 KILL_WAIT: Final = 5.0
 PM_ROLE: Final = "pm"
+MORE_SESSIONS: Final = "more sessions exist; this list may be incomplete"
 
 
 class ServeError(OpencodeError):
@@ -258,17 +259,24 @@ def _pm_line(code: str, session: dict[str, object], busy: bool, asks: list[str])
 
 
 def _pm_lines(info: ServerInfo, password: str) -> list[str]:
+    def fetch(path: str) -> object:
+        return http_json("GET", f"http://{HOST}:{info.port}{path}", password)
+
     def get(path: str) -> list[dict[str, object]]:
-        return data_items(http_json("GET", f"http://{HOST}:{info.port}{path}", password), path)
+        return data_items(fetch(path), path)
 
     busy = {item.get("id") for item in get("/api/session/active")}
+    listing = fetch("/api/session")
     lines = []
-    for session in get("/api/session"):
+    for session in data_items(listing, "/api/session"):
         code, session_id = _pm_code(session), session.get("id")
         if code is None or not isinstance(session_id, str):
             continue
         asks = [str(ask.get("id")) for ask in get(f"/api/session/{session_id}/permission")]
         lines.append(_pm_line(code, session, session_id in busy, asks))
+    # The cursor's request parameter is unverified, so a longer list is reported, not followed.
+    if _sub(listing, "cursor"):
+        lines.append(MORE_SESSIONS)
     return lines
 
 

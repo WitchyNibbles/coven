@@ -265,6 +265,24 @@ def test_status_shows_a_waiting_ask(
     assert "per_42" in lines[1]
 
 
+def test_status_warns_when_the_session_list_has_another_page(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = {
+        "/api/session": {"data": [pm_session("x1")], "cursor": "next-page"},
+        "/api/session/active": {"data": []},
+        "/api/session/ses_x1/permission": {"data": []},
+    }
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 3
+    assert "pm-x1" in lines[1]
+    assert lines[2] == "more sessions exist; this list may be incomplete"
+
+
 def test_run_refuses_while_server_runs(
     fake: Good, procs: Procs, capsys: pytest.CaptureFixture[str]
 ) -> None:
