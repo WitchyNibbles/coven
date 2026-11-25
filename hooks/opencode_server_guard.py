@@ -21,8 +21,17 @@ What it refuses:
   `/proc/<pid>/environ`, `ps` options that print environments (`e`, `-E`, `eww`);
 - a folder that holds the serve or the `data/` folder (the profile, `/`...) for the file tools, and
   a folder that holds the profile for every shell program but the ones that never read content
-  (`ls`, `cd`, `stat`...); a folder that holds the coven root, only on a line with a program that
-  writes (`rm`, `cp`, `sed`, `find`...) or an output redirection;
+  (`ls`, `cd`, `stat`...); a folder that holds the coven root, unless every program of the line
+  only reads (`ls`, `cat`, `grep`, `rg`, `find` without `-delete` or `-exec`, `git status|log|
+  diff|show|grep|blame`...) and nothing is redirected to a file. That covers the words of the
+  line, the working folder and every folder a `cd` moves to (a bare `cd` is home), so `rg
+  password` run in the folder that holds the profile is refused;
+- an option or variable that makes git, man or rg run a command (`git -c`, `git bisect run`,
+  `git rebase --exec`, `git submodule foreach`, `git difftool -x`, `GIT_*=`, `PAGER=`, `man -P`,
+  `rg --pre`), a variable set from `$(...)` used as a program or as an argument of a program that
+  reads, a shell that reads a process substitution (`bash <(...)`), and a glob that bash reads
+  differently from Python (`[^x]`, `[!x]`, `[[:alpha:]]`) or that matches nothing under a closed
+  place;
 - a write, edit or patch, and any shell command that names a path, in the protected set: the
   profile except its `tmp/` folder, the serve folder, and the coven root except its
   `.claude/worktrees/` folder;
@@ -201,7 +210,18 @@ ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=([^\s;|&<>()]*)")
 VARIABLE = re.compile(r"\$(?:\{(\w+)\}|([A-Za-z_]\w*)|[$?!#@*0-9_-])")
 UNRESOLVED = re.compile(r"\$[A-Za-z_{]")
 CD_COMMAND = re.compile(r"(?:^|[;&|(\s{])(?:cd|pushd)\s+(?:-[LPe@]+\s+)?(?:--\s+)?([^\s;&|()<>]+)")
-BARE_CD = re.compile(r"(?:^|[;&|(\s{])cd\s*(?:$|[;&|)])")
+# `cd`, `cd -P`, `cd -L`, `cd --`, `cd -P --`: the home folder.
+BARE_CD = re.compile(r"(?:^|[;&|(\s{])cd(?:\s+-[LPe@]+)*(?:\s+--)?\s*(?:$|[;&|)])")
+# `NAME=$(...)` or NAME=`...`: a variable whose value is not known to the guard.
+SUBSTITUTION_ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=(?:\$\(|`)")
+# `GIT_PAGER=`, `GIT_SSH_COMMAND=`, `PAGER=`, `MANPAGER=`: variables git and man run as commands.
+RUNNING_ENVIRONMENT = re.compile(r"(?<!\w)(?:GIT_\w+|\w*PAGER)=")
+SHELL_READS_PROCESS = re.compile(
+    r"(?:^|[;&|(\s{])(?:" + "|".join(sorted(wrapper_commands.SHELLS)) + r"|source|\.)"
+    r"(?:\s[^;&|\n]*)?<\s*\("
+)
+# A glob bracket that bash reads differently from Python: `[^x]`, `[!x]`, `[[:alpha:]]`, `[[.x.]]`.
+BRACKET_CLASS = re.compile(r"\[[\^!]|\[\[[:.=]")
 GLOB_MARKS = "*?["
 ENVIRON_TEXT = re.compile(r"/proc\b[^\s;|&<>()]*\benviron\b")
 LOOPBACK_PORT = re.compile(
@@ -265,15 +285,28 @@ class Names:
 
     def __init__(self, text: str, scope: Scope, cwd: Path) -> None:
         self.values: dict[str, str] = {}
+        # What a `$(...)` or backtick prints is not seen, so a variable set from one has no value.
+        self.unknown: set[str] = set()
+        for source in dict.fromkeys((text, _ansi_c(text))):
+            self.unknown.update(SUBSTITUTION_ASSIGNMENT.findall(re.sub(r"['\"\\]", "", source)))
         for variant in _variants(text):
             for name, value in ASSIGNMENT.findall(variant):
-                self.values[name] = value
+                if name not in self.unknown:
+                    self.values[name] = value
         self.fallback = {"HOME": str(scope.home), "PWD": str(cwd)}
 
     def lookup(self, name: str) -> str | None:
+        if name in self.unknown:
+            return None
         if name in self.values:
             return self.values[name]
         return self.fallback.get(name, os.environ.get(name))
+
+    def mentions_unknown(self, word: str) -> bool:
+        """Whether the word uses a variable that was set from a command substitution."""
+        return any(
+            (match.group(1) or match.group(2)) in self.unknown for match in VARIABLE.finditer(word)
+        )
 
     def expand(self, word: str) -> str:
         def replace(match: re.Match[str]) -> str:
@@ -357,6 +390,13 @@ def check_word(word: str, bases: Sequence[Path], view: View, mode: Mode) -> None
             if rule:
                 raise Refused(rule)
             found = _glob_matches(candidate, folder, view.scope, mode)
+            # Python and bash read some brackets differently (`[^x]`, `[[:alpha:]]`), and a
+            # pattern that matches nothing here may match in what bash sees: neither is judged
+            # by its matches where it starts in a folder that holds a closed place.
+            if not found or BRACKET_CLASS.search(candidate):
+                rule = holds_closed_place(folder, view, mode)
+                if rule:
+                    raise Refused(rule)
         else:
             resolved = _resolve(candidate, view.cwd)
             found = [] if resolved is None else [resolved]
@@ -492,6 +532,12 @@ NEVER_EXECUTES = frozenset(
         *("basename", "dirname"),
     }
 )
+# The options of the programs known to take a folder as their value: that folder may be named
+# `opencode` without being run (`npm --prefix opencode test`, `tsc -p opencode`).
+PATH_OPTIONS = {
+    **dict.fromkeys(("npm", "pnpm", "yarn"), frozenset({"--prefix", "-C", "--dir"})),
+    "tsc": frozenset({"-p", "--project"}),
+}
 # Programs that never read the content of a folder they are given, so a folder that holds the
 # profile or coven's files may be named to them (`ls ~`, `cd ..`).
 NEVER_READS_CONTENT = frozenset(
@@ -500,14 +546,20 @@ NEVER_READS_CONTENT = frozenset(
         *("dirname", "basename", "realpath", "readlink", "du", "df", "mkdir", "true", "false", ":"),
     }
 )
-# Programs that write, move or remove files: with one on the line (or an output redirection), a
-# folder that holds the coven root is closed too (`rm -r <projects>`). Reading one is fine.
-WRITING_PROGRAMS = frozenset(
+# A folder that holds the coven root is closed to a line unless every program of it is one that
+# only reads (and nothing is redirected to a file): these, `find` without a find action that
+# writes or runs a command, and `git` with one of the reading subcommands.
+READ_ONLY_PROGRAMS = frozenset(
     {
-        *("rm", "mv", "cp", "ln", "chmod", "chown", "sed", "perl", "install", "rsync", "tar"),
-        *("unzip", "find", "xargs", "tee", "dd", "truncate", "patch"),
+        *("ls", "cd", "pushd", "popd", "pwd", "stat", "test", "[", "cat", "head", "tail", "wc"),
+        *("grep", "rg", "ag", "tree", "du"),
     }
 )
+FIND_WRITING_ACTIONS = frozenset(
+    {*("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls")}
+)
+GIT_READING = frozenset({"status", "log", "diff", "show", "grep", "blame", "rev-parse"})
+GIT_VALUED_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 
 
 def _base(word: str) -> str:
@@ -722,7 +774,6 @@ SUBSTITUTION_PROGRAM = re.compile(
     r"\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\(|`)"
 )
 SUBSTITUTION_CD = re.compile(r"(?:^|[;&|(\s{])(?:cd|pushd)\s+(?:-\S+\s+)*(?:\$\(|`)")
-SUBSTITUTION_ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=(?:\$\(|`)")
 VARIABLE_TARGET = re.compile(r"(?:(?:^|[;&|(\s{])(?:cd|pushd)\s+(?:-\S+\s+)*|[<>]\s*)$")
 
 
@@ -759,6 +810,14 @@ def _variable_builds_a_path(plain: str, name: str) -> bool:
     return False
 
 
+def check_process_substitution(text: str) -> None:
+    """Raise Refused for `bash <(...)`, `source <(...)` and `. <(...)`: a shell that reads what
+    a command prints, the same as a pipe into a shell."""
+    for source in dict.fromkeys((text, _ansi_c(text))):
+        if SHELL_READS_PROCESS.search(re.sub(r"['\"\\]", "", source)):
+            raise Refused("a shell that reads a process substitution cannot be checked")
+
+
 def check_substitutions(text: str) -> None:
     """Raise Refused for a `$(...)` or backtick whose output is a program, a `cd` target or part
     of a path (next to a `/`, or in a variable that is): what it prints is not seen, so a path
@@ -788,6 +847,7 @@ def argvs(text: str, depth: int = 0) -> list[Argv]:
     if depth > MAX_NESTING:
         raise Refused("a command nested this deeply cannot be checked")
     check_substitutions(text)
+    check_process_substitution(text)
     found: list[Argv] = []
     for argv in _commands(text):
         found.append(argv)
@@ -847,17 +907,40 @@ def _is_directory(word: str, cwd: Path) -> bool:
 
 def _names_opencode(words: Sequence[str], cwd: Path) -> bool:
     """Whether a word after the program names opencode (`uv run opencode db`, `coproc opencode`).
-    The value of an option that is a folder of the working folder is a path to it, not a program
-    (`npm --prefix opencode test`, `tsc -p opencode`)."""
+    A word that is a folder is a path, not a program, when it holds a `/` (`./opencode`,
+    `opencode/`) or is the value of a path option of a program that is known to take one (npm's
+    `--prefix`, tsc's `-p`); after any other program it may be run (`uv run -q opencode db`)."""
     start = _after_prefixes(words, 0)
+    path_options = PATH_OPTIONS.get(_base(words[start]), frozenset()) if start < len(words) else ()
     for index in range(start + 1, len(words)):
-        if not OPENCODE_NAME.fullmatch(_base(words[index])):
+        word = words[index]
+        if not OPENCODE_NAME.fullmatch(_base(word)):
             continue
-        before = words[index - 1]
-        if before.startswith("-") and before != "--" and _is_directory(words[index], cwd):
+        if ("/" in word or words[index - 1] in path_options) and _is_directory(word, cwd):
             continue
         return True
     return False
+
+
+def _uses_unknown_variable(command: Sequence[str], names: Names) -> bool:
+    """Whether a program that is not one that only names paths is given a variable set from a
+    command substitution (`d=$(...); cat $d`, `eval $X`, `bash -c "$X"`)."""
+    return _base(command[0]) not in NEVER_READS_CONTENT and any(
+        names.mentions_unknown(word) for word in command[1:]
+    )
+
+
+def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -> None:
+    """The opencode rules: only `--version` and `--help`, and no word that names it after a
+    program that may run it."""
+    name = _base(command[0])
+    if OPENCODE_NAME.fullmatch(name):
+        if tuple(command[1:]) not in ALLOWED_OPENCODE:
+            raise Refused("`opencode` is closed to a PM but for `opencode --version` and `--help`")
+    elif name not in NEVER_EXECUTES and (
+        _names_opencode(words, cwd) or _names_opencode(command, cwd)
+    ):
+        raise Refused("a program that may run `opencode` is closed to a PM when it names it")
 
 
 def check_command(argv: Argv, names: Names, cwd: Path) -> None:
@@ -866,18 +949,14 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     if not command:
         return
     program = command[0]
-    if "$(" in program or "`" in program:
+    if "$(" in program or "`" in program or _uses_unknown_variable(command, names):
         raise Refused(SUBSTITUTION_RULE)
     if UNRESOLVED.search(program):
         raise Refused("a command whose program is built at run time cannot be checked")
     name = _base(program)
-    if OPENCODE_NAME.fullmatch(name):
-        if tuple(command[1:]) not in ALLOWED_OPENCODE:
-            raise Refused("`opencode` is closed to a PM but for `opencode --version` and `--help`")
-    elif name not in NEVER_EXECUTES and (
-        _names_opencode(words, cwd) or _names_opencode(command, cwd)
-    ):
-        raise Refused("a program that may run `opencode` is closed to a PM when it names it")
+    if _runs_other_programs(name, command[1:]):
+        raise Refused("an option that makes this program run a command is closed to a PM")
+    _opencode_problem(words, command, cwd)
     if name == "ps" and _ps_prints_environments(command[1:]):
         raise Refused("`ps` options that print other processes' environments are closed to a PM")
     if _coven_lifecycle(command):
@@ -895,6 +974,8 @@ def check_text(text: str, scope: Scope) -> None:
             raise Refused("a loopback port is closed to a PM while the server's port is unknown")
         if ENVIRON_TEXT.search(variant):
             raise Refused("another process's environment is closed to a PM")
+        if RUNNING_ENVIRONMENT.search(variant):
+            raise Refused("a variable that makes git or man run a command is closed to a PM")
 
 
 def _only_names_paths(commands: Sequence[Argv]) -> bool:
@@ -906,10 +987,59 @@ def _only_names_paths(commands: Sequence[Argv]) -> bool:
     )
 
 
-def _can_write(command: str, commands: Sequence[Argv]) -> bool:
-    """Whether the line has a program that writes (or removes) files, or an output redirection."""
-    programs = (_unwrapped(each.words) for each in commands)
-    return ">" in command or any(_base(each[0]) in WRITING_PROGRAMS for each in programs if each)
+def _git_parts(arguments: Sequence[str]) -> tuple[list[str], str | None, list[str]]:
+    """git's options before its subcommand, the subcommand, and the words after it."""
+    options: list[str] = []
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if not word.startswith("-"):
+            return options, word, list(arguments[index + 1 :])
+        options.append(word)
+        if word in GIT_VALUED_OPTIONS and index + 1 < len(arguments):
+            options.append(arguments[index + 1])
+            index += 1
+        index += 1
+    return options, None, []
+
+
+def _runs_other_programs(name: str, arguments: Sequence[str]) -> bool:
+    """`git -c`, `git bisect run`, `git rebase --exec`, `git submodule foreach`, `git difftool -x`,
+    `man -P` and `rg --pre`: options that make a program run a command that is given as text."""
+    if name == "man":
+        return any(each.startswith(("-P", "--pager")) for each in arguments)
+    if name == "rg":
+        return any(each.startswith("--pre") for each in arguments)
+    if name != "git":
+        return False
+    options, subcommand, rest = _git_parts(arguments)
+    if any(each.startswith(("-c", "--config-env")) for each in options):
+        return True
+    return (
+        (subcommand == "bisect" and "run" in rest)
+        or (subcommand == "submodule" and "foreach" in rest)
+        or (subcommand == "rebase" and any(each.startswith(("--exec", "-x")) for each in rest))
+        or (subcommand == "difftool" and any(each.startswith(("--extcmd", "-x")) for each in rest))
+    )
+
+
+def _reads_only(words: Sequence[str]) -> bool:
+    """Whether the command is one that only reads (a short allowlist: `ls`, `cat`, `grep`, `rg`,
+    `find` without an action that writes or runs, `git status|log|diff|show|grep|blame`...)."""
+    if not words:
+        return True
+    name = _base(words[0])
+    if name == "find":
+        return not FIND_WRITING_ACTIONS.intersection(words[1:])
+    if name == "git":
+        _options, subcommand, rest = _git_parts(words[1:])
+        return subcommand in GIT_READING or (subcommand == "branch" and rest in ([], ["--list"]))
+    return name in READ_ONLY_PROGRAMS
+
+
+def _only_reads(command: str, commands: Sequence[Argv]) -> bool:
+    """Whether every program of the line only reads and nothing is redirected to a file."""
+    return ">" not in command and all(_reads_only(_unwrapped(each.words)) for each in commands)
 
 
 def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
@@ -926,9 +1056,15 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         cwd,
         names,
         profile_folders_closed=not _only_names_paths(commands),
-        coven_folders_closed=_can_write(command, commands),
+        coven_folders_closed=not _only_reads(command, commands),
     )
     bases = _folders(command, cwd, view.names, scope)
+    # The working folder and every folder a `cd` moves to (a bare `cd` is home): what a program
+    # run there reads without naming a path (`rg password`, `grep -r x`, `find -name x`).
+    for folder in bases:
+        rule = holds_closed_place(folder, view, Mode.SHELL)
+        if rule:
+            raise Refused(rule)
     for word in _words_of(command):
         check_word(word, bases, view, Mode.SHELL)
 

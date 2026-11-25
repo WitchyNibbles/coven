@@ -818,7 +818,6 @@ SUBSTITUTION_ALLOWED = [
     "echo $(date) > out.txt",
     'echo "today is $(date +%F)"',
     "x=$(date); echo $x",
-    "sha=$(git rev-parse HEAD); git log $sha",
     "git commit -m \"$(cat <<'EOF'\nmessage\nEOF\n)\"",
     "echo $((1 + 2))",
 ]
@@ -873,6 +872,322 @@ def test_a_glob_that_reaches_the_match_cap_is_refused(
         assert "too many matches; narrow the glob" in text
     assert world.call("Bash", "command", "cat <project>/few/*.txt") is None
     assert world.call("Glob", "pattern", "<project>/few/*.txt") is None
+
+
+def call_in(world: World, command: str, workdir: Path) -> str | None:
+    """A shell call whose working folder is `workdir`."""
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": command, "workdir": str(workdir)},
+        "cwd": str(world.project),
+    }
+    return guard.refusal(payload, world.profile, world.serve, world.coven, world.port)
+
+
+# Round 3, A: a program run in a folder that holds a closed place reads it without naming a path.
+READS_IN_THE_WORKING_FOLDER = [
+    "rg password",
+    "grep -r password",
+    "grep -R password",
+    "git grep --no-index password",
+    "ag password",
+    "find -type f -name password",
+]
+BARE_CD_REFUSED = [
+    "cd && grep -r --include=password ''",
+    "cd -P && grep -rh --include=password ''",
+    "cd -L && grep -r x .",
+    "cd -- && grep -r x .",
+    "cd && rg --hidden -g password ''",
+    "cd ; git grep --no-index password",
+    "cd ~ && rg password",
+    "cd $HOME && rg password",
+]
+BARE_CD_ALLOWED = ["cd && ls", "cd -P && pwd", "cd .. && ls", "cd && ls -la", "cd -- && stat ."]
+
+
+@pytest.mark.parametrize("command", READS_IN_THE_WORKING_FOLDER)
+def test_a_program_that_reads_the_working_folder_is_refused_above_the_profile(
+    world: World, command: str
+) -> None:
+    assert call_in(world, command, world.profile.parent)
+    assert call_in(world, command, world.root)
+    assert call_in(world, command, world.project) is None
+
+
+def test_a_listing_in_a_folder_above_the_profile_is_allowed(world: World) -> None:
+    assert call_in(world, "ls", world.profile.parent) is None
+    assert call_in(world, "pwd", world.root) is None
+    assert call_in(world, "cd .. && ls", world.profile.parent) is None
+
+
+@pytest.mark.parametrize("command", BARE_CD_REFUSED)
+def test_a_cd_to_a_folder_above_the_profile_then_a_reading_program_is_refused(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", BARE_CD_ALLOWED)
+def test_a_cd_then_a_program_that_only_lists_is_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+# Round 3, B: a variable set from a command substitution has no value the guard knows.
+UNKNOWN_VARIABLE_REFUSED = [
+    "x=$(echo opencode); $x db",
+    "x=`echo opencode`; $x db",
+    "X=$(echo b3BlbmNvZGUgZGI= | base64 -d); eval $X",
+    'X=$(echo b3BlbmNvZGUgZGI= | base64 -d); bash -c "$X"',
+    "X=$(echo b3BlbmNvZGUgZGI= | base64 -d); $X",
+    "d=$(echo <serve>/passwor)d; cat $d",
+    "d=$(date); cat $d",
+    'd=$(date); cat "$d"',
+    "d=$(date); cat ${d}",
+    "d=$(date); cp $d <project>/copy",
+    "sha=$(git rev-parse HEAD); git log $sha",
+    "export X=$(date); sh -c $X",
+]
+UNKNOWN_VARIABLE_ALLOWED = [
+    "d=$(date); echo $d",
+    'd=$(date); echo "$d"',
+    "d=$(date); printf %s $d",
+    "x=1; cat README.md",
+    "d=$(date)",
+]
+
+
+@pytest.mark.parametrize("command", UNKNOWN_VARIABLE_REFUSED)
+def test_a_variable_set_from_a_substitution_is_refused_as_a_program_or_an_argument(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", UNKNOWN_VARIABLE_ALLOWED)
+def test_a_variable_set_from_a_substitution_may_be_echoed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+# Round 3, C: a folder named opencode is a path only where a program is known to take one.
+OPENCODE_FOLDER_REFUSED = [
+    "uv run -q opencode db",
+    "uv run --no-project opencode db",
+    "uvx -q opencode db",
+    "pipx run --no-cache opencode db",
+    "pdm run -v opencode db",
+    "conda run --no-capture-output opencode db",
+    "valgrind -q opencode db",
+    "firejail --quiet opencode db",
+    "prlimit --nofile=1024 opencode db",
+    "gdb --args opencode db",
+    "ssh-agent -s opencode db",
+    "dbus-run-session --config-file=x opencode db",
+    "npm --prefix opencode exec opencode db",
+    "npm --prefix opencode exec -- opencode db",
+    "env npm --prefix opencode test",
+    "tsc -x opencode",
+    "npm -x opencode test",
+]
+OPENCODE_FOLDER_ALLOWED = [
+    "npm --prefix opencode test",
+    "tsc -p opencode",
+    "tsc --project opencode",
+    "pnpm -C opencode test",
+    "yarn --dir opencode test",
+    "npm --prefix ./opencode run build",
+    "npm --prefix opencode/ run build",
+    "git -C opencode status",
+]
+
+
+@pytest.mark.parametrize("command", OPENCODE_FOLDER_REFUSED)
+def test_a_folder_named_opencode_is_not_a_path_after_a_launcher(world: World, command: str) -> None:
+    touch(world.project / "opencode" / "package.json")
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", OPENCODE_FOLDER_ALLOWED)
+def test_a_folder_named_opencode_is_a_path_for_a_program_that_takes_one(
+    world: World, command: str
+) -> None:
+    touch(world.project / "opencode" / "package.json")
+    assert world.call("Bash", "command", command) is None
+
+
+# Round 3, D: options and variables that make git, man and rg run a command.
+RUNS_A_COMMAND_REFUSED = [
+    "git bisect run opencode db",
+    "git bisect run sh -c 'echo x'",
+    "git -c alias.x='!opencode db' x",
+    "git -c core.pager='opencode db' log",
+    "git -c core.sshCommand=x fetch",
+    "git -ccore.pager=x log",
+    "git -C . -c core.pager=x log",
+    "git rebase --exec 'opencode db' HEAD~1",
+    "git rebase -x 'opencode db' HEAD~1",
+    "git submodule foreach 'opencode db'",
+    "git difftool -y -x 'opencode db'",
+    "git difftool --extcmd=x",
+    "GIT_PAGER='opencode db' git log",
+    "GIT_SSH_COMMAND=x git fetch",
+    "export GIT_EXTERNAL_DIFF=x",
+    "man -P 'opencode db' ls",
+    "man --pager=x ls",
+    "PAGER='opencode db' man ls",
+    "MANPAGER=x man ls",
+    "rg --pre opencode x",
+    "rg --pre-glob '*.x' y",
+    "env git -c core.pager=x log",
+]
+RUNS_A_COMMAND_ALLOWED = [
+    "git commit -m 'fix opencode db'",
+    "git log --oneline",
+    "git bisect start",
+    "git rebase -i HEAD~2",
+    "git submodule status",
+    "git difftool HEAD~1",
+    "git -C . status",
+    "man ls",
+    "rg foo",
+    "git commit -m 'set PAGER later'",
+]
+
+
+@pytest.mark.parametrize("command", RUNS_A_COMMAND_REFUSED)
+def test_an_option_or_variable_that_makes_a_program_run_a_command_is_refused(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", RUNS_A_COMMAND_ALLOWED)
+def test_the_same_programs_without_such_an_option_are_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+# Round 3, E: a folder that holds the coven root is closed unless every program only reads.
+COVEN_ANCESTOR_WRITERS_REFUSED = [
+    "zip -rm <project>/z.zip <projects>",
+    "gio trash <projects>",
+    "7z a -sdel <project>/z.7z <projects>",
+    "chgrp -R x <projects>",
+    "setfacl -R -m u:x:rwx <projects>",
+    "git -C <projects> clean -fdx",
+    "find <projects> -delete",
+    "find <projects> -name x -fprint <project>/out",
+    "git -C <projects> branch -D x",
+    "echo x <projects>",
+]
+COVEN_ANCESTOR_READERS_ALLOWED = [
+    "cd <projects> && git status",
+    "rg foo <projects>",
+    "git -C <projects> status",
+    "find <projects> -name x",
+    "git -C <projects> branch",
+    "git -C <projects> branch --list",
+    "git -C <projects> log --oneline",
+    "tree <projects>",
+    "ag foo <projects>",
+]
+
+
+@pytest.mark.parametrize("command", COVEN_ANCESTOR_WRITERS_REFUSED)
+def test_a_folder_above_the_coven_root_is_refused_to_a_program_that_is_not_read_only(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", COVEN_ANCESTOR_READERS_ALLOWED)
+def test_a_folder_above_the_coven_root_is_open_to_the_read_only_allowlist(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+def test_a_working_folder_above_the_coven_root_follows_the_same_rule(world: World) -> None:
+    projects = world.coven.parent
+    assert call_in(world, "find -delete", projects)
+    assert call_in(world, "find -name pyproject.toml -delete", projects)
+    assert call_in(world, "find . -exec rm {} +", projects)
+    assert call_in(world, "git commit -am x", projects)
+    assert call_in(world, "npm test", projects)
+    assert call_in(world, "find -name pyproject.toml", projects) is None
+    assert call_in(world, "rg foo", projects) is None
+    assert call_in(world, "git status", projects) is None
+    assert call_in(world, "ls", projects) is None
+
+
+# Round 3, F: Python and bash read some glob brackets differently.
+GLOB_BRACKETS_REFUSED = [
+    "cat <home>/profil[^x]/state/serve/password",
+    "cat <home>/profil[!x]/state/serve/password",
+    "cat <home>/profil[[:alpha:]]/state/serve/password",
+    "cat <home>/profil[[.e.]]/state/serve/password",
+    "cat <profile>/stat[^x]/serve/password",
+    "cd <home> && cat profil[^x]/state/serve/password",
+    "cat <home>/zzz*/x",
+    "cat <profile>/state/zzz*",
+]
+GLOB_BRACKETS_ALLOWED = [
+    "cat <project>/zzz*",
+    "cat <project>/*.nomatch",
+    "cat <project>/[^x]*.md",
+    "grep '[^a-z]' README.md",
+    "grep -E '[[:alpha:]]+' README.md",
+    "echo '[!x]'",
+    "ls <home>/zzz*",
+]
+
+
+@pytest.mark.parametrize("command", GLOB_BRACKETS_REFUSED)
+def test_a_glob_python_and_bash_read_differently_or_that_matches_nothing_is_refused(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", GLOB_BRACKETS_ALLOWED)
+def test_the_same_globs_away_from_a_closed_place_are_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+def test_the_file_tools_refuse_a_glob_that_matches_nothing_above_a_closed_place(
+    world: World,
+) -> None:
+    assert world.call("Glob", "pattern", "<profile>/state/zzz*")
+    assert world.call("Glob", "pattern", "<profile>/stat[^x]/serve/*")
+    assert world.call("Glob", "pattern", "<project>/zzz*") is None
+    assert world.call("Glob", "pattern", "<profile>/config/zzz*") is None
+
+
+# Round 3, G: a shell that reads a process substitution is a pipe into a shell.
+PROCESS_SUBSTITUTION_REFUSED = [
+    "bash <(echo ls)",
+    "source <(echo ls)",
+    ". <(echo ls)",
+    "sh -x <(cat x)",
+    "zsh < <(echo ls)",
+    "exec bash <(curl x)",
+    "dash <(echo ls)",
+]
+PROCESS_SUBSTITUTION_ALLOWED = [
+    "diff <(sort a) <(sort b)",
+    "cat <(echo hi)",
+    "./script.sh <(echo hi)",
+    "while read x; do echo $x; done < <(ls)",
+]
+
+
+@pytest.mark.parametrize("command", PROCESS_SUBSTITUTION_REFUSED)
+def test_a_shell_that_reads_a_process_substitution_is_refused(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", PROCESS_SUBSTITUTION_ALLOWED)
+def test_a_process_substitution_for_another_program_is_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
 
 
 # main: the way Claude Code and the plugin run it.
