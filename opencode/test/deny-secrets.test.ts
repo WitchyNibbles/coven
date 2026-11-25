@@ -2,30 +2,38 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { payloads } from "../src/deny-secrets.ts";
+import type { Payload } from "../src/deny-secrets.ts";
 
 const CWD = "/work/project";
 
-function one(tool: string, input: unknown): unknown {
+function one(tool: string, input: unknown): Payload {
   const result = payloads(tool, input, CWD);
-  assert.notEqual(result, "unchecked");
+  assert.ok(result !== "unchecked");
   assert.equal(result.length, 1);
-  return result[0];
+  const [first] = result;
+  assert.ok(first !== undefined);
+  return first;
 }
 
-function pre(tool_name: string, tool_input: Record<string, unknown>) {
-  return { tool_name, tool_input, cwd: CWD, hook_event_name: "PreToolUse" };
+function pre(
+  tool_name: string,
+  tool_input: Record<string, unknown>,
+  cwd = CWD,
+): Payload {
+  return { tool_name, tool_input, cwd, hook_event_name: "PreToolUse" };
 }
 
 await test("shell maps to Bash with the command", () => {
   assert.deepEqual(
     one("shell", { command: "cat x", workdir: "/elsewhere", timeout: 5 }),
-    pre("Bash", { command: "cat x", workdir: "/elsewhere" }),
+    pre("Bash", { command: "cat x", workdir: "/elsewhere" }, "/elsewhere"),
   );
 });
 
 await test("bash maps exactly like shell, in case input repair stops renaming it", () => {
   const input = { command: "cat x", workdir: "/elsewhere", timeout: 5 };
   assert.deepEqual(one("bash", input), one("shell", input));
+  assert.equal(one("bash", input).cwd, "/elsewhere");
   assert.deepEqual(
     one("bash", { command: "ls" }),
     pre("Bash", { command: "ls" }),
@@ -36,15 +44,35 @@ await test("bash maps exactly like shell, in case input repair stops renaming it
   );
 });
 
-await test("the shell workdir is checked text and never the payload cwd", () => {
+await test("the shell workdir is checked text and is the payload cwd", () => {
   assert.deepEqual(
     one("shell", { command: "ls", workdir: "/elsewhere" }),
-    pre("Bash", { command: "ls", workdir: "/elsewhere" }),
+    pre("Bash", { command: "ls", workdir: "/elsewhere" }, "/elsewhere"),
   );
   assert.deepEqual(
     one("shell", { command: "ls" }),
     pre("Bash", { command: "ls" }),
   );
+});
+
+await test("a relative workdir resolves against the location directory", () => {
+  assert.equal(
+    one("shell", { command: "ls", workdir: "sub/dir" }).cwd,
+    `${CWD}/sub/dir`,
+  );
+  assert.equal(
+    one("shell", { command: "ls", workdir: "../up" }).cwd,
+    "/work/up",
+  );
+});
+
+await test("an empty or non-string workdir leaves the cwd alone", () => {
+  assert.equal(one("shell", { command: "ls", workdir: "" }).cwd, CWD);
+  assert.equal(one("shell", { command: "ls", workdir: 5 }).cwd, CWD);
+});
+
+await test("a workdir does not move the cwd of a call that has none", () => {
+  assert.equal(one("read", { path: "a", workdir: "/elsewhere" }).cwd, CWD);
 });
 
 await test("read maps to Read with file_path", () => {

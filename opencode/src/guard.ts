@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import type { ExecuteBeforeEvent } from "./context.ts";
 import { payloads } from "./deny-secrets.ts";
 import type { Payload } from "./deny-secrets.ts";
 import { messageOf } from "./join/fields.ts";
+import { inPmTree } from "./pm/asks.ts";
+import type { RoleResolver } from "./pm/asks.ts";
+import { ROLE_ENV } from "./pm/role.ts";
 
 /** The part of a child process the guard uses; `ChildProcess` fits, so a test can stand in for it. */
 export interface GuardChild {
@@ -24,28 +27,53 @@ export interface GuardChild {
   kill(signal: "SIGKILL"): unknown;
 }
 
-export type SpawnFn = (command: string, args: readonly string[]) => GuardChild;
+/** `env` is added to the server's own environment for that child; none leaves it as it is. */
+export type SpawnFn = (
+  command: string,
+  args: readonly string[],
+  env?: NodeJS.ProcessEnv,
+) => GuardChild;
+
+/**
+ * How long each hook may run, as in `hooks/hooks.json`. `denySecrets` is the default of the
+ * `guardTimeoutMs` option, which still sets deny-secrets' own timeout.
+ */
+export const HOOK_TIMEOUTS_MS = {
+  denySecrets: 5000,
+  serverGuard: 5000,
+  pmPermissions: 15_000,
+  prodGuard: 30_000,
+} as const;
 
 const MAX_MESSAGE = 2000;
 /** Stderr kept for the message; more than the message can show. */
 const MAX_STDERR = 100_000;
 
-/** The server's own environment goes to the child; the guard runs without a shell string. */
-const spawnShell: SpawnFn = (command, args) =>
-  spawn(command, args, { stdio: ["pipe", "ignore", "pipe"] });
+/** The server's own environment goes to the child, plus `env`; no shell string is ever built. */
+const spawnShell: SpawnFn = (command, args, env) =>
+  spawn(command, args, {
+    stdio: ["pipe", "ignore", "pipe"],
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+  });
 
 function cut(message: string): Error {
   return new Error(message.slice(0, MAX_MESSAGE));
 }
 
-function startFailure(error: unknown): Error {
+/** The name a refusal carries: `pm_permissions.py` is `pm-permissions`. */
+function labelOf(script: string): string {
+  return basename(script, ".py").replaceAll("_", "-");
+}
+
+function startFailure(label: string, error: unknown): Error {
   return cut(
-    `coven deny-secrets: could not start the guard (${messageOf(error)}); blocking`,
+    `coven ${label}: could not start the guard (${messageOf(error)}); blocking`,
   );
 }
 
 /** `undefined` when the guard allowed the call, else why it did not. */
 function verdict(
+  label: string,
   code: number | null,
   signal: string | null,
   stderr: string,
@@ -54,32 +82,31 @@ function verdict(
     return undefined;
   }
   if (code === 2) {
-    return cut(stderr.trim() || "coven deny-secrets: blocked");
+    return cut(stderr.trim() || `coven ${label}: blocked`);
   }
   const how = code === null ? `signal ${signal}` : `exit ${code}`;
-  return cut(`coven deny-secrets: guard failed (${how}); blocking`);
+  return cut(`coven ${label}: guard failed (${how}); blocking`);
 }
 
-/** The arguments of `sh`: `fail-closed.sh` and the Python guard it runs. */
-function scriptArgs(covenRoot: string): readonly string[] {
-  return [
-    join(covenRoot, "hooks", "fail-closed.sh"),
-    join(covenRoot, "hooks", "deny_secrets.py"),
-  ];
+interface Run {
+  command: string;
+  args: readonly string[];
+  /** What the child reads on stdin. */
+  input: string;
+  label: string;
+  timeoutMs: number;
+  env: NodeJS.ProcessEnv | undefined;
+  spawn: SpawnFn;
 }
 
-function runScript(
-  args: readonly string[],
-  payload: Payload,
-  timeoutMs: number,
-  spawnFn: SpawnFn,
-): Promise<void> {
+function runChild(run: Run): Promise<void> {
+  const { label, timeoutMs } = run;
   return new Promise((resolve, reject) => {
     let child: GuardChild;
     try {
-      child = spawnFn("sh", args);
+      child = run.spawn(run.command, run.args, run.env);
     } catch (error) {
-      reject(startFailure(error));
+      reject(startFailure(label, error));
       return;
     }
     let stderr = "";
@@ -99,9 +126,7 @@ function runScript(
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish(
-        cut(
-          `coven deny-secrets: guard timed out after ${timeoutMs} ms; blocking`,
-        ),
+        cut(`coven ${label}: guard timed out after ${timeoutMs} ms; blocking`),
       );
     }, timeoutMs);
     child.stderr.setEncoding("utf8");
@@ -113,18 +138,48 @@ function runScript(
     // A guard that exits before reading breaks the pipe; its exit code still decides.
     child.stdin.on("error", () => undefined);
     child.on("error", (error) => {
-      finish(startFailure(error));
+      finish(startFailure(label, error));
     });
     child.on("close", (code, signal) => {
-      finish(verdict(code, signal, stderr));
+      finish(verdict(label, code, signal, stderr));
     });
-    child.stdin.end(JSON.stringify(payload));
+    child.stdin.end(run.input);
   });
 }
 
 /**
- * Runs the Python guard on one payload through `fail-closed.sh`. Resolves when it allows; rejects
- * with the text the model should see when it refuses, fails, times out or cannot start.
+ * Runs one hook script of coven's `hooks/` folder on a payload through `fail-closed.sh`, with
+ * `extraArgs` after the script and `env` added to the child's environment. Resolves when it
+ * allows; rejects with the text the model should see when it refuses, fails, times out or
+ * cannot start.
+ */
+export function runHookScript(
+  covenRoot: string,
+  script: string,
+  extraArgs: readonly string[],
+  payload: Payload,
+  timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
+  spawnFn: SpawnFn = spawnShell,
+): Promise<void> {
+  return runChild({
+    command: "sh",
+    args: [
+      join(covenRoot, "hooks", "fail-closed.sh"),
+      join(covenRoot, "hooks", script),
+      ...extraArgs,
+    ],
+    input: JSON.stringify(payload),
+    label: labelOf(script),
+    timeoutMs,
+    env,
+    spawn: spawnFn,
+  });
+}
+
+/**
+ * Runs the deny-secrets guard on one payload through `fail-closed.sh`. Resolves when it allows;
+ * rejects with the text the model should see when it refuses, fails, times out or cannot start.
  */
 export function runGuard(
   covenRoot: string,
@@ -132,7 +187,46 @@ export function runGuard(
   timeoutMs: number,
   spawnFn: SpawnFn = spawnShell,
 ): Promise<void> {
-  return runScript(scriptArgs(covenRoot), payload, timeoutMs, spawnFn);
+  return runHookScript(
+    covenRoot,
+    "deny_secrets.py",
+    [],
+    payload,
+    timeoutMs,
+    undefined,
+    spawnFn,
+  );
+}
+
+const MIN_PYTHON = "(3, 12)";
+const PYTHON_CHECK_TIMEOUT_MS = 5000;
+
+/**
+ * Refuses unless `python3` is on the path and is 3.12 or newer. Every hook needs it, and
+ * pm-permissions would allow a call it could not run, so the plugin does not load without it.
+ */
+export async function checkPython(
+  spawnFn: SpawnFn = spawnShell,
+): Promise<void> {
+  try {
+    await runChild({
+      command: "python3",
+      args: [
+        "-c",
+        `import sys; sys.exit(0 if sys.version_info >= ${MIN_PYTHON} else 1)`,
+      ],
+      input: "",
+      label: "python3",
+      timeoutMs: PYTHON_CHECK_TIMEOUT_MS,
+      env: undefined,
+      spawn: spawnFn,
+    });
+  } catch (error) {
+    throw new Error(
+      `coven: the plugin needs python3 3.12 or newer on the path, and it was not usable (${messageOf(error)})`,
+      { cause: error },
+    );
+  }
 }
 
 export interface DenySecretsOptions {
@@ -147,26 +241,106 @@ export interface DenySecretsDeps {
 }
 
 /**
- * The `execute.before` hook. It never catches: a refusal, a crash of the guard and a timeout all
- * throw, which fails the tool call before OpenCode asks for permission.
+ * The `execute.before` hook of deny-secrets alone. It never catches: a refusal, a crash of the
+ * guard and a timeout all throw, which fails the tool call before OpenCode asks for permission.
  */
 export function denySecretsHook(
   options: DenySecretsOptions,
   deps: DenySecretsDeps,
 ): (event: ExecuteBeforeEvent) => Promise<void> {
-  const args = scriptArgs(options.covenRoot);
   return async (event) => {
     const checked = payloads(event.tool, event.input, deps.directory);
     if (checked === "unchecked") {
       return;
     }
     for (const payload of checked) {
-      await runScript(
-        args,
+      await runHookScript(
+        options.covenRoot,
+        "deny_secrets.py",
+        [],
         payload,
         options.guardTimeoutMs,
-        deps.spawn ?? spawnShell,
+        undefined,
+        deps.spawn,
       );
+    }
+  };
+}
+
+export interface GuardsOptions extends DenySecretsOptions {
+  profileDir: string;
+  serveDir: string;
+}
+
+export interface GuardsDeps extends DenySecretsDeps {
+  /** The role of a session; a failed lookup counts as a PM. */
+  resolve: RoleResolver;
+}
+
+/** The child env of the PM-tree hooks: the role variable the Claude Code hooks read. */
+const PM_ENV: NodeJS.ProcessEnv = { [ROLE_ENV]: "pm" };
+
+/**
+ * The `execute.before` hook of every session. For each mapped payload it runs deny-secrets and
+ * the server guard; a session in a PM tree (a failed role lookup included) also gets
+ * pm-permissions and the production guard, which run without approvals and with the role set in
+ * their env. The first refusal throws, and the hooks after it do not run.
+ */
+export function guardsHook(
+  options: GuardsOptions,
+  deps: GuardsDeps,
+): (event: ExecuteBeforeEvent) => Promise<void> {
+  const { covenRoot } = options;
+  const serverArgs = [
+    "--profile",
+    options.profileDir,
+    "--serve",
+    options.serveDir,
+    "--coven-root",
+    covenRoot,
+  ];
+  return async (event) => {
+    const checked = payloads(event.tool, event.input, deps.directory);
+    if (checked === "unchecked") {
+      return;
+    }
+    const pm = await inPmTree(deps.resolve, event.sessionID);
+    for (const payload of checked) {
+      const run = (
+        script: string,
+        extraArgs: readonly string[],
+        timeoutMs: number,
+        env?: NodeJS.ProcessEnv,
+      ): Promise<void> =>
+        runHookScript(
+          covenRoot,
+          script,
+          extraArgs,
+          payload,
+          timeoutMs,
+          env,
+          deps.spawn,
+        );
+      await run("deny_secrets.py", [], options.guardTimeoutMs);
+      await run(
+        "opencode_server_guard.py",
+        serverArgs,
+        HOOK_TIMEOUTS_MS.serverGuard,
+      );
+      if (pm) {
+        await run(
+          "pm_permissions.py",
+          ["--pre-tool-use"],
+          HOOK_TIMEOUTS_MS.pmPermissions,
+          PM_ENV,
+        );
+        await run(
+          "prod_guard.py",
+          ["--no-approvals"],
+          HOOK_TIMEOUTS_MS.prodGuard,
+          PM_ENV,
+        );
+      }
     }
   };
 }

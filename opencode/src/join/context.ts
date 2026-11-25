@@ -7,6 +7,9 @@ export interface SessionInfo {
   id: string;
   parentID?: string;
   title?: string;
+  directory?: string;
+  /** `{coven: {role, code?}}` once coven has marked the session (read by `pm/role.ts`). */
+  metadata?: Record<string, unknown>;
 }
 
 /** One message of `session.context`: user, synthetic and system carry `text`, assistant `content`. */

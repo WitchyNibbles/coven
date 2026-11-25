@@ -13,6 +13,7 @@ import type {
   ToolCallContext,
   ToolDefinition,
 } from "../src/join/context.ts";
+import type { SpawnFn } from "../src/guard.ts";
 import { joinSetup } from "../src/plugin.ts";
 import { exits, fakeSpawn } from "./guard-fake.ts";
 import type { Behaviour } from "./guard-fake.ts";
@@ -27,6 +28,9 @@ export const PROFILE_OPTIONS = {
 
 export const LEAD = "ses_lead";
 export const KID = "ses_kid";
+/** A PM session and a child of it (which has no role of its own). */
+export const PM = "ses_pm";
+export const PM_KID = "ses_pm_kid";
 export const DIRECTORY = "/work/session";
 
 class Stream {
@@ -119,6 +123,8 @@ interface Setup {
   unlisted?: readonly string[];
   /** What each guard child the fake spawn starts does; it allows the call by default. */
   guard?: Behaviour;
+  /** What the `python3` version check does; it passes by default, whatever `guard` does. */
+  python?: Behaviour;
 }
 
 function makeWorld({
@@ -126,11 +132,15 @@ function makeWorld({
   options,
   unlisted = [],
   guard = exits(0),
+  python = exits(0),
 }: Setup) {
   const streams: Stream[] = [];
   const subscriptions: { types: readonly string[]; signal: AbortSignal }[] = [];
   const sessions = new Map<string, SessionInfo | Error>([
     [KID, { id: KID, parentID: LEAD, title: "kid" }],
+    [LEAD, { id: LEAD, metadata: { coven: { role: "gm" } } }],
+    [PM, { id: PM, metadata: { coven: { role: "pm", code: "proj" } } }],
+    [PM_KID, { id: PM_KID, parentID: PM }],
   ]);
   const messages = new Map<string, ContextMessage[]>();
   const lookups: string[] = [];
@@ -139,7 +149,11 @@ function makeWorld({
   const registered: Registered[] = [];
   const toolHooks: ToolHook[] = [];
   const shellHooks: ShellHook[] = [];
+  // The version check is a `python3` child of its own; `spawned` holds only the hook children.
   const fake = fakeSpawn(guard);
+  const pythonFake = fakeSpawn(python);
+  const spawn: SpawnFn = (command, args, env) =>
+    (command === "python3" ? pythonFake : fake).spawn(command, args, env);
   const ctx: CovenContext = {
     ...(options === undefined ? {} : { options }),
     location: { directory: DIRECTORY },
@@ -217,8 +231,9 @@ function makeWorld({
     registered,
     toolHooks,
     shellHooks,
-    spawn: fake.spawn,
+    spawn,
     spawned: fake.calls,
+    pythonChecks: pythonFake.calls,
   };
 }
 

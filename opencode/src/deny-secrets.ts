@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { isPlainObject } from "./join/fields.ts";
 
 /** What `hooks/deny_secrets.py` reads on stdin: the Claude Code `PreToolUse` shape. */
@@ -18,6 +20,7 @@ interface Mapping {
 }
 
 // `workdir` rides along: the guard searches every string of the call, so a `.ssh` workdir counts.
+// It is also the payload's `cwd`, so a PM working in a worktree is judged in that worktree.
 const SHELL: Mapping = {
   name: "Bash",
   fields: { command: "command", workdir: "workdir" },
@@ -104,14 +107,27 @@ function patchPaths(input: Input): string[] {
 }
 
 /**
+ * The call's own working directory: its `workdir`, resolved against the location directory when
+ * relative; the location directory when the call has none (or a mapping that takes none).
+ */
+function callCwd(mapping: Mapping, input: Input, directory: string): string {
+  const field = mapping.fields["workdir"];
+  const workdir = field === undefined ? undefined : input[field];
+  return typeof workdir === "string" && workdir !== ""
+    ? resolve(directory, workdir)
+    : directory;
+}
+
+/**
  * The guard payloads for one OpenCode tool call, or `"unchecked"` for a tool the guard does not
  * cover. A checked tool whose input is not an object is refused: the guard cannot be sure what it
- * would run.
+ * would run. `directory` is the location directory: relative paths resolve against it, and it is
+ * the payload `cwd` for a call that names no working directory of its own.
  */
 export function payloads(
   tool: string,
   input: unknown,
-  cwd: string,
+  directory: string,
 ): Payload[] | "unchecked" {
   const mapping = MAPPINGS.get(tool);
   if (mapping === undefined && tool !== "patch") {
@@ -122,8 +138,14 @@ export function payloads(
   }
   if (mapping === undefined) {
     return patchPaths(input).map((path) =>
-      payload("Write", { file_path: path }, cwd),
+      payload("Write", { file_path: path }, directory),
     );
   }
-  return [payload(mapping.name, pick(input, mapping.fields), cwd)];
+  return [
+    payload(
+      mapping.name,
+      pick(input, mapping.fields),
+      callCwd(mapping, input, directory),
+    ),
+  ];
 }

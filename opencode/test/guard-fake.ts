@@ -8,6 +8,8 @@ export interface SpawnCall {
   args: readonly string[];
   stdin: string;
   kills: string[];
+  /** The extra environment the child was started with; `undefined` when it inherits as is. */
+  env: NodeJS.ProcessEnv | undefined;
 }
 
 export class FakeChild extends EventEmitter implements GuardChild {
@@ -54,8 +56,8 @@ export const never: Behaviour = () => undefined;
 /** A spawn that starts no process: each child acts out `behaviour` once its listeners are attached. */
 export function fakeSpawn(behaviour: Behaviour = exits(0)) {
   const calls: SpawnCall[] = [];
-  const spawn: SpawnFn = (command, args) => {
-    const call: SpawnCall = { command, args, stdin: "", kills: [] };
+  const spawn: SpawnFn = (command, args, env) => {
+    const call: SpawnCall = { command, args, stdin: "", kills: [], env };
     calls.push(call);
     const child = new FakeChild(call);
     setImmediate(() => behaviour(child));

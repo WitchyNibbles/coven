@@ -1,9 +1,10 @@
 import type { CovenContext, Registration } from "./context.ts";
-import { denySecretsHook } from "./guard.ts";
+import { checkPython, guardsHook } from "./guard.ts";
 import type { SpawnFn } from "./guard.ts";
 import { joinSetup } from "./plugin.ts";
 import { parseOptions } from "./options.ts";
 import { pingTool } from "./ping.ts";
+import { resolveRole } from "./pm/role.ts";
 import { scrubShellEnv } from "./shell-env.ts";
 import { toolChoiceHook } from "./tool-choice.ts";
 
@@ -16,8 +17,12 @@ export interface CovenDeps {
 
 const REQUIRED_TOOLS = ["coven_ping", "await_agents"] as const;
 
-/** 2.3.2 has no HTTP tool list, so a plugin reported active proves both tools are there. */
-async function selfCheck(ctx: CovenContext): Promise<void> {
+/**
+ * 2.3.2 has no HTTP tool list, so a plugin reported active proves both tools are there. The hooks
+ * need `python3` 3.12 or newer: with less, pm-permissions would allow what it could not check.
+ */
+async function selfCheck(ctx: CovenContext, spawn?: SpawnFn): Promise<void> {
+  await checkPython(spawn);
   const listed = new Set((await ctx.tool.list()).map((tool) => tool.id));
   const missing = REQUIRED_TOOLS.filter((name) => !listed.has(name));
   if (missing.length > 0) {
@@ -47,8 +52,10 @@ export async function covenSetup(
     });
     guard = await ctx.tool.hook(
       "execute.before",
-      denySecretsHook(options, {
+      guardsHook(options, {
         directory: ctx.location.directory,
+        resolve: (sessionID) =>
+          resolveRole(sessionID, (id) => ctx.session.get({ sessionID: id })),
         ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
       }),
     );
@@ -61,7 +68,7 @@ export async function covenSetup(
         providerID,
       });
     }
-    await selfCheck(ctx);
+    await selfCheck(ctx, deps.spawn);
   } catch (error) {
     cleanup();
     throw error;
