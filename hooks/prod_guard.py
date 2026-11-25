@@ -5711,9 +5711,9 @@ def _zone_rule(call: Call, store: Path, role: str, _now: datetime) -> Refused | 
         zone = _with_own(each, call)
         written = _job_written_out(call, zone)
         if _bash_touches(written, zone):
-            return _zone_refusal(
-                zone, role, unfollowed_cd=not _bash_touches(written, zone, follow_cds=True)
-            )
+            # Only a zone with `shell_reads` follows a literal `cd`: for the others one never helps.
+            unfollowed = zone.shell_reads and not _bash_touches(written, zone, follow_cds=True)
+            return _zone_refusal(zone, role, unfollowed_cd=unfollowed)
     return None
 
 

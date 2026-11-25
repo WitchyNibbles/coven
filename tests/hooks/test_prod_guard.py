@@ -4366,7 +4366,7 @@ UNFOLLOWED_CD = (
     "W=/srv/work/wt-x; mkdir -p $W/docs/x && cp /srv/in/*.json $W/docs/x/ && cd $W"
     " && uv run privacy-scan docs/x/*.json > /tmp/scan.out 2>&1"
 )
-UNFOLLOWED_CD_HINT = "After a `cd` the guard cannot follow (`cd $VAR`)"
+EXPECTED_CD_HINT = "After a `cd` the guard cannot follow (`cd $VAR`)"
 # A folder that holds no part of the test home (under /tmp), so a `cd` the guard can follow keeps
 # the relative names after it clear of the zone.
 WORK_DIR = "/srv/work"
@@ -4378,7 +4378,7 @@ def test_a_glob_after_a_cd_the_guard_cannot_follow_is_refused_with_why(
     proc = run(bash(UNFOLLOWED_CD, WORK_DIR), role="pm")
     assert proc.returncode == 2
     assert "cannot write to Claude Code's user folder" in proc.stderr
-    assert UNFOLLOWED_CD_HINT in proc.stderr
+    assert EXPECTED_CD_HINT in proc.stderr
     assert "a relative glob such as `*.json`" in proc.stderr
     assert "use `cd /literal/path` or an absolute glob." in proc.stderr
 
@@ -4398,7 +4398,16 @@ def test_a_reader_after_a_cd_the_guard_cannot_follow_is_allowed(run: Run, store:
 def test_a_refusal_with_another_cause_has_no_hint(run: Run, store: Path, command: str) -> None:
     proc = run(bash(command, WORK_DIR), role="pm")
     assert proc.returncode == 2
-    assert UNFOLLOWED_CD_HINT not in proc.stderr
+    assert EXPECTED_CD_HINT not in proc.stderr
+
+
+def test_a_refusal_by_another_zone_after_a_cd_has_no_hint(run: Run, store: Path) -> None:
+    """Only the user folder follows a literal `cd`: a literal one would not lift this refusal."""
+    proc = run(bash("cd /srv/work/wt-x && rm -rf coven-mem*", WORK_DIR), role="pm")
+    assert proc.returncode == 2
+    assert "cannot write to" in proc.stderr
+    assert "user folder" not in proc.stderr
+    assert EXPECTED_CD_HINT not in proc.stderr
 
 
 @pytest.mark.parametrize("name", FOLDER_IDS)
