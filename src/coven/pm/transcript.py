@@ -2,9 +2,10 @@
 
 A transcript is one JSON object per line. The entry shapes this reads are internals of the
 Claude Code transcript format, not a public one, last checked against the version named in
-`coven.claude_version.LAST_TESTED`. A line that is not JSON, a record type or a field this does
-not know is skipped or ignored, never an error: `Facts` counts what was read so that the caller can
-say `unknown` when nothing was.
+`coven.claude_version.LAST_TESTED` (the mid-turn `queued_command` attachment shape was seen from
+Claude Code 2.1.331). A line that is not JSON, a record type or a field this does not know is
+skipped or ignored, never an error: `Facts` counts what was read so that the caller can say
+`unknown` when nothing was.
 
 A message from a peer (the GM) is written in one of two shapes. Delivered at a turn boundary it is
 a `user` entry whose `origin.kind` is `peer`. Absorbed mid-turn it is a `queue-operation` removal

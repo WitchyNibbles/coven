@@ -366,11 +366,21 @@ def test_absorbed_peer_message_is_received_with_its_sender(tmp_path):
     assert facts.received[0].message.head == Head("ANSWER", "acme-1/2")
 
 
-def test_same_msg_id_absorbed_and_delivered_counts_once(tmp_path):
+def test_same_msg_id_absorbed_first_counts_once(tmp_path):
     path = (
         TranscriptBuilder()
         .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T1, msg_id="m-1")
         .peer("gm-main", "ANSWER acme-1/2: b", T2, msg_id="m-1")
+        .write(tmp_path / "t.jsonl")
+    )
+    assert [r.message.at for r in read_transcript(path).received] == [T1]
+
+
+def test_same_msg_id_delivered_first_counts_once(tmp_path):
+    path = (
+        TranscriptBuilder()
+        .peer("gm-main", "ANSWER acme-1/2: b", T1, msg_id="m-1")
+        .absorbed_peer("gm-main", "ANSWER acme-1/2: b", T2, msg_id="m-1")
         .write(tmp_path / "t.jsonl")
     )
     assert [r.message.at for r in read_transcript(path).received] == [T1]
@@ -413,8 +423,8 @@ def test_absorbed_peer_without_name_or_body_is_ignored(tmp_path):
         .write(tmp_path / "t.jsonl")
     )
     facts = read_transcript(path)
+    assert facts.recognized == 2
     assert facts.received == []
-    assert facts.skipped == 0
 
 
 def test_an_earlier_stamped_attachment_does_not_move_the_last_entry_back(tmp_path):

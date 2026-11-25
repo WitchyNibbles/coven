@@ -34,7 +34,8 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/`. Neither is a documented format. The parser
   keeps to one module, ignores fields and records it does not know, and shows `unknown` for what it
   cannot read. It was tested against Claude Code 2.1.325 (`LAST_TESTED` in
-  `src/coven/claude_version.py`), and `coven doctor` warns when your version is newer.
+  `src/coven/claude_version.py`); the mid-turn `queued_command` attachment shape it also reads was
+  seen from 2.1.331. `coven doctor` warns when your version is newer.
 - `coven doctor` checks that superpowers is installed, not which version. The spec has it warn when
   superpowers is newer than the version coven was tested with; that is not built in v1, so a
   superpowers update that renames a skill coven names shows up only as that skill failing to load.
