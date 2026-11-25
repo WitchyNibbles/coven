@@ -11,7 +11,14 @@ from coven import paths, safe_json
 from coven.doctor import one_line
 from coven.opencode.check_types import RESET, SETUP, Context, Outcome
 from coven.opencode.generate import CONFIG_FILE, config_data
-from coven.opencode.profile import AGENT_ROLES, PINNED_VERSION, Layout, OpencodeError, Profile
+from coven.opencode.profile import (
+    AGENT_ROLES,
+    ASSUMED_CONTEXT,
+    PINNED_VERSION,
+    Layout,
+    OpencodeError,
+    Profile,
+)
 from coven.opencode.runtime import BINARY_OVERRIDE, binary_version, probe
 from coven.opencode.superpowers import SKILLS, folder_id
 
@@ -95,6 +102,7 @@ def _watched(profile: Profile) -> Fields:
         provider = ("providers", "litellm")
         fields.append(("providers.litellm.settings.baseURL", (*provider, "settings", "baseURL")))
         fields.append(("providers.litellm.env", (*provider, "env")))
+        fields.append(("providers.litellm.models", (*provider, "models")))
     return fields
 
 
@@ -163,3 +171,19 @@ def superpowers_check(ctx: Context) -> Outcome:
     if missing:
         return Outcome("warn", f"missing {', '.join(missing)}", SUPERPOWERS_FIX)
     return Outcome("ok", f"{len(SKILLS)} superpowers skills copied")
+
+
+def limits_check(ctx: Context) -> Outcome:
+    """A warning, never a failure, for a litellm model whose window OpenCode would have to guess."""
+    if ctx.profile is None:
+        return Outcome("warn", ctx.profile_note or "no profile yet", SETUP)
+    if ctx.profile.preset != "litellm":
+        return Outcome("ok", "the opencode preset: OpenCode's own catalog holds the limits")
+    missing = ctx.profile.unlimited
+    if not missing:
+        return Outcome("ok", f"{len(ctx.profile.model_ids)} models, each with a limit")
+    return Outcome(
+        "warn",
+        f"no limit for {', '.join(missing)}: OpenCode assumes {ASSUMED_CONTEXT} tokens of context",
+        f"re-run coven opencode setup with your flags and --limit {missing[0]}=CONTEXT[:OUTPUT]",
+    )

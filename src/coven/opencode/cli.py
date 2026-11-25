@@ -10,6 +10,7 @@ from typing import Any
 from coven import paths
 from coven.opencode import checks, generate, install, runtime
 from coven.opencode.profile import (
+    ASSUMED_CONTEXT,
     PINNED_VERSION,
     ROLES,
     OpencodeError,
@@ -25,13 +26,13 @@ FLAGS_NEED_PRESET = "pass --preset with the other flags, or no flags to regenera
 def _chosen_profile(args: argparse.Namespace) -> Profile:
     """The profile the flags describe, or the saved one when there are no flags."""
     if args.preset is None:
-        if args.base_url is not None or args.key_env is not None or args.model:
+        if args.base_url is not None or args.key_env is not None or args.model or args.limit:
             raise OpencodeError(FLAGS_NEED_PRESET)
         saved = load_profile(layout())
         if saved is None:
             raise OpencodeError(runtime.NO_PROFILE)
         return saved
-    return make_profile(args.preset, args.base_url, args.key_env, args.model)
+    return make_profile(args.preset, args.base_url, args.key_env, args.model, args.limit)
 
 
 def _preset_line(profile: Profile) -> str:
@@ -47,6 +48,26 @@ def _superpowers_warning(missing: list[str]) -> str:
     )
 
 
+def _limit_lines(profile: Profile) -> list[str]:
+    lines = []
+    for model_id in profile.model_ids:
+        if limit := profile.limits.get(model_id):
+            output = f", {limit.output} output" if limit.output is not None else ""
+            lines.append(f"limit {model_id}: {limit.context} context{output}")
+    return lines
+
+
+def _limit_warning(profile: Profile) -> list[str]:
+    """One warning naming the litellm models that have no limit; nothing for any other preset."""
+    missing = profile.unlimited
+    if profile.preset != "litellm" or not missing:
+        return []
+    return [
+        f"warning: no limit for {', '.join(missing)}: OpenCode assumes {ASSUMED_CONTEXT} tokens "
+        "of context (add --limit ID=CONTEXT[:OUTPUT] to the setup flags)"
+    ]
+
+
 def run_setup(args: argparse.Namespace) -> int:
     profile = _chosen_profile(args)
     home = layout()
@@ -55,6 +76,8 @@ def run_setup(args: argparse.Namespace) -> int:
     print(_preset_line(profile))
     for role in ROLES:
         print(f"{role}: {profile.model(role)}")
+    for line in (*_limit_lines(profile), *_limit_warning(profile)):
+        print(line)
     if missing:
         print(_superpowers_warning(missing))
     print("next: coven opencode doctor")
@@ -97,6 +120,14 @@ def register(subparsers: Any) -> None:
         default=[],
         metavar="ROLE=ID",
         help="a model per role; lead is required",
+    )
+    setup.add_argument(
+        "--limit",
+        action="append",
+        default=[],
+        metavar="ID=CONTEXT[:OUTPUT]",
+        help="a model's token window, litellm only; without one OpenCode assumes "
+        f"{ASSUMED_CONTEXT} tokens of context",
     )
     setup.set_defaults(handler=run_setup)
     run = commands.add_parser(

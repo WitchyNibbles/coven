@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from doctor_kit import KEY_NAME, KEY_VALUE, NAMES, Good, Reader, results_by_name
+from doctor_kit import BARE_FLAGS, KEY_NAME, KEY_VALUE, NAMES, Good, Reader, results_by_name
 from fakes import fake_opencode
 
-from coven import paths
+from coven import cli, paths
 from coven.opencode import checks_runtime
 from coven.opencode.canary import ServerOptions
 from coven.opencode.checks import Outcome, exit_code, render, run_doctor
@@ -30,7 +30,7 @@ def test_a_good_profile_passes_every_check_in_order(good: Good):
     reader = Reader()
     done = run_doctor(good.layout, good.cwd, read=reader)
     assert [name for name, _ in done] == NAMES
-    assert [outcome.status for _, outcome in done] == ["ok"] * 9
+    assert [outcome.status for _, outcome in done] == ["ok"] * 10
     assert exit_code(done) == 0
     assert len(reader.calls) == 1
 
@@ -222,7 +222,7 @@ def test_a_check_that_raises_fails_alone(good: Good, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("coven.opencode.checks_runtime.read_paths", boom)
     done = dict(run_doctor(good.layout, good.cwd, read=Reader()))
     assert done["paths"] == Outcome("fail", "RuntimeError: kaboom")
-    assert [done[name].status for name in NAMES if name != "paths"] == ["ok"] * 8
+    assert [done[name].status for name in NAMES if name != "paths"] == ["ok"] * 9
 
 
 def test_render_prints_one_line_per_check_with_the_fix_when_not_ok():
@@ -249,3 +249,82 @@ def test_run_env_is_what_the_server_gets(good: Good):
     assert profile is not None
     expected = run_env(profile, good.layout, os.environ, offline=True)
     assert dict(reader.calls[0][1]) == expected
+
+
+# limits
+
+RESET_FIX = "re-run coven opencode setup"
+
+
+def setup_again(*flags: str) -> None:
+    assert cli.main(["opencode", "setup", *flags]) == 0
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda data: data["providers"]["litellm"]["models"]["big"]["limit"].update(context=200000),
+        lambda data: data["providers"]["litellm"]["models"]["big"]["limit"].pop("output"),
+        lambda data: data["providers"]["litellm"]["models"]["small"].pop("limit"),
+        lambda data: data["providers"]["litellm"]["models"]["small"].update(
+            limit={"context": 50000, "input": 1000}
+        ),
+        lambda data: data["providers"]["litellm"]["models"].pop("small"),
+    ],
+    ids=["context", "output-dropped", "limit-dropped", "extra-field", "model-dropped"],
+)
+def test_a_hand_edited_limit_fails_config_with_the_reset_fix(good: Good, change: Change):
+    edit_config(good, change)
+    found = results_by_name(good)["config"]
+    assert found.status == "fail"
+    assert "providers.litellm.models" in found.detail
+    assert found.fix == RESET_FIX
+
+
+def test_a_limit_added_by_hand_fails_config(good: Good):
+    setup_again(*BARE_FLAGS)
+    edit_config(
+        good,
+        lambda data: data["providers"]["litellm"]["models"]["big"].update(limit={"context": 9}),
+    )
+    assert results_by_name(good)["config"].status == "fail"
+
+
+def test_limits_is_ok_when_every_model_has_one(good: Good):
+    found = results_by_name(good)["limits"]
+    assert found.status == "ok"
+    assert found.fix == ""
+
+
+def test_limits_warns_naming_the_models_without_one_and_exits_zero(good: Good):
+    setup_again(*BARE_FLAGS, "--limit", "big=100000")
+    done = run_doctor(good.layout, good.cwd, read=Reader())
+    found = dict(done)["limits"]
+    assert found.status == "warn"
+    assert "small" in found.detail
+    assert "big" not in found.detail
+    assert "200000" in found.detail
+    assert "--limit small=CONTEXT[:OUTPUT]" in found.fix
+    assert dict(done)["config"].status == "ok"
+    assert exit_code(done) == 0
+
+
+def test_limits_names_every_model_without_one(good: Good):
+    setup_again(*BARE_FLAGS)
+    found = results_by_name(good)["limits"]
+    assert found.status == "warn"
+    assert "big, small" in found.detail
+
+
+def test_limits_is_ok_for_the_opencode_preset(good: Good):
+    setup_again("--preset", "opencode", "--model", "lead=big")
+    found = results_by_name(good)["limits"]
+    assert found.status == "ok"
+    assert "opencode" in found.detail
+
+
+def test_limits_warns_instead_of_failing_without_a_profile(good: Good):
+    good.layout.profile_file.unlink()
+    found = results_by_name(good)["limits"]
+    assert found.status == "warn"
+    assert found.fix == "run coven opencode setup"

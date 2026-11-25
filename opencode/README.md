@@ -90,7 +90,7 @@ when `XDG_DATA_HOME` is unset, or the folder in `COVEN_OPENCODE_HOME`.
     P/config, data, cache, state   the four XDG folders OpenCode sees
     P/home/                OPENCODE_TEST_HOME: an empty home, so no .agents or .claude is read
     P/tmp/                 TMPDIR
-    P/profile.json         what setup chose: preset, base URL, key env name, models (no key)
+    P/profile.json         what setup chose: preset, base URL, key env name, models, limits (no key)
 
 `run` and `doctor` give OpenCode an environment built from the profile: the folders above, the
 switches that turn off auto-update and Claude Code skills, and `OPENCODE_DISABLE_PROJECT_CONFIG=1`.
@@ -104,7 +104,7 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
 ## Commands
 
     coven opencode install
-    coven opencode setup --preset litellm --base-url URL --key-env NAME --model lead=ID [--model ROLE=ID ...]
+    coven opencode setup --preset litellm --base-url URL --key-env NAME --model lead=ID [--model ROLE=ID ...] [--limit ID=CONTEXT[:OUTPUT] ...]
     coven opencode run -- ARGS
     coven opencode doctor
 
@@ -119,7 +119,11 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
   value) and `--model lead=ID`; the preset `opencode` takes only models and reads
   `OPENCODE_API_KEY`. Roles are lead, implementer, reviewer, explorer, final-reviewer and title,
-  and a role with no model uses the lead's. With no flags it regenerates from `profile.json`.
+  and a role with no model uses the lead's. `--limit ID=CONTEXT[:OUTPUT]` (litellm only, repeat it
+  per model) writes the model's context and output size in tokens into the config; without one
+  OpenCode assumes 200000 tokens of context and 32000 of output, so a model with a smaller window
+  overflows before OpenCode compacts. Setup prints one warning naming the litellm models with no limit.
+  With no flags it regenerates from `profile.json` and keeps its limits.
   What setup puts in `P/config/opencode/`:
   - `skills/coven-*`, `agents/` and `commands/`, copied from `opencode/content/`;
   - `skills/superpowers-<x>` for brainstorming, writing-plans, test-driven-development,
@@ -159,12 +163,13 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   does not. `doctor` prints one line per check: `ok`, `warn` or
   `fail`, with the fix after a failure. It exits 1 when a check failed. The checks are:
   `runtime` (the binary reports the pinned version), `paths` (`opencode debug paths` stays under
-  `P`), `config` (the config matches `profile.json`), `key` (the variable is set), `plugin`
-  (a server started for the check lists `coven` as active; it polls up to 10 s, because 2.3.2 lists
-  no plugin until they have loaded), `skills` (the same server lists only built-in skills and the
-  profile's), `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and
-  `project config` (a warning for a repo config that is ignored here) and `superpowers` (check 9, a
-  warning when a `superpowers-<x>` skill is missing from the profile).
+  `P`), `config` (the config, limits included, matches `profile.json`), `key` (the variable is
+  set), `plugin` (a server started for the check lists `coven` as active; it polls up to 10 s,
+  because 2.3.2 lists no plugin until they have loaded), `skills` (the same server lists only
+  built-in skills and the profile's), `coven root` (the plugin's root still holds
+  `hooks/deny_secrets.py`) and `project config` (a warning for a repo config that is ignored here),
+  `superpowers` (check 9, a warning when a `superpowers-<x>` skill is missing from the profile) and
+  `limits` (check 10, a warning naming the litellm models that have no `--limit`).
 
 ## The tool_choice hook
 

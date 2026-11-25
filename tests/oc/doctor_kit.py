@@ -18,10 +18,11 @@ NAMES = [
     "coven root",
     "project config",
     "superpowers",
+    "limits",
 ]
 KEY_NAME = "GATEWAY_KEY"
 KEY_VALUE = "sk-live-value-1234567890"
-LITELLM_FLAGS = [
+BARE_FLAGS = [
     "--preset",
     "litellm",
     "--base-url",
@@ -33,6 +34,8 @@ LITELLM_FLAGS = [
     "--model",
     "explorer=small",
 ]
+LIMIT_FLAGS = ["--limit", "big=100000:8000", "--limit", "small=50000"]
+LITELLM_FLAGS = [*BARE_FLAGS, *LIMIT_FLAGS]
 GOOD_VIEW = ServerView(
     [{"id": "coven", "state": {"status": "active"}}],
     [{"id": "opencode", "path": "skill://opencode/SKILL.md"}],

@@ -12,7 +12,7 @@ from typing import Final
 from coven import paths
 from coven.opencode import memory, superpowers
 from coven.opencode.content import CONTENT
-from coven.opencode.profile import AGENT_ROLES, ROLES, Layout, OpencodeError, Profile, save_profile
+from coven.opencode.profile import AGENT_ROLES, Layout, OpencodeError, Profile, save_profile
 
 GUARD_TIMEOUT_MS: Final = 5000
 # The provider package OpenCode loads for an OpenAI-compatible gateway.
@@ -47,14 +47,18 @@ def plugin_options(profile: Profile, coven_root: Path) -> dict[str, object]:
 
 
 def _provider(profile: Profile) -> dict[str, object]:
-    ids = sorted({profile.model(role) for role in ROLES})
     return {
         "name": "LiteLLM",
         "package": OPENAI_COMPATIBLE,
         "env": [profile.key_env],
         "settings": {"baseURL": profile.base_url},
-        "models": {model_id: {"name": model_id} for model_id in ids},
+        "models": {model_id: _model(profile, model_id) for model_id in profile.model_ids},
     }
+
+
+def _model(profile: Profile, model_id: str) -> dict[str, object]:
+    limit = profile.limits.get(model_id)
+    return {"name": model_id} | ({"limit": limit.data()} if limit else {})
 
 
 def _rule(action: str, resource: str, effect: str) -> dict[str, str]:
