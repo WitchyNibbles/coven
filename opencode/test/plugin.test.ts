@@ -9,6 +9,7 @@ import plugin from "../src/index.ts";
 import {
   KID,
   LEAD,
+  PROFILE_OPTIONS,
   boot,
   bootCoven,
   ended,
@@ -23,7 +24,12 @@ await test("the plugin has the id coven and a setup", () => {
   assert.equal(typeof plugin.setup, "function");
 });
 
-const COVEN = { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: ["litellm"] };
+const COVEN = {
+  covenRoot: "/c",
+  keyEnv: "K",
+  ...PROFILE_OPTIONS,
+  toolChoiceAuto: ["litellm"],
+};
 
 await test("coven setup registers both tools and one scoped http.request hook", async () => {
   const p = bootCoven({ options: COVEN });
@@ -41,7 +47,7 @@ await test("coven setup registers both tools and one scoped http.request hook", 
 
 await test("coven setup registers one http.request hook per provider", async () => {
   const p = bootCoven({
-    options: { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: ["a", "b"] },
+    options: { ...COVEN, toolChoiceAuto: ["a", "b"] },
   });
   const cleanup = await p.outcome;
   assert.deepEqual(
@@ -55,7 +61,7 @@ await test("coven setup registers one http.request hook per provider", async () 
 
 await test("an empty toolChoiceAuto registers no http.request hook", async () => {
   const p = bootCoven({
-    options: { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: [] },
+    options: { ...COVEN, toolChoiceAuto: [] },
   });
   const cleanup = await p.outcome;
   assert.deepEqual(

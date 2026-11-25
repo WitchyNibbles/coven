@@ -3,14 +3,20 @@ import { test } from "node:test";
 
 import { OptionsError, parseOptions } from "../src/options.ts";
 
+/** Every key setup always writes; the tests below change one thing at a time. */
+const BASE = {
+  covenRoot: "/c",
+  keyEnv: "K",
+  profileDir: "/tmp/coven-test/profile",
+  serveDir: "/tmp/coven-test/profile/state/serve",
+  store: null,
+  secretRules: [],
+};
+
 await test("a minimal options object gets the defaults", () => {
-  assert.deepEqual(parseOptions({ covenRoot: "/c", keyEnv: "GATEWAY_KEY" }), {
-    covenRoot: "/c",
+  assert.deepEqual(parseOptions({ ...BASE, keyEnv: "GATEWAY_KEY" }), {
+    ...BASE,
     keyEnv: "GATEWAY_KEY",
-    profileDir: "",
-    serveDir: "",
-    store: null,
-    secretRules: [],
     toolChoiceAuto: [],
     guardTimeoutMs: 5000,
   });
@@ -32,87 +38,63 @@ await test("a full valid options object passes through", () => {
 
 await test("parses keyEnv, profileDir, serveDir and store", () => {
   const parsed = parseOptions({
-    covenRoot: "/c",
-    keyEnv: "K",
+    ...BASE,
     profileDir: "/p",
     serveDir: "/p/state/serve",
-    store: null,
   });
   assert.equal(parsed.keyEnv, "K");
   assert.equal(parsed.profileDir, "/p");
   assert.equal(parsed.serveDir, "/p/state/serve");
   assert.equal(parsed.store, null);
-  assert.throws(
-    () => parseOptions({ covenRoot: "/c", profileDir: "/p" }),
-    OptionsError,
-  );
+  assert.equal(parseOptions({ ...BASE, store: "/s" }).store, "/s");
 });
+
+const without = (key: string): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(BASE).filter(([name]) => name !== key));
 
 const REFUSED: [string, unknown][] = [
   ["undefined", undefined],
   ["an empty object", {}],
   ["null", null],
   ["an array", []],
-  ["an empty covenRoot", { covenRoot: "" }],
-  ["a relative covenRoot", { covenRoot: "rel/path" }],
-  ["a numeric covenRoot", { covenRoot: 1 }],
-  [
-    "a string toolChoiceAuto",
-    { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: "litellm" },
-  ],
-  [
-    "an empty provider id",
-    { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: [""] },
-  ],
-  [
-    "a numeric provider id",
-    { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: [1] },
-  ],
-  [
-    "a timeout below the floor",
-    { covenRoot: "/c", keyEnv: "K", guardTimeoutMs: 4999 },
-  ],
-  [
-    "a timeout above the cap",
-    { covenRoot: "/c", keyEnv: "K", guardTimeoutMs: 600001 },
-  ],
-  [
-    "a fractional timeout",
-    { covenRoot: "/c", keyEnv: "K", guardTimeoutMs: 5000.5 },
-  ],
-  [
-    "a string timeout",
-    { covenRoot: "/c", keyEnv: "K", guardTimeoutMs: "5000" },
-  ],
-  ["an unknown key", { covenRoot: "/c", keyEnv: "K", covenroot: "/c" }],
-  ["a relative profileDir", { covenRoot: "/c", keyEnv: "K", profileDir: "p" }],
-  ["a numeric serveDir", { covenRoot: "/c", keyEnv: "K", serveDir: 1 }],
-  ["a relative store", { covenRoot: "/c", keyEnv: "K", store: "s" }],
-  [
-    "secretRules that is not an array",
-    { covenRoot: "/c", keyEnv: "K", secretRules: {} },
-  ],
+  ["an empty covenRoot", { ...BASE, covenRoot: "" }],
+  ["a relative covenRoot", { ...BASE, covenRoot: "rel/path" }],
+  ["a numeric covenRoot", { ...BASE, covenRoot: 1 }],
+  ["a string toolChoiceAuto", { ...BASE, toolChoiceAuto: "litellm" }],
+  ["an empty provider id", { ...BASE, toolChoiceAuto: [""] }],
+  ["a numeric provider id", { ...BASE, toolChoiceAuto: [1] }],
+  ["a timeout below the floor", { ...BASE, guardTimeoutMs: 4999 }],
+  ["a timeout above the cap", { ...BASE, guardTimeoutMs: 600001 }],
+  ["a fractional timeout", { ...BASE, guardTimeoutMs: 5000.5 }],
+  ["a string timeout", { ...BASE, guardTimeoutMs: "5000" }],
+  ["an unknown key", { ...BASE, covenroot: "/c" }],
+  ["a missing covenRoot", without("covenRoot")],
+  ["a missing profileDir", without("profileDir")],
+  ["a missing serveDir", without("serveDir")],
+  ["a missing store", without("store")],
+  ["a missing secretRules", without("secretRules")],
+  ["a relative profileDir", { ...BASE, profileDir: "p" }],
+  ["an empty profileDir", { ...BASE, profileDir: "" }],
+  ["a numeric serveDir", { ...BASE, serveDir: 1 }],
+  ["a relative store", { ...BASE, store: "s" }],
+  ["a numeric store", { ...BASE, store: 1 }],
+  ["secretRules that is not an array", { ...BASE, secretRules: {} }],
   [
     "a secret rule with an unknown effect",
     {
-      covenRoot: "/c",
-      keyEnv: "K",
+      ...BASE,
       secretRules: [{ action: "read", resource: "x", effect: "maybe" }],
     },
   ],
   [
     "a secret rule with no resource",
-    {
-      covenRoot: "/c",
-      keyEnv: "K",
-      secretRules: [{ action: "read", effect: "deny" }],
-    },
+    { ...BASE, secretRules: [{ action: "read", effect: "deny" }] },
   ],
-  ["a missing keyEnv", { covenRoot: "/c" }],
-  ["an empty keyEnv", { covenRoot: "/c", keyEnv: "" }],
-  ["a numeric keyEnv", { covenRoot: "/c", keyEnv: 1 }],
-  ["a keyEnv with an equals sign", { covenRoot: "/c", keyEnv: "A=B" }],
-  ["a keyEnv with a space", { covenRoot: "/c", keyEnv: "A B" }],
+  ["a missing keyEnv", without("keyEnv")],
+  ["an empty keyEnv", { ...BASE, keyEnv: "" }],
+  ["a numeric keyEnv", { ...BASE, keyEnv: 1 }],
+  ["a keyEnv with an equals sign", { ...BASE, keyEnv: "A=B" }],
+  ["a keyEnv with a space", { ...BASE, keyEnv: "A B" }],
 ];
 
 for (const [name, raw] of REFUSED) {
@@ -127,16 +109,17 @@ for (const [name, raw] of REFUSED) {
   });
 }
 
-await test("a missing keyEnv tells the user to run setup", () => {
-  assert.throws(() => parseOptions({ covenRoot: "/c" }), {
-    message:
-      "coven plugin options: keyEnv is missing; run coven opencode setup",
+for (const key of [
+  "keyEnv",
+  "covenRoot",
+  "profileDir",
+  "serveDir",
+  "store",
+  "secretRules",
+]) {
+  await test(`a missing ${key} tells the user to run setup`, () => {
+    assert.throws(() => parseOptions(without(key)), {
+      message: `coven plugin options: ${key} is missing; run coven opencode setup`,
+    });
   });
-});
-
-await test("a missing covenRoot tells the user to run setup", () => {
-  assert.throws(() => parseOptions({}), {
-    message:
-      "coven plugin options: covenRoot is missing; run coven opencode setup",
-  });
-});
+}

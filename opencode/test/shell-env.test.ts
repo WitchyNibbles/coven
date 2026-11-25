@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { ShellCreateEvent } from "../src/context.ts";
 import { scrubShellEnv } from "../src/shell-env.ts";
-import { bootCoven } from "./plugin-fixture.ts";
+import { PROFILE_OPTIONS, bootCoven } from "./plugin-fixture.ts";
 
 const KEY = "GATEWAY_KEY";
 const PASSWORD = "OPENCODE_SERVER_PASSWORD";
@@ -64,7 +64,12 @@ await test("the rest of the event is not touched", () => {
 
 await test("the plugin registers one create.before shell hook that scrubs", async () => {
   const p = bootCoven({
-    options: { covenRoot: "/c", keyEnv: KEY, toolChoiceAuto: [] },
+    options: {
+      covenRoot: "/c",
+      keyEnv: KEY,
+      ...PROFILE_OPTIONS,
+      toolChoiceAuto: [],
+    },
   });
   const cleanup = await p.outcome;
   assert.deepEqual(

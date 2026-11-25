@@ -6,11 +6,11 @@ export interface CovenOptions {
   covenRoot: string;
   /** The name of the environment variable that holds the provider key; never its value. */
   keyEnv: string;
-  /** The profile folder; empty when the config does not name it. */
+  /** The profile folder. */
   profileDir: string;
-  /** The folder of the server's port and password files; empty when the config does not name it. */
+  /** The folder of the server's port and password files. */
   serveDir: string;
-  /** The memory folder, or null when there is none. */
+  /** The memory folder, or null when there is none (the key is still required). */
   store: string | null;
   /** The secret rules and the skills edit deny, as the generated config holds them. */
   secretRules: readonly PermissionRule[];
@@ -66,7 +66,7 @@ function parseKeyEnv(raw: unknown): string {
 
 function parseDir(raw: unknown, name: string): string {
   if (raw === undefined) {
-    return "";
+    throw new OptionsError(`${name} is missing; run coven opencode setup`);
   }
   if (typeof raw !== "string" || !isAbsolute(raw)) {
     throw new OptionsError(
@@ -77,10 +77,7 @@ function parseDir(raw: unknown, name: string): string {
 }
 
 function parseFolder(raw: unknown): string | null {
-  if (raw === undefined || raw === null) {
-    return null;
-  }
-  return parseDir(raw, "store");
+  return raw === null ? null : parseDir(raw, "store");
 }
 
 const EFFECTS: ReadonlySet<unknown> = new Set(["allow", "deny", "ask"]);
@@ -105,7 +102,7 @@ function parseRule(raw: unknown): PermissionRule {
 
 function parseRules(raw: unknown): readonly PermissionRule[] {
   if (raw === undefined) {
-    return [];
+    throw new OptionsError("secretRules is missing; run coven opencode setup");
   }
   if (!Array.isArray(raw)) {
     throw new OptionsError(`secretRules must be an array, got ${show(raw)}`);
