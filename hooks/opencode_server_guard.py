@@ -24,19 +24,23 @@ What it refuses:
   (`ls`, `cd`, `stat`...); a folder that holds the coven root, unless every program of the line
   only reads (`ls`, `cat`, `grep`, `rg`, `find` without `-delete` or `-exec`, `git status|log|
   diff|show|grep|blame`...) and nothing is redirected to a file. That covers the words of the
-  line, the working folder and every folder a `cd` moves to (a bare `cd` is home), so `rg
-  password` run in the folder that holds the profile is refused;
+  line, the working folder and every folder a `cd` moves to (a bare `cd`, also with a redirection,
+  is home), so `rg password` run in the folder that holds the profile is refused; a `cd` whose
+  folder cannot be known (`cd -`, `cd $UNSET`, which bash runs as a bare `cd`) is refused on a line
+  with a program that reads;
 - an option or variable that makes git, man or rg run a command (`git -c`, `git bisect run`,
-  `git rebase --exec`, `git submodule foreach`, `git difftool -x`, `GIT_*=`, `PAGER=`, `man -P`,
-  `rg --pre`), a variable set from `$(...)` used as a program or as an argument of a program that
-  reads, a shell that reads a process substitution (`bash <(...)`), and a glob that bash reads
-  differently from Python (`[^x]`, `[!x]`, `[[:alpha:]]`) or that matches nothing under a closed
-  place;
+  `git rebase --exec`, `git submodule foreach`, `git difftool -x`, `man -P`, also in a bundle such
+  as `-qx`, `rg --pre`, and `GIT_*=`, `PAGER=`, `EDITOR=` assigned before a program or exported),
+  a variable set from `$(...)` used as a program or run as shell text (`eval $X`, `bash -c "$X"`,
+  `source $X`), a shell or `source` that reads a pipe, a here-string or a process substitution
+  (`/bin/bash <(...)`), and a glob that bash reads differently from Python (`[^x]`, `[!x]`,
+  `[[:alpha:]]`) or that matches nothing under a closed place;
 - a write, edit or patch, and any shell command that names a path, in the protected set: the
   profile except its `tmp/` folder, the serve folder, and the coven root except its
   `.claude/worktrees/` folder;
 - a command substitution (`$(...)`, backticks) that builds a program name, a path or a `cd`
-  target, because what it prints is not seen: the text says to write the path literally;
+  target, because what it prints is not seen: the text says to inline the substitution or write
+  the path literally;
 - `coven opencode` with anything but `doctor` or `--help`, and a pipe into a shell.
 
 Paths are judged after `~`, `$HOME`, variables set on the same line, `..`, globs, braces, quote
@@ -209,17 +213,20 @@ BRACES = re.compile(r"\{([^{}]*,[^{}]*)\}")
 ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=([^\s;|&<>()]*)")
 VARIABLE = re.compile(r"\$(?:\{(\w+)\}|([A-Za-z_]\w*)|[$?!#@*0-9_-])")
 UNRESOLVED = re.compile(r"\$[A-Za-z_{]")
-CD_COMMAND = re.compile(r"(?:^|[;&|(\s{])(?:cd|pushd)\s+(?:-[LPe@]+\s+)?(?:--\s+)?([^\s;&|()<>]+)")
-# `cd`, `cd -P`, `cd -L`, `cd --`, `cd -P --`: the home folder.
-BARE_CD = re.compile(r"(?:^|[;&|(\s{])cd(?:\s+-[LPe@]+)*(?:\s+--)?\s*(?:$|[;&|)])")
+# `cd` or `pushd` and the rest of its command: its options, redirections and target.
+CD_LINE = re.compile(r"(?:^|[;&|(\s{])(cd|pushd)(?=$|[\s;&|)<>])([^;&|)\n]*)")
+CD_OPTION = re.compile(r"-[LPe@]+|--")
+# `2>/dev/null`, `>/dev/null`, `<x`, `2>`: a redirection, and the file when it is in the word.
+REDIRECTION = re.compile(r"(?:\d+|&)?[<>]+&?(.*)")
 # `NAME=$(...)` or NAME=`...`: a variable whose value is not known to the guard.
 SUBSTITUTION_ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=(?:\$\(|`)")
-# `GIT_PAGER=`, `GIT_SSH_COMMAND=`, `PAGER=`, `MANPAGER=`: variables git and man run as commands.
-RUNNING_ENVIRONMENT = re.compile(r"(?<!\w)(?:GIT_\w+|\w*PAGER)=")
-SHELL_READS_PROCESS = re.compile(
-    r"(?:^|[;&|(\s{])(?:" + "|".join(sorted(wrapper_commands.SHELLS)) + r"|source|\.)"
-    r"(?:\s[^;&|\n]*)?<\s*\("
-)
+# `GIT_PAGER=`, `GIT_SSH_COMMAND=`, `PAGER=`, `MANPAGER=`, `EDITOR=`: variables git and man run as
+# commands, when one is assigned before a program or exported.
+RUNNING_VARIABLE = re.compile(r"(?:GIT_\w+|\w*PAGER|\w*EDITOR|VISUAL)=")
+# Builtins whose arguments are assignments (`export PAGER=x`).
+ASSIGNING_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
+# Variables of the PM's shell that this process's own environment cannot answer for.
+SHELL_ONLY_VARIABLES = frozenset({"OLDPWD"})
 # A glob bracket that bash reads differently from Python: `[^x]`, `[!x]`, `[[:alpha:]]`, `[[.x.]]`.
 BRACKET_CLASS = re.compile(r"\[[\^!]|\[\[[:.=]")
 GLOB_MARKS = "*?["
@@ -300,6 +307,8 @@ class Names:
             return None
         if name in self.values:
             return self.values[name]
+        if name in SHELL_ONLY_VARIABLES:
+            return None
         return self.fallback.get(name, os.environ.get(name))
 
     def mentions_unknown(self, word: str) -> bool:
@@ -408,22 +417,52 @@ def check_word(word: str, bases: Sequence[Path], view: View, mode: Mode) -> None
                 raise Refused(rule)
 
 
-def _folders(text: str, cwd: Path, names: Names, scope: Scope) -> list[Path]:
-    """`cwd` and every folder a `cd` or `pushd` of the line moves to, in order."""
+def _cd_target(words: str) -> str | None:
+    """The target of a `cd` from the words after it (options and redirections skipped: `cd
+    2>/dev/null` has none); None when it has none."""
+    tokens = iter(words.split())
+    for token in tokens:
+        redirection = REDIRECTION.fullmatch(token)
+        if redirection:
+            if not redirection.group(1):
+                next(tokens, None)  # `> file`: the file is the next word
+        elif not CD_OPTION.fullmatch(token):
+            return re.split(r"[<>]", token)[0]
+    return None
+
+
+@dataclass(frozen=True)
+class Moves:
+    """The working folder and every folder a `cd` or `pushd` of the line moves to, in order, and
+    whether one of them is a folder the guard cannot know (`cd -`, `cd $UNSET`, a bare `pushd`)."""
+
+    folders: tuple[Path, ...]
+    unknown: bool
+
+
+def _moves(text: str, cwd: Path, names: Names, scope: Scope) -> Moves:
     folders = [cwd]
+    unknown = False
+    home = _real(scope.home)
     for variant in _variants(text):
         here = cwd
-        for target in CD_COMMAND.findall(variant):
-            expanded = _tilde(names.expand(target), here)
-            if "$" in expanded or any(mark in expanded for mark in GLOB_MARKS):
+        for verb, words in CD_LINE.findall(variant):
+            target = _cd_target(words)
+            expanded = "" if target in (None, "-") else _tilde(names.expand(target), here)
+            moved: Path | None
+            if target is None and verb == "cd":
+                moved = home
+            elif not expanded or "$" in expanded:
+                # bash runs a bare `cd` for an unset variable, so home is one place it goes.
+                unknown, moved = True, home
+            elif any(mark in expanded for mark in GLOB_MARKS):
                 continue
-            moved = _resolve(expanded, here)
+            else:
+                moved = _resolve(expanded, here)
             if moved is not None:
                 folders.append(moved)
                 here = moved
-        if BARE_CD.search(variant):
-            folders.append(_real(scope.home))
-    return list(dict.fromkeys(folders))
+    return Moves(tuple(dict.fromkeys(folders)), unknown)
 
 
 # ---- reading shell text as commands ----------------------------------------------------------
@@ -441,7 +480,14 @@ class Argv:
 
 
 SEPARATORS = re.compile(r"(\|\||&&|\||;|&|\n)")
+CRUDE_BREAKS = re.compile(r"<\(|\$\(|[`()]")
+PROCESS_SUBSTITUTION = "<(...)"
 SHELLS: frozenset[str] = wrapper_commands.SHELLS
+# The builtins that run a file as shell text.
+SOURCING = frozenset({"source", "."})
+# A shell or one of those builtins: each runs what a pipe, a heredoc, a `<<<` string or a
+# process substitution gives it.
+SHELL_READERS = SHELLS | SOURCING
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 OPENCODE_NAME = re.compile(r"opencode(?:[-@].*)?")
@@ -560,16 +606,34 @@ FIND_WRITING_ACTIONS = frozenset(
 )
 GIT_READING = frozenset({"status", "log", "diff", "show", "grep", "blame", "rev-parse"})
 GIT_VALUED_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+SHORT_BUNDLE = re.compile(r"-[A-Za-z]+")
 
 
 def _base(word: str) -> str:
     return os.path.basename(word.rstrip("/")) if "/" in word else word
 
 
+def _crude_break(match: re.Match[str]) -> str:
+    """A `<(` stays in its command as the word PROCESS_SUBSTITUTION (a shell may read it); its
+    text, like that of a `$(`, a backtick pair or parentheses, becomes a command of its own."""
+    return f" {PROCESS_SUBSTITUTION};" if match.group(0) == "<(" else ";"
+
+
+def _here_strings(words: Sequence[str]) -> tuple[str, ...]:
+    """The text of each `<<< text` and `<<<text` in the words."""
+    found: list[str] = []
+    for index, word in enumerate(words):
+        if word == "<<<" and index + 1 < len(words):
+            found.append(words[index + 1])
+        elif word.startswith("<<<") and len(word) > len("<<<"):
+            found.append(word.removeprefix("<<<"))
+    return tuple(found)
+
+
 def _crude(text: str) -> list[Argv]:
     """The commands of a text the scanner could not follow: split at the separators, `(`, `)`,
-    `$(` and backticks, then into words as the shell would (or at blanks when it cannot)."""
-    flat = re.sub(r"\$\(|[`()]", ";", text)
+    `$(`, `<(` and backticks, then into words as the shell would (or at blanks when it cannot)."""
+    flat = CRUDE_BREAKS.sub(_crude_break, text)
     found: list[Argv] = []
     piped = False
     for part in SEPARATORS.split(flat):
@@ -581,7 +645,7 @@ def _crude(text: str) -> list[Argv]:
         except ValueError:
             words = part.split()
         if words:
-            found.append(Argv(tuple(words), piped))
+            found.append(Argv(tuple(words), piped, inputs=_here_strings(words)))
         piped = False
     return found
 
@@ -649,6 +713,19 @@ def _split_string(words: Sequence[str], index: int) -> list[str] | None:
 
 def _unwrapped(words: Sequence[str]) -> list[str]:
     """The command under its assignments and wrappers (env, timeout, xargs, npx, pnpm dlx...)."""
+    current, start = _unwrap(words)
+    return current[start:]
+
+
+def _prefix(words: Sequence[str]) -> list[str]:
+    """The words before the command: its assignments, wrappers and their options."""
+    current, start = _unwrap(words)
+    return current[:start]
+
+
+def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
+    """The words (with an `env -S` string split) and where the command under its assignments and
+    wrappers starts in them."""
     current = list(words)
     index = _after_prefixes(current, 0)
     for _ in range(MAX_UNWRAP):
@@ -671,7 +748,7 @@ def _unwrapped(words: Sequence[str]) -> list[str]:
                     current = split
                     break
         index = _after_prefixes(current, _skip_options(current, index + 1, wrapper))
-    return current[index:]
+    return current, min(index, len(current))
 
 
 def _short_c_option(word: str) -> bool:
@@ -750,7 +827,7 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
         *_runner_strings(argv.words),
         *argv.substitutions,
     ]
-    if command and _base(command[0]) in SHELLS:
+    if command and _base(command[0]) in SHELL_READERS:
         strings.extend(argv.inputs)
     for inner in strings:
         found.extend(argvs(inner, depth + 1))
@@ -764,7 +841,7 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
 
 SUBSTITUTION_RULE = (
     "a command substitution builds a program or a path that cannot be checked,"
-    " so write the path literally"
+    " so inline the substitution or write the path literally"
 )
 # `$(` or a backtick where the program of a command goes: after a separator, a prefix word or a
 # wrapper that runs what follows it, and any `NAME=value` words.
@@ -810,14 +887,6 @@ def _variable_builds_a_path(plain: str, name: str) -> bool:
     return False
 
 
-def check_process_substitution(text: str) -> None:
-    """Raise Refused for `bash <(...)`, `source <(...)` and `. <(...)`: a shell that reads what
-    a command prints, the same as a pipe into a shell."""
-    for source in dict.fromkeys((text, _ansi_c(text))):
-        if SHELL_READS_PROCESS.search(re.sub(r"['\"\\]", "", source)):
-            raise Refused("a shell that reads a process substitution cannot be checked")
-
-
 def check_substitutions(text: str) -> None:
     """Raise Refused for a `$(...)` or backtick whose output is a program, a `cd` target or part
     of a path (next to a `/`, or in a variable that is): what it prints is not seen, so a path
@@ -847,7 +916,6 @@ def argvs(text: str, depth: int = 0) -> list[Argv]:
     if depth > MAX_NESTING:
         raise Refused("a command nested this deeply cannot be checked")
     check_substitutions(text)
-    check_process_substitution(text)
     found: list[Argv] = []
     for argv in _commands(text):
         found.append(argv)
@@ -922,12 +990,24 @@ def _names_opencode(words: Sequence[str], cwd: Path) -> bool:
     return False
 
 
-def _uses_unknown_variable(command: Sequence[str], names: Names) -> bool:
-    """Whether a program that is not one that only names paths is given a variable set from a
-    command substitution (`d=$(...); cat $d`, `eval $X`, `bash -c "$X"`)."""
-    return _base(command[0]) not in NEVER_READS_CONTENT and any(
-        names.mentions_unknown(word) for word in command[1:]
-    )
+def _runs_unknown_variable(words: Sequence[str], command: Sequence[str], names: Names) -> bool:
+    """Whether a variable set from a command substitution is run: as the program, or as shell
+    text (`eval $X`, `bash -c "$X"`, `source $X`, `. $X`). As a plain argument it is only a value
+    (`git log $sha`, `kill $pid`)."""
+    strings = [command[0], *_command_strings(words), *_command_strings(command)]
+    if _base(command[0]) in SOURCING:
+        strings.extend(command[1:])
+    return any(names.mentions_unknown(each) for each in strings)
+
+
+def _sets_a_running_variable(words: Sequence[str], command: Sequence[str]) -> bool:
+    """Whether a variable that git or man runs as a command is assigned before the program
+    (`GIT_PAGER=x git log`, `env PAGER=x man ls`) or by `export`; the same text in an argument
+    (`git commit -m 'set PAGER=less'`) is not an assignment."""
+    assignments = _prefix(words)
+    if command and _base(command[0]) in ASSIGNING_BUILTINS:
+        assignments.extend(command[1:])
+    return any(RUNNING_VARIABLE.match(each) for each in assignments)
 
 
 def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -> None:
@@ -946,10 +1026,12 @@ def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -
 def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     words = [names.expand(word) for word in argv.words]
     command = [names.expand(word) for word in _unwrapped(argv.words)]
+    if _sets_a_running_variable(argv.words, command):
+        raise Refused("a variable that makes git or man run a command is closed to a PM")
     if not command:
         return
     program = command[0]
-    if "$(" in program or "`" in program or _uses_unknown_variable(command, names):
+    if "$(" in program or "`" in program or _runs_unknown_variable(words, command, names):
         raise Refused(SUBSTITUTION_RULE)
     if UNRESOLVED.search(program):
         raise Refused("a command whose program is built at run time cannot be checked")
@@ -961,7 +1043,9 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
         raise Refused("`ps` options that print other processes' environments are closed to a PM")
     if _coven_lifecycle(command):
         raise Refused("`coven opencode` is closed to a PM but for `doctor` and `--help`")
-    if argv.piped and name in SHELLS:
+    if name in SHELL_READERS and any(word.endswith(PROCESS_SUBSTITUTION) for word in command[1:]):
+        raise Refused("a shell that reads a process substitution cannot be checked")
+    if argv.piped and name in SHELL_READERS:
         raise Refused("a pipe into a shell cannot be checked")
 
 
@@ -974,8 +1058,6 @@ def check_text(text: str, scope: Scope) -> None:
             raise Refused("a loopback port is closed to a PM while the server's port is unknown")
         if ENVIRON_TEXT.search(variant):
             raise Refused("another process's environment is closed to a PM")
-        if RUNNING_ENVIRONMENT.search(variant):
-            raise Refused("a variable that makes git or man run a command is closed to a PM")
 
 
 def _only_names_paths(commands: Sequence[Argv]) -> bool:
@@ -1007,7 +1089,7 @@ def _runs_other_programs(name: str, arguments: Sequence[str]) -> bool:
     """`git -c`, `git bisect run`, `git rebase --exec`, `git submodule foreach`, `git difftool -x`,
     `man -P` and `rg --pre`: options that make a program run a command that is given as text."""
     if name == "man":
-        return any(each.startswith(("-P", "--pager")) for each in arguments)
+        return _has_option(arguments, "P", "--pager")
     if name == "rg":
         return any(each.startswith("--pre") for each in arguments)
     if name != "git":
@@ -1018,8 +1100,18 @@ def _runs_other_programs(name: str, arguments: Sequence[str]) -> bool:
     return (
         (subcommand == "bisect" and "run" in rest)
         or (subcommand == "submodule" and "foreach" in rest)
-        or (subcommand == "rebase" and any(each.startswith(("--exec", "-x")) for each in rest))
-        or (subcommand == "difftool" and any(each.startswith(("--extcmd", "-x")) for each in rest))
+        or (subcommand == "rebase" and _has_option(rest, "x", "--exec"))
+        or (subcommand == "difftool" and _has_option(rest, "x", "--extcmd"))
+    )
+
+
+def _has_option(arguments: Sequence[str], letter: str, long: str) -> bool:
+    """Whether the arguments hold the short option `-<letter>` (alone, with its value, or in a
+    bundle: `-qx`, `-aP`) or the long option."""
+    return any(
+        each.startswith((f"-{letter}", long))
+        or (SHORT_BUNDLE.fullmatch(each) is not None and letter in each)
+        for each in arguments
     )
 
 
@@ -1058,7 +1150,13 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         profile_folders_closed=not _only_names_paths(commands),
         coven_folders_closed=not _only_reads(command, commands),
     )
-    bases = _folders(command, cwd, view.names, scope)
+    moves = _moves(command, cwd, view.names, scope)
+    if moves.unknown and view.profile_folders_closed:
+        raise Refused(
+            "a `cd` to a folder that cannot be known (`cd -`, an unset variable) is closed"
+            " before a program that reads"
+        )
+    bases = moves.folders
     # The working folder and every folder a `cd` moves to (a bare `cd` is home): what a program
     # run there reads without naming a path (`rg password`, `grep -r x`, `find -name x`).
     for folder in bases:

@@ -829,7 +829,7 @@ def test_a_substitution_that_builds_a_program_or_a_path_is_refused(
 ) -> None:
     text = world.call("Bash", "command", command)
     assert text
-    assert "write the path literally" in text
+    assert "inline the substitution or write the path literally" in text
 
 
 @pytest.mark.parametrize("command", SUBSTITUTION_ALLOWED)
@@ -941,12 +941,15 @@ UNKNOWN_VARIABLE_REFUSED = [
     'X=$(echo b3BlbmNvZGUgZGI= | base64 -d); bash -c "$X"',
     "X=$(echo b3BlbmNvZGUgZGI= | base64 -d); $X",
     "d=$(echo <serve>/passwor)d; cat $d",
-    "d=$(date); cat $d",
-    'd=$(date); cat "$d"',
-    "d=$(date); cat ${d}",
-    "d=$(date); cp $d <project>/copy",
-    "sha=$(git rev-parse HEAD); git log $sha",
     "export X=$(date); sh -c $X",
+    # Ruling 20: after eval, -c, source or `.`, next to a `/`, or as a cd target.
+    "X=$(date); source $X",
+    "X=$(date); . $X",
+    'X=$(date); sh -c "$X"',
+    'X=$(date); eval "$X"',
+    "d=$(date); cat $d/password",
+    "d=$(date); cat ${d}/password",
+    "d=$(date); cd $d && ls",
 ]
 UNKNOWN_VARIABLE_ALLOWED = [
     "d=$(date); echo $d",
@@ -954,18 +957,28 @@ UNKNOWN_VARIABLE_ALLOWED = [
     "d=$(date); printf %s $d",
     "x=1; cat README.md",
     "d=$(date)",
+    # Ruling 20: a plain argument of any program.
+    "sha=$(git rev-parse HEAD); git log $sha",
+    "pid=$(cat p.pid); kill $pid",
+    "branch=$(git branch --show-current); git push origin $branch",
+    "d=$(date); cat $d",
+    'd=$(date); cat "$d"',
+    "d=$(date); cat ${d}",
+    "d=$(date); cp $d <project>/copy",
 ]
 
 
 @pytest.mark.parametrize("command", UNKNOWN_VARIABLE_REFUSED)
-def test_a_variable_set_from_a_substitution_is_refused_as_a_program_or_an_argument(
+def test_a_variable_set_from_a_substitution_is_refused_where_it_runs_or_builds_a_path(
     world: World, command: str
 ) -> None:
     assert world.call("Bash", "command", command)
 
 
 @pytest.mark.parametrize("command", UNKNOWN_VARIABLE_ALLOWED)
-def test_a_variable_set_from_a_substitution_may_be_echoed(world: World, command: str) -> None:
+def test_a_variable_set_from_a_substitution_may_be_a_plain_argument(
+    world: World, command: str
+) -> None:
     assert world.call("Bash", "command", command) is None
 
 
@@ -1039,6 +1052,16 @@ RUNS_A_COMMAND_REFUSED = [
     "rg --pre opencode x",
     "rg --pre-glob '*.x' y",
     "env git -c core.pager=x log",
+    # Round 4, M1: a short-flag bundle that holds the option.
+    "git rebase -qx 'opencode db' HEAD~1",
+    "git difftool -yx 'opencode db'",
+    "man -aP 'opencode db' ls",
+    # Round 4, M7: an assignment before the program, under env, or exported.
+    "env GIT_PAGER=x git log",
+    "sudo GIT_PAGER=x git log",
+    "export PAGER=x; man ls",
+    "EDITOR=x git commit",
+    "bash -c 'GIT_PAGER=x git log'",
 ]
 RUNS_A_COMMAND_ALLOWED = [
     "git commit -m 'fix opencode db'",
@@ -1051,6 +1074,14 @@ RUNS_A_COMMAND_ALLOWED = [
     "man ls",
     "rg foo",
     "git commit -m 'set PAGER later'",
+    # Round 4, M1: the same bundles without the option.
+    "git rebase -qi HEAD~2",
+    "git difftool -y HEAD~1",
+    "man -a ls",
+    # Round 4, M7: the names as text, not as an assignment.
+    "git commit -m 'docs: set PAGER=less in the guide'",
+    "echo GIT_DIR=x",
+    "grep -rn GIT_PAGER= .",
 ]
 
 
@@ -1171,12 +1202,19 @@ PROCESS_SUBSTITUTION_REFUSED = [
     "zsh < <(echo ls)",
     "exec bash <(curl x)",
     "dash <(echo ls)",
+    # Round 4, N2: a shell given by its path.
+    "/bin/bash <(echo opencode db)",
+    "/usr/bin/bash <(echo opencode db)",
+    "/bin/sh < <(echo ls)",
+    "env /bin/bash <(echo ls)",
 ]
 PROCESS_SUBSTITUTION_ALLOWED = [
     "diff <(sort a) <(sort b)",
     "cat <(echo hi)",
     "./script.sh <(echo hi)",
     "while read x; do echo $x; done < <(ls)",
+    "/usr/bin/diff <(sort a) <(sort b)",
+    "/bin/cat <(echo hi)",
 ]
 
 
@@ -1187,6 +1225,86 @@ def test_a_shell_that_reads_a_process_substitution_is_refused(world: World, comm
 
 @pytest.mark.parametrize("command", PROCESS_SUBSTITUTION_ALLOWED)
 def test_a_process_substitution_for_another_program_is_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+# Round 4, N1: a `cd` whose target the guard cannot know (an unset variable goes home, so does a
+# bare `cd` with a redirect; `cd -` goes back) is closed before a program that reads.
+UNKNOWN_CD_REFUSED = [
+    "cd $XDG_DATA_HOME && grep -r password",
+    "cd $XDG_CONFIG_HOME && grep -r password",
+    "cd ${NOPE} && grep -r password",
+    "cd $NOPE && rg password",
+    "cd 2>/dev/null && rg password",
+    "cd >/dev/null; grep -r password",
+    "cd - && grep -r password",
+    "cd $OLDPWD && grep -r password",
+    "cd $NOPE && cd state && cat serve/password",
+]
+UNKNOWN_CD_ALLOWED = [
+    "cd $NOPE && ls",
+    "cd - && pwd",
+    "cd 2>/dev/null && ls",
+    "cd <project> 2>/dev/null && rg password",
+    "cd <project> >/dev/null && grep -r password",
+]
+UNSET_IN_THE_HOOK = ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "NOPE", "OLDPWD")
+
+
+@pytest.mark.parametrize("command", UNKNOWN_CD_REFUSED)
+def test_a_cd_to_a_folder_the_guard_cannot_know_is_refused_before_a_reading_program(
+    world: World, command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in UNSET_IN_THE_HOOK:
+        monkeypatch.delenv(name, raising=False)
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", UNKNOWN_CD_ALLOWED)
+def test_a_cd_the_guard_cannot_know_then_a_listing_is_allowed(
+    world: World, command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in UNSET_IN_THE_HOOK:
+        monkeypatch.delenv(name, raising=False)
+    assert world.call("Bash", "command", command) is None
+
+
+def test_an_unknown_cd_target_is_refused_where_home_does_not_hold_the_profile(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NOPE", raising=False)
+    monkeypatch.setenv("HOME", str(world.project))
+    assert world.call("Bash", "command", "cd $NOPE && grep -r password")
+    assert world.call("Bash", "command", "cd - && rg password")
+    assert world.call("Bash", "command", "cd $NOPE && ls") is None
+
+
+# Round 4, N3: `source` and `.` read a pipe, a heredoc or a here-string as a shell does.
+SOURCE_STDIN_REFUSED = [
+    "echo 'opencode db' | source /dev/stdin",
+    "echo 'opencode db' | . /dev/stdin",
+    "source /dev/stdin <<< 'opencode db'",
+    ". /dev/stdin <<< 'opencode db'",
+    "source /dev/stdin <<<'opencode db'",
+    "echo ls | source /dev/stdin",
+    "source /dev/stdin <<EOF\nopencode db\nEOF",
+]
+SOURCE_STDIN_ALLOWED = [
+    "source scripts/setup.sh",
+    ". scripts/setup.sh",
+    "source /dev/stdin <<< 'echo hi'",
+    "cat <<< 'opencode db'",
+    "echo ls | cat",
+]
+
+
+@pytest.mark.parametrize("command", SOURCE_STDIN_REFUSED)
+def test_source_reading_a_pipe_or_a_here_string_is_refused(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", SOURCE_STDIN_ALLOWED)
+def test_source_of_a_file_or_a_harmless_string_is_allowed(world: World, command: str) -> None:
     assert world.call("Bash", "command", command) is None
 
 
