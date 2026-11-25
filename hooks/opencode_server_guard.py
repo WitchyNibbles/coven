@@ -17,7 +17,8 @@ What it refuses:
   after a program that may run it (everything but a short list of programs that never run their
   arguments: `echo`, `grep`, `ls`, `git`...);
 - any text that names the server's port, a WebFetch URL included (read from `<serve>/port` at
-  call time; with no usable port file, any loopback address with a port);
+  call time; with no usable port file, no server listens, and the `opencode` commands are refused
+  as always);
 - a read, grep or glob of the serve folder or the profile's `data/` folder, and
   `/proc/<pid>/environ`, `ps` options that print environments (`e`, `-E`, `eww`);
 - a folder that holds the serve or the `data/` folder (the profile, `/`...) for the file tools, and
@@ -27,9 +28,11 @@ What it refuses:
   diff|show|grep|blame`...) and nothing is redirected to a file. That covers the words of the
   line, the working folder and every folder a `cd` moves to (a bare `cd`, also with a redirection,
   is home), so `rg password` run in the folder that holds the profile is refused, unless the line
-  first moves to a literal folder that holds no closed place (`cd proj && ...`, `git -C proj`); a
-  `cd` whose folder cannot be known (`cd -`, `cd ~-`, `cd $UNSET`, which bash runs as a bare `cd`)
-  is refused on a line with a program that reads;
+  first moves to a literal folder that holds no closed place (`cd proj && ...`, `cd proj; ...`,
+  a lone `git -C proj ...`, and no file written by that first command); a `cd` whose folder cannot
+  be known (`cd -`, `cd ~-`, `cd $UNSET`, which bash runs as a bare `cd`, `pushd +1`) and a word
+  that names a folder only the shell remembers (`$OLDPWD`, `~-`, `~1`) are refused on a line with
+  a program that reads;
 - an option or variable that makes git, man or rg run a command (`git -c`, `git bisect run`,
   `git rebase --exec`, `git submodule foreach`, `git difftool -x`, `man -P`, also in a bundle such
   as `-qx`, `rg --pre`, and `GIT_*=`, `PAGER=`, `EDITOR=` assigned before a program or exported),
@@ -40,7 +43,8 @@ What it refuses:
 - a write, edit or patch, and any shell command that names a path, in the protected set: the
   profile except its `tmp/` folder, the serve folder, and the coven root except its
   `.claude/worktrees/` folder; from a working folder in coven's checkout, a line runs only when it
-  only reads, or adds (or lists) a worktree under `.claude/worktrees/`;
+  only reads, adds (or lists) a worktree under `.claude/worktrees/`, or first moves into one the
+  way a line moves out of a folder that holds the profile (it is then judged from the worktree);
 - a command substitution (`$(...)`, backticks) that builds a program name, a path or a `cd`
   target, because what it prints is not seen: the text says to inline the substitution or write
   the path literally (a quoted heredoc body is literal text, not read for this);
@@ -264,6 +268,8 @@ RUNNING_VARIABLE = re.compile(r"(GIT_\w+|\w*PAGER|\w*EDITOR|VISUAL)(\+?=)(.*)", 
 PLAIN_PAGERS = frozenset({"", "cat", "less"})
 # `cd ~-`, `cd ~2`, `cd ~+1`, `cd ~-1`: the previous folder or one of the folder stack.
 STACK_TILDE = re.compile(r"~(?:-\d*|\+?\d+)(?:/.*)?", re.DOTALL)
+# `pushd +1`, `pushd -0` (and zsh's `cd +1`): a turn of the folder stack.
+STACK_TURN = re.compile(r"[+-]\d+")
 # Builtins whose arguments are assignments (`export PAGER=x`).
 ASSIGNING_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
 # Variables of the PM's shell that this process's own environment cannot answer for.
@@ -272,9 +278,6 @@ SHELL_ONLY_VARIABLES = frozenset({"OLDPWD"})
 BRACKET_CLASS = re.compile(r"\[[\^!]|\[\[[:.=]")
 GLOB_MARKS = "*?["
 ENVIRON_TEXT = re.compile(r"/proc\b[^\s;|&<>()]*\benviron\b")
-LOOPBACK_PORT = re.compile(
-    r"(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[?::1?\]?)\s*[: ]\s*\d+", re.IGNORECASE
-)
 
 
 def _ansi_c(text: str) -> str:
@@ -507,6 +510,20 @@ def _cd_target(words: str) -> str | None:
     return None
 
 
+def _names_no_folder(target: str) -> bool:
+    """Whether a `cd` or `pushd` target is a place in the shell's own memory, not a folder:
+    `-`, `~-`, `~N`, `+N`, `-N`."""
+    return target == "-" or bool(STACK_TILDE.fullmatch(target) or STACK_TURN.fullmatch(target))
+
+
+def _names_a_remembered_folder(word: str) -> bool:
+    """Whether a word is, or holds, a folder only the PM's shell knows: `$OLDPWD`, `~-`, `~N`."""
+    return bool(STACK_TILDE.fullmatch(word)) or any(
+        (match.group(1) or match.group(2)) in SHELL_ONLY_VARIABLES
+        for match in VARIABLE.finditer(word)
+    )
+
+
 @dataclass(frozen=True)
 class Moves:
     """The working folder, every folder a `cd` or `pushd` of the line moves to, in order (the
@@ -530,8 +547,8 @@ def _moves(quoting: Quoting, cwd: Path, names: Names, scope: Scope) -> Moves:
         here = cwd
         for verb, words in CD_LINE.findall(variant):
             target = _cd_target(words)
-            expanded = ""  # `cd`, `cd -`, `cd ~-`: no folder named
-            if target is not None and target != "-" and not STACK_TILDE.fullmatch(target):
+            expanded = ""  # `cd`, `cd -`, `cd ~-`, `pushd +1`: no folder named
+            if target is not None and not _names_no_folder(target):
                 expanded = _tilde(names.expand(target), here)
             moved: Path | None
             if target is None and verb == "cd":
@@ -1126,16 +1143,28 @@ def _runs_unknown_variable(words: Sequence[str], command: Sequence[str], names: 
 
 
 def _launched(command: Sequence[str]) -> list[str]:
-    """The program a launcher runs (`uv run X`, `uvx X`, `pipx run X`, `poetry run X`): the first
-    word after its options and its run word; none for a program that is not a launcher."""
+    """The words that may be the program a launcher runs (`uv run X`, `uvx X`, `pipx run X`,
+    `poetry run X`); none for a program that is not a launcher. Which of the launcher's options
+    take a value is not known, so a word after an option may be its value or the program: each
+    such word counts, up to the first word that cannot be a value (`uv run --with foo $x db`
+    counts `foo` and `$x`; `uv run pytest -k $sha` counts only `pytest`)."""
     name = _base(command[0])
     if name not in wrapper_commands.LAUNCHERS:
         return []
     run_words = wrapper_commands.LAUNCHER_RUN_WORDS.get(name, frozenset({"run"}))
+    found: list[str] = []
+    may_be_a_value = False
     for word in command[1:]:
-        if not (word.startswith("-") or word in run_words):
-            return [word]
-    return []
+        if word in run_words:
+            may_be_a_value = False
+        elif word.startswith("-"):
+            may_be_a_value = "=" not in word
+        else:
+            found.append(word)
+            if not may_be_a_value:
+                break
+            may_be_a_value = False
+    return found
 
 
 def _sets_a_running_variable(prefix: Sequence[str], command: Sequence[str]) -> bool:
@@ -1208,10 +1237,6 @@ def check_text(quoting: Quoting, scope: Scope) -> None:
     for variant in (quoting.text, *quoting.variants):
         if scope.port is not None and re.search(rf"(?<!\d){scope.port}(?!\d)", variant):
             raise RefusedError("the coven OpenCode server's port is closed to a PM")
-        if scope.port is None and LOOPBACK_PORT.search(variant):
-            raise RefusedError(
-                "a loopback port is closed to a PM while the server's port is unknown"
-            )
         if ENVIRON_TEXT.search(variant):
             raise RefusedError("another process's environment is closed to a PM")
 
@@ -1338,27 +1363,37 @@ def _coven_checkout_allows(command: str, commands: Sequence[Argv], cwd: Path, sc
 
 def _first_folder(command: str, cwd: Path) -> Path | None:
     """The folder a line moves to before any other program runs: the literal, existing folder of
-    a first `cd <dir>` or `pushd <dir>` (the rest of the line runs there), or of `git -C <dir>` or
-    `env -C <dir>` when that is the only command. None for any other line, and for one with a
-    subshell or a `popd`, which go back to the working folder."""
+    a first `cd <dir>` or `pushd <dir>` followed by `&&`, `;` or a newline (the rest of the line
+    runs there), or of `git -C <dir>` or `env -C <dir>` when that is the only command. None for
+    any other line: one the scanner cannot follow, one whose first command writes a file (its
+    redirection is read from the working folder), and one with a subshell or a `popd`, which go
+    back to the working folder."""
     if re.search(r"[()]|\bpopd\b", command):
         return None
-    top = _commands(command)
-    if not top:
+    scanned = hook_support.sibling("shell_words").simple_commands(command, substitutions=True)
+    top = [each for each in scanned or () if each.words]
+    if not top or top[0].writes:
         return None
-    words = list(top[0].words)
+    words = [word.value if word.value is not None else word.raw for word in top[0].words]
     name = _base(words[0])
     target: str | None = None
-    if name in ("cd", "pushd"):
+    if name in ("cd", "pushd") and _then_follows(command[top[0].end :]):
         target = next((each for each in words[1:] if not CD_OPTION.fullmatch(each)), None)
     elif name in ("git", "env") and len(top) == 1:
         target = _chdir_value(words[1:])
-    if target is None or target == "-" or STACK_TILDE.fullmatch(target):
+    if target is None or _names_no_folder(target):
         return None
     if "$" in target or any(mark in target for mark in GLOB_MARKS):
         return None
     folder = _folder_of(target, cwd)
     return folder if folder is not None and folder.is_dir() else None
+
+
+def _then_follows(rest: str) -> bool:
+    """Whether the text after a first command runs the next one only after it (`&&`, `;`, a
+    newline) or holds nothing: not beside it (`&`), into it (`|`) or in its place (`||`)."""
+    rest = rest.lstrip(" \t")
+    return not rest or rest.startswith(("&&", ";", "\n"))
 
 
 def _chdir_value(arguments: Sequence[str]) -> str | None:
@@ -1396,32 +1431,59 @@ def _bases(command: str, moves: Moves, view: View) -> tuple[Path, ...]:
     return tuple(dict.fromkeys((first, *moves.later)))
 
 
+def _judged_from(command: str, cwd: Path, scope: Scope) -> tuple[Path, bool]:
+    """The folder a line is judged from, and whether it is held to the checkout rule: a line run
+    in coven's checkout that first moves into a worktree under `.claude/worktrees/` is judged from
+    that worktree (Ruling 23's entry, applied to the checkout); any other line run there is held
+    to the rule. Raise RefusedError for a working folder that is closed."""
+    if not _in_coven_checkout(cwd, scope):
+        rule = hit(cwd, scope, Mode.SHELL)
+        if rule:
+            raise RefusedError(rule)
+        return cwd, False
+    entered = _first_folder(command, cwd)
+    if (
+        entered is not None
+        and entered != scope.worktrees
+        and entered.is_relative_to(scope.worktrees)
+    ):
+        return entered, False
+    return cwd, True
+
+
 def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
     quoting = Quoting.of(command)
     check_text(quoting, scope)
     names = Names(quoting, scope, cwd)
-    in_coven = _in_coven_checkout(cwd, scope)
-    rule = hit(cwd, scope, Mode.SHELL)
-    if rule and not in_coven:
-        raise RefusedError(rule)
+    here, in_coven = _judged_from(command, cwd, scope)
     commands = argvs(command)
     if in_coven and not _coven_checkout_allows(command, commands, cwd, scope):
         raise RefusedError(COVEN_CHECKOUT_RULE)
     for argv in commands:
-        check_command(argv, names, cwd)
+        check_command(argv, names, here)
     view = View(
         scope,
-        cwd,
+        here,
         names,
         profile_folders_closed=not _only_names_paths(commands),
         coven_folders_closed=not _only_reads(command, commands),
         coven_open=in_coven,
     )
-    moves = _moves(quoting, cwd, view.names, scope)
+    found = _moves(quoting, cwd, view.names, scope)
+    # A line that first moves into a worktree runs there: the checkout is not one of its folders.
+    moves = Moves(here, found.later, found.unknown)
     if moves.unknown and view.profile_folders_closed:
         raise RefusedError(
             "a `cd` to a folder that cannot be known (`cd -`, an unset variable) is closed"
             " before a program that reads; write the folder literally"
+        )
+    words = _words_of(quoting)
+    if view.profile_folders_closed and any(
+        _names_a_remembered_folder(names.expand(word)) for word in words
+    ):
+        raise RefusedError(
+            "a folder the shell remembers (`$OLDPWD`, `~-`, `~1`) cannot be known to a program"
+            " that reads; write the folder literally"
         )
     bases = _bases(command, moves, view)
     # Every folder a program of the line runs in (a bare `cd` is home): what a program run there
@@ -1430,7 +1492,7 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         rule = holds_closed_place(folder, view, Mode.SHELL)
         if rule:
             raise RefusedError(rule)
-    for word in _words_of(quoting):
+    for word in words:
         check_word(word, bases, view, Mode.SHELL)
 
 

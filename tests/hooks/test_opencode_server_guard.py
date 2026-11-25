@@ -286,17 +286,23 @@ def test_another_port_is_allowed(world: World, command: str) -> None:
     assert world.call("Bash", "command", command) is None
 
 
-def test_with_no_port_known_any_loopback_port_is_refused(world: World) -> None:
+def test_with_no_port_known_a_loopback_port_is_allowed(world: World) -> None:
     unknown = World(**{**world.__dict__, "port": None})
-    assert unknown.call("Bash", "command", "curl http://127.0.0.1:8080/")
-    assert unknown.call("Bash", "command", "curl localhost:9")
-    assert unknown.call("Bash", "command", "curl https://example.com/") is None
+    assert unknown.call("Bash", "command", "curl http://127.0.0.1:5173/") is None
+    assert unknown.call("Bash", "command", "curl localhost:9") is None
+    assert unknown.call("WebFetch", "url", "http://localhost:5173/") is None
+
+
+def test_with_a_port_known_only_the_servers_port_is_refused(world: World) -> None:
+    assert world.call("Bash", "command", "curl http://127.0.0.1:<port>/")
+    assert world.call("Bash", "command", "curl http://127.0.0.1:5173/") is None
 
 
 def test_no_port_file_still_refuses_opencode_api(world: World) -> None:
     unknown = World(**{**world.__dict__, "port": None})
     assert unknown.call("Bash", "command", "opencode api session.list")
     assert unknown.call("Bash", "command", "npx opencode api x")
+    assert unknown.call("Bash", "command", "opencode serve stop")
     assert unknown.call("Bash", "command", "opencode --version") is None
 
 
@@ -1538,6 +1544,137 @@ def test_the_unknown_cd_refusal_says_to_write_the_folder_literally(
     assert "write the folder literally" in text
 
 
+# Task 7b, 1: from coven's checkout, a line that first moves into a worktree under
+# .claude/worktrees/ is judged from that worktree.
+INTO_A_WORKTREE_ALLOWED = [
+    "cd .claude/worktrees/t1 && git commit -am x",
+    "cd .claude/worktrees/t1 && uv run pytest",
+    "git -C .claude/worktrees/t1 status",
+    "git -C .claude/worktrees/t1 commit -am x",
+    "cd <coven>/.claude/worktrees/t1 && touch x",
+    "pushd .claude/worktrees/t1; npm test",
+    "cd .claude/worktrees/t1 2>/dev/null && touch x",
+]
+INTO_A_WORKTREE_REFUSED = [
+    "cd .claude/worktrees/t1/../.. && touch x",
+    "cd .claude/worktrees && rm -rf ../..",
+    "touch x",
+    "cd .claude/worktrees/t1 && cd ../.. && git commit -am x",
+    "cd .claude/worktrees/t1 && touch ../../../pyproject.toml",
+    "cd .claude/worktrees/t1 > pyproject.toml && ls",
+    "cd .claude/worktrees/t1 | git commit -am x",
+    "cd .claude/worktrees/t1 || git commit -am x",
+    "cd .claude/worktrees/t1 & git commit -am x",
+    "cd .claude/worktrees/t1 && cat <profile>/profile.json",
+    "git -C .claude/worktrees/t1 status; touch x",
+    "cd .claude/worktrees/missing && touch x",
+    "cd .claude/worktrees/t1 && cd - && touch x",
+    "cd .claude/worktrees/t1 && cd <coven> && touch x",
+    "pushd .claude/worktrees/t1 && popd && touch x",
+    "cd .claude/worktrees/t1 && touch $OLDPWD/x",
+]
+
+
+@pytest.fixture
+def worktree_t1(world: World) -> Path:
+    worktree = world.coven / ".claude" / "worktrees" / "t1"
+    touch(worktree / "README.md")
+    return worktree
+
+
+@pytest.mark.parametrize("command", INTO_A_WORKTREE_ALLOWED)
+def test_a_line_that_first_moves_into_a_worktree_is_judged_from_there(
+    world: World, worktree_t1: Path, command: str
+) -> None:
+    assert call_in(world, world.fill(command), world.coven) is None
+
+
+@pytest.mark.parametrize("command", INTO_A_WORKTREE_REFUSED)
+def test_a_line_that_does_not_stay_in_a_worktree_follows_the_checkout_rule(
+    world: World, worktree_t1: Path, command: str
+) -> None:
+    assert call_in(world, world.fill(command), world.coven)
+
+
+# Task 7b, 2-4: the first move counts only when `&&`, `;` or a newline follows it and it writes no
+# file; `pushd +N`/`-N` and `$OLDPWD`, `~-`, `~N` as words are folders the guard cannot know.
+FIRST_MOVE_ALLOWED = [
+    "cd proj && grep -r x .",
+    "cd proj; git log",
+    "cd proj\ngrep -r x .",
+    "cd proj 2>/dev/null && grep -r x .",
+    "pushd proj && pushd +1 && ls",
+    "cd proj && echo $OLDPWD",
+    "cd proj && echo ~-",
+    "cd proj && ls ~- ~1",
+]
+FIRST_MOVE_REFUSED = [
+    "cd proj | grep -r password",
+    "cd proj & grep -r password",
+    "cd proj || grep -r password",
+    "cd proj > profile/x && grep -r x .",
+    "pushd proj && pushd +1 && grep -r password",
+    "pushd proj && pushd -0 && grep -r password",
+    "cd proj && cd -1 && grep -r password",
+    "cd proj && grep -r password $OLDPWD",
+    'cd proj && grep -r password "$OLDPWD"',
+    "cd proj && grep -r password ${OLDPWD}",
+    "cd proj && grep -r password ~-",
+    "cd proj && grep -r password ~-/profile",
+    "cd proj && grep -r password ~+1",
+    "cd proj && grep -r password ~-1",
+    "cd proj && grep -r password ~1",
+]
+
+
+@pytest.mark.parametrize("command", FIRST_MOVE_ALLOWED)
+def test_a_first_move_followed_by_and_or_a_separator_is_judged_from_its_folder(
+    world: World, home_with_a_project: Path, command: str
+) -> None:
+    assert call_in(world, command, home_with_a_project) is None
+
+
+@pytest.mark.parametrize("command", FIRST_MOVE_REFUSED)
+def test_a_first_move_that_may_not_hold_or_a_folder_not_known_is_refused(
+    world: World, home_with_a_project: Path, command: str
+) -> None:
+    assert call_in(world, command, home_with_a_project)
+
+
+def test_a_previous_folder_word_is_refused_from_a_project_too(world: World) -> None:
+    assert world.call("Bash", "command", "grep -r password $OLDPWD")
+    assert world.call("Bash", "command", "echo $OLDPWD") is None
+
+
+# Task 7b, 5: a launcher's program may stand after an option's value.
+LAUNCHED_VARIABLE_REFUSED = [
+    "x=$(echo opencode); uv run --with foo $x db",
+    "x=$(echo opencode); uv run -p 3.12 $x db",
+    "x=$(echo opencode); uvx --from foo $x db",
+    "x=$(echo opencode); uv --directory foo run $x db",
+    "x=$(echo opencode); poetry run -q $x db",
+]
+LAUNCHED_VARIABLE_ALLOWED = [
+    "sha=$(git rev-parse HEAD); uv run pytest -k $sha",
+    "x=$(date); uv run --with foo pytest -k $x",
+    "x=$(date); uvx ruff check $x",
+]
+
+
+@pytest.mark.parametrize("command", LAUNCHED_VARIABLE_REFUSED)
+def test_a_substitution_variable_after_a_launcher_option_value_is_refused(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", LAUNCHED_VARIABLE_ALLOWED)
+def test_a_substitution_variable_after_the_launched_program_is_an_argument(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
 # main: the way Claude Code and the plugin run it.
 
 
@@ -1592,13 +1729,13 @@ def test_main_reads_the_port_from_the_port_file_at_call_time(world: World) -> No
 @pytest.mark.parametrize("content", ["", "abc", "0", "70000", "-5", "4096 4097"])
 def test_a_port_file_with_no_valid_port_counts_as_no_port(world: World, content: str) -> None:
     touch(world.serve / "port", content)
-    assert run_main(world, bash_payload(world, "curl http://127.0.0.1:8080/")).returncode == 2
-    assert run_main(world, bash_payload(world, "curl https://example.com/")).returncode == 0
+    assert run_main(world, bash_payload(world, "curl http://127.0.0.1:8080/")).returncode == 0
+    assert run_main(world, bash_payload(world, "opencode serve stop")).returncode == 2
 
 
 def test_no_port_file_counts_as_no_port(world: World) -> None:
     (world.serve / "port").unlink()
-    assert run_main(world, bash_payload(world, "curl localhost:8080")).returncode == 2
+    assert run_main(world, bash_payload(world, "curl localhost:8080")).returncode == 0
     assert run_main(world, bash_payload(world, "opencode api x")).returncode == 2
     assert run_main(world, bash_payload(world, "opencode --version")).returncode == 0
 
