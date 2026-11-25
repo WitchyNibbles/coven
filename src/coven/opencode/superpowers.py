@@ -1,12 +1,13 @@
-"""The superpowers skills coven's routing names, copied from Claude Code's plugin install."""
+"""The superpowers skills coven's routing names, copied from the pinned clone or the Claude plugin."""
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 from coven import paths, safe_json
+from coven.opencode.profile import Layout
 from coven.opencode.rewrite import rename_skills
 
 SKILLS: Final = (
@@ -20,6 +21,11 @@ SKILLS: Final = (
     "executing-plans",
 )
 PLUGIN_PREFIX: Final = "superpowers@"
+# The pinned upstream release `coven opencode install` clones: the tag, and the commit it must
+# resolve to (a moved or forged tag fails the check).
+REPO_URL: Final = "https://github.com/obra/superpowers"
+PINNED_TAG: Final = "v7.0.2"
+PINNED_SHA: Final = "22f0b463e7a5e579904dd6211a520321035526f7"
 _FOLDER_PREFIX: Final = "superpowers-"
 
 
@@ -55,6 +61,22 @@ def find() -> Path | None:
             if (install / "skills").is_dir():
                 return install / "skills"
     return None
+
+
+class Source(NamedTuple):
+    """The `skills/` folder setup copies from, and how to name it to the user."""
+
+    skills: Path
+    label: str
+
+
+def source(layout: Layout) -> Source | None:
+    """The pinned clone in the profile if it is there, else Claude Code's plugin, else `None`."""
+    clone = layout.superpowers_dir(PINNED_TAG) / "skills"
+    if clone.is_dir():
+        return Source(clone, f"{PINNED_TAG} clone")
+    plugin = find()
+    return Source(plugin, "Claude Code plugin") if plugin is not None else None
 
 
 def _copy_skill(source: Path, target: Path) -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from coven import paths
-from coven.opencode import checks, generate, install, runtime
+from coven.opencode import checks, generate, install, runtime, superpowers
 from coven.opencode.checkout import needs_checkout
 from coven.opencode.profile import (
     ASSUMED_CONTEXT,
@@ -45,7 +45,8 @@ def _preset_line(profile: Profile) -> str:
 def _superpowers_warning(missing: list[str]) -> str:
     return (
         f"warning: superpowers skills not found: {', '.join(missing)} "
-        "(install the superpowers plugin in Claude Code, then re-run coven opencode setup)"
+        f"(run `coven opencode install`, which fetches superpowers {superpowers.PINNED_TAG}, or "
+        "install the superpowers plugin in Claude Code; then re-run coven opencode setup)"
     )
 
 
@@ -79,6 +80,8 @@ def run_setup(args: argparse.Namespace) -> int:
         print(f"{role}: {profile.model(role)}")
     for line in (*_limit_lines(profile), *_limit_warning(profile)):
         print(line)
+    if found := superpowers.source(home):
+        print(f"superpowers: {found.label}")
     if missing:
         print(_superpowers_warning(missing))
     print("next: coven opencode doctor")
@@ -137,7 +140,8 @@ def register(subparsers: Any) -> None:
     run.add_argument("opencode_args", nargs=argparse.REMAINDER, metavar="-- ARGS")
     run.set_defaults(handler=needs_checkout(run_run))
     install_parser = commands.add_parser(
-        "install", help="install the pinned OpenCode runtime into the profile with npm"
+        "install",
+        help="install the pinned OpenCode (npm) and superpowers v7.0.2 (git) into the profile",
     )
     install_parser.add_argument(
         "--version", default=PINNED_VERSION, metavar="X.Y.Z", help=f"default {PINNED_VERSION}"

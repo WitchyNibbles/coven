@@ -17,6 +17,10 @@
   into the config. The plugin refuses a `read`, `grep`, `glob`, `shell`, `write`, `edit` or `patch`
   that `deny_secrets.py` refuses, and fails closed. `coven opencode doctor` adds a `superpowers`
   check.
+- `coven opencode install` also clones superpowers v7.0.2 with `git` into the profile, checked
+  against its pinned commit, and `coven opencode setup` copies its eight skills from that clone
+  before falling back to Claude Code's plugin, so OpenCode no longer needs Claude Code for them.
+  Without `git`, install warns and exits 0.
 - `coven opencode setup` makes `shell` and `webfetch` ask before they run, for every agent. A
   headless `opencode run` rejects the ask, so shell is for the TUI.
 - `coven opencode setup --limit ID=CONTEXT[:OUTPUT]` (litellm preset) writes a model's token window

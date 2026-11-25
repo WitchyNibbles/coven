@@ -67,11 +67,14 @@ OpenCode as given, and OpenCode appends `/chat/completions`. Setup prints a warn
 does not end in `/v1`. It refuses a URL that carries credentials, a query or a fragment; the key
 comes from the `--key-env` variable.
 
-**Superpowers.** Setup copies eight superpowers skills (listed under `setup` in Commands below)
-from Claude Code's superpowers plugin, which it finds through Claude Code's installed-plugins
-file. There is no other source for them today. Without that plugin, setup prints one warning, adds
-a note to `AGENTS.md`, and `doctor`'s `superpowers` check warns. The routing still names those
-skills, so a step that loads one is skipped.
+**Superpowers.** Setup copies eight superpowers skills (listed under `setup` in Commands below).
+`coven opencode install` fetches them with `git`: a clone of obra/superpowers at tag v7.0.2,
+checked against its pinned commit, in `P/superpowers/v7.0.2`. Setup copies from that v7.0.2 clone
+when it is there. If it is not (no `git`, or the clone failed, which install only warns about),
+setup falls back to Claude Code's superpowers plugin, which it finds through Claude Code's
+installed-plugins file, and prints which of the two it used. With neither, setup prints one
+warning, adds a note to `AGENTS.md`, and `doctor`'s `superpowers` check warns. The routing still
+names those skills, so a step that loads one is skipped.
 
 **Memory.** `AGENTS.md` points at your memory store when the folder in `memory_path` of
 `~/.config/coven/config.json` exists (default `~/coven-memory`; `coven memory init` creates it).
@@ -114,12 +117,19 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
     coven opencode run -- ARGS
     coven opencode doctor
 
-- `install` runs npm to put the pinned OpenCode into `P/runtime`. It is the only step that uses the
-  network. npm runs with the profile env: the profile's XDG, temp and config folders, no key env and no
-  inherited `OPENCODE_` setting, so the package's postinstall check never writes into your own
-  OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm cache
-  still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2
-  binary instead.
+- `install` runs npm to put the pinned OpenCode into `P/runtime`, then runs `git clone` to put
+  superpowers v7.0.2 into `P/superpowers/v7.0.2` (skipped when it is already there). These are the
+  only steps that use the network.
+  - npm runs with the profile env: the profile's XDG, temp and config folders, no key env and no
+    inherited `OPENCODE_` setting, so the package's postinstall check never writes into your own
+    OpenCode folders. `HOME`, `PATH` and the proxy variables stay, so your `.npmrc` and the npm
+    cache still work. `COVEN_OPENCODE_BIN` points at an existing 2.3.2 binary instead.
+  - The clone goes over https only, with no hooks and no prompt, in its own process group, which a
+    timeout kills. Git's own config is not used for it (no mirrors, `insteadOf` rewrites or
+    credential helpers), because the pinned commit already checks what was downloaded; the proxy
+    environment variables (`https_proxy` and the rest) are used. A clone whose commit is not the
+    pinned one is removed and install fails. Without `git`, or when the clone fails, install warns
+    and still exits 0.
 - `setup` writes the config (with the content below), the plugin copy and `profile.json`, all or
   none. The preset
   `litellm` needs a gateway URL, the name of the variable holding its key (the name, never the
@@ -134,12 +144,12 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   - `skills/coven-*`, `agents/` and `commands/`, copied from `opencode/content/`;
   - `skills/superpowers-<x>` for brainstorming, writing-plans, test-driven-development,
     systematic-debugging, verification-before-completion, using-git-worktrees,
-    finishing-a-development-branch and executing-plans, copied from your Claude Code
-    superpowers plugin (found through its installed-plugins file). Only the skill names in the
-    text are renamed, so wording that is Claude Code's (its tool names) stays; that is a known gap.
-    When the plugin is not installed, setup prints one warning, appends a note to `AGENTS.md` and
-    leaves the copies out. A re-run after installing it adds them; a re-run after removing it
-    drops them;
+    finishing-a-development-branch and executing-plans, copied from the v7.0.2 clone in
+    `P/superpowers` or, without it, from your Claude Code superpowers plugin (found through its
+    installed-plugins file). Only the skill names in the text are renamed, so wording that is
+    Claude Code's (its tool names) stays; that is a known gap. When neither source exists, setup
+    prints one warning, appends a note to `AGENTS.md` and leaves the copies out. A re-run after
+    installing one adds them; a re-run after removing both drops them;
   - `AGENTS.md`: the routing, then a pointer to your memory store (the folder of `memory_path` in
     the coven config; with no folder, one line says so). A coven config that cannot be read makes
     setup fail;

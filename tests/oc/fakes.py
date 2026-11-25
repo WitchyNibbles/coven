@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import stat
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from coven.opencode import superpowers
 
@@ -195,3 +197,126 @@ def install_superpowers(
     data = {"version": 2, "plugins": {SUPERPOWERS_KEY: [entry] if as_list else entry}}
     (plugins / "installed_plugins.json").write_text(json.dumps(data))
     return install / "skills"
+
+
+REAL_GIT: Final = shutil.which("git")
+
+
+def git_on_path(folder: Path) -> Path:
+    """Make the real `git` reachable from `folder`, for a test whose PATH is only that folder."""
+    assert REAL_GIT is not None, "the tests need git"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "git").symlink_to(REAL_GIT)
+    return folder
+
+
+def superpowers_repo(folder: Path, names: tuple[str, ...] = superpowers.SKILLS) -> tuple[Path, str]:
+    """A local git repo standing in for upstream superpowers, tagged with the pinned tag.
+
+    Its skills say they come from the clone. Returns the repo and the commit the tag points at.
+    """
+    for name in names:
+        skill = folder / "skills" / name
+        skill.mkdir(parents=True)
+        body = f"---\nname: {name}\n---\nFrom the clone: use superpowers:writing-plans.\n"
+        (skill / "SKILL.md").write_text(body)
+    steps = [
+        ["init", "--quiet"],
+        ["add", "."],
+        ["commit", "--quiet", "-m", "superpowers"],
+        ["tag", "-a", superpowers.PINNED_TAG, "-m", superpowers.PINNED_TAG],
+    ]
+    assert REAL_GIT is not None, "the tests need git"
+    for step in steps:
+        subprocess.run([REAL_GIT, "-C", str(folder), *step], check=True, capture_output=True)
+    head = subprocess.run(
+        [REAL_GIT, "-C", str(folder), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return folder, head.stdout.strip()
+
+
+# What `superpowers.REPO_URL` is before the oc tests point it at a local path.
+REAL_REPO_URL: Final = superpowers.REPO_URL
+
+_GIT_BODY: Final = """
+import json
+import os
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+RECORD = Path(__RECORD__)
+GRANDCHILD = Path(__GRANDCHILD__)
+HANG = __HANG__
+
+
+def is_pipe(fd):
+    return stat.S_ISFIFO(os.fstat(fd).st_mode)
+
+
+with RECORD.open("a") as stream:
+    stream.write(json.dumps({
+        "argv": sys.argv[1:],
+        "env": dict(os.environ),
+        "stdout_pipe": is_pipe(1),
+        "stderr_pipe": is_pipe(2),
+        "session_leader": os.getsid(0) == os.getpid(),
+    }) + "\\n")
+work = Path(sys.argv[-1])
+work.mkdir(parents=True)
+(work / "partial").write_text("half a clone")
+if HANG:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    GRANDCHILD.write_text(str(child.pid))
+    time.sleep(60)
+print("fatal: fake failure", file=sys.stderr)
+sys.exit(128)
+"""
+
+
+def fake_git(folder: Path, *, hang: bool = False) -> Path:
+    """A `git` whose clone leaves a half clone in the target folder, then fails or hangs.
+
+    Each call appends a JSON line to `git_record(folder)`: its arguments, its whole env and how it
+    was started. With `hang`, it first starts a child of its own (pid in `git_grandchild(folder)`)
+    and then sleeps; the child holds no pipe of git's, as `index-pack` would not once git is gone.
+    """
+    body = (
+        _GIT_BODY.replace("__RECORD__", repr(str(git_record(folder))))
+        .replace("__GRANDCHILD__", repr(str(git_grandchild(folder))))
+        .replace("__HANG__", repr(hang))
+    )
+    return _make_executable(folder / "git", f"#!{sys.executable}\n{body}")
+
+
+def git_record(folder: Path) -> Path:
+    return folder / "git.record"
+
+
+def git_grandchild(folder: Path) -> Path:
+    return folder / "git.grandchild"
+
+
+def git_calls(folder: Path) -> list[dict[str, Any]]:
+    """The calls the fake git in `folder` saw, in order."""
+    lines = git_record(folder).read_text().splitlines()
+    return [json.loads(line) for line in lines]
+
+
+def process_is_running(pid: int) -> bool:
+    """Whether `pid` is a live process; a zombie waiting to be reaped is not."""
+    try:
+        stat_line = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat_line.rsplit(")", 1)[1].split()[0] != "Z"

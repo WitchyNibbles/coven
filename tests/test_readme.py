@@ -351,7 +351,8 @@ def test_the_opencode_install_section_has_each_paragraph() -> None:
         "`coven root` check fails",
         "regenerates from `profile.json`",
         "does not end in `/v1`",  # the base URL warning
-        "a step that loads one is skipped",  # superpowers without the plugin
+        "copies from that v7.0.2 clone",  # superpowers: the pinned clone comes first
+        "a step that loads one is skipped",  # superpowers with neither source
         "`superpowers` check warns",
         "memory_path",
         "opencode-harness",
@@ -363,9 +364,9 @@ def test_the_opencode_install_section_has_each_paragraph() -> None:
     assert not re.search(r"\d{4}-\d{2}-\d{2}", body), "the steps carry a date"
 
 
-def test_the_readme_requirements_name_node_and_npm_for_opencode() -> None:
+def test_the_readme_requirements_name_node_npm_and_git_for_opencode() -> None:
     body = section(readme(), "Requirements")
-    assert "For OpenCode: `node` and `npm`" in body
+    assert "For OpenCode: `node` and `npm`, and `git` for the superpowers fetch" in body
     assert "opencode/README.md#install" in body
 
 
@@ -398,6 +399,12 @@ def test_known_gaps_says_what_opencode_does_not_have() -> None:
     guard = bullet_about("production guard")
     assert "planned" not in guard  # only the hierarchy is planned
     assert "aquelarre" in guard.lower()
+
+
+def test_known_gaps_says_where_the_opencode_superpowers_come_from() -> None:
+    skills = bullet_about("Superpowers skills")
+    assert "v7.0.2 clone that `coven opencode install` fetches" in skills
+    assert "Claude Code's superpowers plugin" in skills
 
 
 def test_known_gaps_names_the_opencode_context_limit_and_the_clone() -> None:

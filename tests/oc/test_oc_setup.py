@@ -72,6 +72,7 @@ def test_setup_writes_config_profile_and_plugin(
         "final-reviewer: big",
         "title: small",
         NO_LIMIT_WARNING,
+        "superpowers: Claude Code plugin",
         "next: coven opencode doctor",
     ]
 
@@ -82,24 +83,25 @@ def test_setup_names_the_missing_superpowers_on_one_warning_line(
     install_superpowers(claude_plugins, superpowers.SKILLS[:2])
     assert setup(*LITELLM_FLAGS) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[-3:] == [
+    assert lines[-4:] == [
         NO_LIMIT_WARNING,
+        "superpowers: Claude Code plugin",
         "warning: superpowers skills not found: test-driven-development, systematic-debugging, "
         "verification-before-completion, using-git-worktrees, finishing-a-development-branch, "
-        "executing-plans (install the superpowers plugin in Claude Code, "
-        "then re-run coven opencode setup)",
+        "executing-plans (run `coven opencode install`, which fetches superpowers v7.0.2, or "
+        "install the superpowers plugin in Claude Code; then re-run coven opencode setup)",
         "next: coven opencode doctor",
     ]
-    assert sum("superpowers" in line for line in lines) == 1
+    assert sum("warning: superpowers" in line for line in lines) == 1
 
 
 def test_setup_with_no_superpowers_install_warns_and_still_succeeds(
     home: Path, capsys: pytest.CaptureFixture[str]
 ):
     assert setup(*LITELLM_FLAGS) == 0
-    assert "warning: superpowers skills not found: brainstorming, writing-plans" in (
-        capsys.readouterr().out
-    )
+    out = capsys.readouterr().out
+    assert "warning: superpowers skills not found: brainstorming, writing-plans" in out
+    assert "superpowers: " not in out.replace("warning: superpowers", "")
     assert (home / "config" / "opencode" / "AGENTS.md").is_file()
 
 
@@ -265,3 +267,21 @@ def test_the_opencode_preset_prints_no_limit_lines_or_warning(
         for line in capsys.readouterr().out.splitlines()
         if line.startswith(("limit", "warning: no limit"))
     ]
+
+
+def test_setup_copies_the_clone_and_names_it_even_with_a_plugin_installed(
+    home: Path, capsys: pytest.CaptureFixture[str], claude_plugins: Path
+):
+    install_superpowers(claude_plugins)
+    skills = home / "superpowers" / superpowers.PINNED_TAG / "skills"
+    for name in superpowers.SKILLS:
+        (skills / name).mkdir(parents=True)
+        (skills / name / "SKILL.md").write_text(
+            "---\nname: x\n---\nclone: superpowers:brainstorming\n"
+        )
+    assert setup(*LITELLM_FLAGS) == 0
+    copied = home / "config" / "opencode" / "skills" / "superpowers-writing-plans" / "SKILL.md"
+    assert copied.read_text() == "---\nname: x\n---\nclone: superpowers-brainstorming\n"
+    out = capsys.readouterr().out
+    assert "superpowers: v7.0.2 clone" in out.splitlines()
+    assert "warning: superpowers" not in out
