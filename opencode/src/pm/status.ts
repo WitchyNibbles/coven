@@ -15,13 +15,15 @@ export interface StatusDeps {
 
 const UNKNOWN_ID = "unknown id";
 
-/** The request id of one waiting ask: its `id`, else its `requestID`. */
+/** The request id of one waiting ask: the first non-empty string of its `id` and `requestID`. */
 function requestId(ask: unknown): string {
   if (!isPlainObject(ask)) {
     return UNKNOWN_ID;
   }
-  const id = ask["id"] ?? ask["requestID"];
-  return typeof id === "string" && id !== "" ? id : UNKNOWN_ID;
+  const named = [ask["id"], ask["requestID"]].find(
+    (id) => typeof id === "string" && id !== "",
+  );
+  return typeof named === "string" ? named : UNKNOWN_ID;
 }
 
 /**
@@ -45,14 +47,14 @@ export function serverStatus(deps: StatusDeps): PmStatus {
         if (!Array.isArray(waiting)) {
           throw new Error(`the ask list of ${id} is not a list`);
         }
-        ids.push(...(waiting as unknown[]).map(requestId));
+        ids.push(...waiting.map(requestId));
       }
       return ids;
     },
     async childBusyMs(sessionID) {
       const since = (await descendants(deps.session, sessionID))
         .filter(isBusy)
-        .map((child) => child.time?.busy ?? deps.now());
+        .flatMap((child) => child.time?.busy ?? []);
       return since.length === 0 ? undefined : deps.now() - Math.min(...since);
     },
     async lastMessage(sessionID) {

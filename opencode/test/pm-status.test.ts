@@ -111,6 +111,22 @@ await test("asks holds the request ids waiting in the pm and below it", async ()
   ]);
 });
 
+await test("asks takes the first string among id and requestID", async () => {
+  const { asks, status } = rig();
+  asks.set("pm1", [
+    { id: "", requestID: "per_4" },
+    { id: 7, requestID: "per_5" },
+    { id: "per_6", requestID: "per_7" },
+    { id: "", requestID: 9 },
+  ]);
+  assert.deepEqual(await status.asks("pm1"), [
+    "per_4",
+    "per_5",
+    "per_6",
+    "unknown id",
+  ]);
+});
+
 await test("asks is empty when nothing waits", async () => {
   const { status } = rig([{ id: "kid1", parentID: "pm1" }]);
   assert.deepEqual(await status.asks("pm1"), []);

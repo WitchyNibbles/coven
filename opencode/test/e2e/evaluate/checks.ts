@@ -49,8 +49,8 @@ function askProblem(lines: readonly Recorded[]): string | undefined {
   if (ask === undefined) {
     return `no evaluate event with effect ask (${lines.length} lines)`;
   }
-  return (ask.sessionFields ?? []).length === 0
-    ? `the ask event has no field holding a session id; fields: ${(ask.evaluate ?? []).join(", ")}`
+  return !(ask.sessionFields ?? []).includes("sessionID")
+    ? `the ask event has no sessionID field holding a session id; fields: ${(ask.evaluate ?? []).join(", ")}`
     : undefined;
 }
 
@@ -108,15 +108,11 @@ export async function evaluateSuite(harness: {
   let world: RuntimeWorld | undefined;
   try {
     world = await makeWorld(root, harness.binary);
-    const used = {
-      ...world,
-      env: { ...world.env, COVEN_OPENCODE_BIN: harness.binary },
-    };
     return [
       {
         title:
           "evaluate: the ask event names its session; asks and times are readable",
-        problem: await probeProblem(used),
+        problem: await probeProblem(world),
       },
     ];
   } catch (error) {

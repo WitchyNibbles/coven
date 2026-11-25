@@ -12,8 +12,9 @@ const CHILD_BUSY_SHOWN_MS = 30 * MINUTE_MS;
 const HEAD_LIMIT = 200;
 
 /**
- * What the list needs beyond `ctx.session`: the server's own view of who is working and the
- * plugin's record of the PMs' children. The plugin setup wires it to the real thing.
+ * What the list needs beyond `ctx.session`: the server's own view of who is working, what waits
+ * on an ask and what a PM last said. It reads the server on each call (`serverStatus`, wired by
+ * the plugin setup); the plugin keeps no record of its own.
  *
  * Every method rejects when the server cannot be read; a resolved value means known, so
  * "nothing busy" and "no asks" are never what a failed read looks like.
