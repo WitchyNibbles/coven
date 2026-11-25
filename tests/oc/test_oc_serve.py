@@ -6,6 +6,7 @@ import signal
 import socket
 import stat
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +156,48 @@ def test_a_stale_start_lock_is_replaced_and_released(fake: Good, procs: Procs) -
 
     assert serve.running(fake.layout) == info
     assert not lock.exists()
+
+
+def _pidless_lock(layout: Any, age_s: float) -> Path:
+    """A start lock with no pid in it (a crash between its creation and the pid write)."""
+    lock = serve.files(layout).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_text("")
+    then = time.time() - age_s
+    os.utime(lock, (then, then))
+    return lock
+
+
+def test_a_pidless_start_lock_older_than_the_wait_is_replaced(fake: Good, procs: Procs) -> None:
+    lock = _pidless_lock(fake.layout, age_s=60.0)
+
+    info = start(fake, procs, wait_s=5.0)
+
+    assert serve.running(fake.layout) == info
+    assert not lock.exists()
+
+
+def test_a_fresh_pidless_start_lock_is_refused_and_named(fake: Good, procs: Procs) -> None:
+    lock = _pidless_lock(fake.layout, age_s=0.0)
+
+    with pytest.raises(serve.ServeError, match=f"a server is starting.*{re.escape(str(lock))}"):
+        start(fake, procs, wait_s=5.0)
+
+    assert procs.started == []
+    assert lock.exists()
+
+
+def test_a_live_holders_lock_is_never_stale_by_age(fake: Good, procs: Procs) -> None:
+    lock = serve.files(fake.layout).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_text(f"{os.getpid()}\n")
+    then = time.time() - 3600
+    os.utime(lock, (then, then))
+
+    with pytest.raises(serve.ServeError, match=f"a server is starting.*{re.escape(str(lock))}"):
+        start(fake, procs, wait_s=5.0)
+
+    assert procs.started == []
 
 
 def test_the_server_env_has_no_username(

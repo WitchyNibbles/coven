@@ -196,7 +196,7 @@ def start(
 ) -> ServerInfo:
     """Start the server detached and return once it answers with the saved password."""
     paths = files(layout)
-    with _start_lock(paths.lock):
+    with _start_lock(paths.lock, wait_s):
         if (info := running(layout)) is not None:
             raise ServeError(f"a server is already running on port {info.port}")
         if port is not None:
@@ -231,25 +231,40 @@ def _create_lock(lock: Path) -> int:
     return os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 
 
+def _starting(lock: Path) -> ServeError:
+    return ServeError(f"{STARTING}: {lock} is held; remove it if no start is running")
+
+
+def _lock_is_stale(lock: Path, wait_s: float) -> bool:
+    """A lock whose holder's pid is gone, or one with no pid that is older than a start may take
+    (a crash between its creation and the pid write); a live holder never goes stale by age."""
+    holder = _read_int(lock)
+    if holder is not None:
+        return not _alive(holder)
+    try:
+        return time.time() - lock.stat().st_mtime > wait_s
+    except OSError:
+        return True
+
+
 @contextmanager
-def _start_lock(lock: Path) -> Iterator[None]:
+def _start_lock(lock: Path, wait_s: float) -> Iterator[None]:
     """Hold the start lock, a file made with O_EXCL that names its holder's pid, around the check
     that no server runs and the spawn. A live holder refuses with STARTING, and so does a lock
-    still being written (no pid yet); a lock whose pid is gone is replaced."""
+    still being written (no pid yet, younger than `wait_s`); a stale lock is replaced."""
     lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         handle = _create_lock(lock)
     except FileExistsError:
-        holder = _read_int(lock)
-        if holder is None or _alive(holder):
-            raise ServeError(STARTING) from None
+        if not _lock_is_stale(lock, wait_s):
+            raise _starting(lock) from None
         # shortcut: two starts that find the same stale lock at once can both replace it; add an
         # fcntl lock if concurrent starts right after a crashed one ever matter.
         lock.unlink(missing_ok=True)
         try:
             handle = _create_lock(lock)
         except FileExistsError:
-            raise ServeError(STARTING) from None
+            raise _starting(lock) from None
     try:
         with os.fdopen(handle, "w") as stream:
             stream.write(f"{os.getpid()}\n")
