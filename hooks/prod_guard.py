@@ -160,9 +160,9 @@ HOOK = "prod-guard"
 PREFIX = "coven prod-guard:"
 # Added to a zone refusal that only a `cd` the guard cannot follow caused (`_zone_rule`).
 UNFOLLOWED_CD_HINT = (
-    "After a `cd` the guard cannot follow (`cd $VAR`), a relative path or glob such as `*.json`,"
-    " given to a program that is not a reader, may land in or match a name in the zone: use"
-    " `cd /literal/path` or absolute paths."
+    "After a `cd` the guard cannot follow (`cd $VAR`), a relative glob such as `*.json`,"
+    " given to a program that is not a reader, may match a name in the zone: use"
+    " `cd /literal/path` or an absolute glob."
 )
 USAGE = "usage: prod_guard.py | prod_guard.py --check <guard.json>"
 CHECK_FLAG = "--check"

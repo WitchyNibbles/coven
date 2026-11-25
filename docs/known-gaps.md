@@ -183,7 +183,7 @@ store and the approvals in it.
     read of the folder is refused on its own;
   - a write after a `cd` the guard cannot follow (`W=/x; cd $W && uv run tool d/*.json`): a
     relative glob such as `*.json` may match `~/.claude.json`. The refusal says so; use
-    `cd /literal/path` or absolute paths.
+    `cd /literal/path` or an absolute glob.
 - The user folder (`~/.claude`, CLAUDE_CONFIG_DIR, `~/.claude.json`) is a zone with no `.claude`
   token, so a PM may write in a repo's own `.claude/worktrees/`, where Claude Code keeps its
   worktrees. A PM may read it in Bash with the readers (`cat`, `ls`, `grep`, `rg`, `find` without

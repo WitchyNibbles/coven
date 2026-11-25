@@ -27,15 +27,15 @@ symlink to `~`. The refusal just does not say so, and the PM cannot tell what to
 - When a zone refusal happens only because of a `cd` the guard cannot follow, the refusal adds
   this sentence after the usual text:
 
-  > After a `cd` the guard cannot follow (`cd $VAR`), a relative path or glob such as `*.json`,
-  > given to a program that is not a reader, may land in or match a name in the zone: use
-  > `cd /literal/path` or absolute paths.
+  > After a `cd` the guard cannot follow (`cd $VAR`), a relative glob such as `*.json`,
+  > given to a program that is not a reader, may match a name in the zone: use
+  > `cd /literal/path` or an absolute glob.
 
 - "Only because of": the same call, with every `cd` in it treated as one the guard can follow,
   would not be refused by that zone. A refusal with another cause (a word naming the zone, a
   literal `cd ~/.claude`, a write to `~/.claude.json`) keeps today's text.
-- The sentence says "relative path or glob" because the same counterfactual also covers a
-  relative name after an unfollowed `cd` (`cd $X && rm .claude.json`), and the remedy is the same.
+- A relative name after an unfollowed `cd` (`cd $X && rm .claude.json`) is refused by another
+  check (`_changes_zone_holder` via `_after_cd`) and keeps the plain refusal.
 - `docs/known-gaps.md` lists the case under "More false positives for the user folder".
 
 ## Not in scope

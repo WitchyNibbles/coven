@@ -4379,7 +4379,8 @@ def test_a_glob_after_a_cd_the_guard_cannot_follow_is_refused_with_why(
     assert proc.returncode == 2
     assert "cannot write to Claude Code's user folder" in proc.stderr
     assert UNFOLLOWED_CD_HINT in proc.stderr
-    assert "use `cd /literal/path` or absolute paths." in proc.stderr
+    assert "a relative glob such as `*.json`" in proc.stderr
+    assert "use `cd /literal/path` or an absolute glob." in proc.stderr
 
 
 def test_the_same_text_with_a_literal_cd_is_allowed(run: Run, store: Path) -> None:
