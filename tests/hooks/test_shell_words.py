@@ -821,6 +821,27 @@ def test_heredoc_bodies_blanks_each_body_and_returns_it_as_written():
     assert found.rest.split() == expected
 
 
+@pytest.mark.parametrize(
+    ("command", "bodies"),
+    [
+        (
+            "cat <<'A' | gh pr create --body-file - && <<-\"B\" cat\n`a`\nA\n\t`b`\n\tB\nls",
+            ["`a`\n", "\t`b`\n"],
+        ),
+        ("gh pr create --body \"$(cat <<'B'\n`b`\nB\n)\" && ls", ["`b`\n"]),
+    ],
+)
+def test_quoted_heredoc_spans_finds_each_body_and_the_cat_substitution_form(
+    command: str, bodies: list[str]
+) -> None:
+    spans = module.quoted_heredoc_spans(command)
+    assert [command[start:end] for start, end in spans] == bodies
+
+
+def test_quoted_heredoc_spans_gives_up_on_an_unquoted_heredoc():
+    assert module.quoted_heredoc_spans("cat <<A\n$(x)\nA") is None
+
+
 def test_heredoc_bodies_names_the_first_word_of_each_command_that_reads_one():
     command = "cd src && python3 - <<'A' && /opt/venv/bin/perl <<'B'\nx\nA\ny\nB\nls"
     assert module.heredoc_bodies(command).readers == ["python3", "/opt/venv/bin/perl"]

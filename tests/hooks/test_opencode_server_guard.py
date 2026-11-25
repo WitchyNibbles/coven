@@ -605,7 +605,7 @@ def test_the_refusal_text_names_the_rule(world: World) -> None:
 
 
 def test_other_tools_are_not_checked(world: World) -> None:
-    payload = {"tool_name": "WebFetch", "tool_input": {"url": "http://localhost:43123"}, "cwd": "/"}
+    payload = {"tool_name": "TodoWrite", "tool_input": {"todos": "localhost:43123"}, "cwd": "/"}
     assert guard.refusal(payload, world.profile, world.serve, world.coven, world.port) is None
 
 
@@ -1306,6 +1306,236 @@ def test_source_reading_a_pipe_or_a_here_string_is_refused(world: World, command
 @pytest.mark.parametrize("command", SOURCE_STDIN_ALLOWED)
 def test_source_of_a_file_or_a_harmless_string_is_allowed(world: World, command: str) -> None:
     assert world.call("Bash", "command", command) is None
+
+
+# PR A fix wave, 1: a quoted heredoc body is literal text, not a command substitution.
+HEREDOC_REFUSED = [
+    "cat <<EOF\n$(echo opencode) db\nEOF",
+    "gh pr create --title t --body-file - <<EOF\n`echo opencode` db\nEOF",
+    "bash <<'EOF'\nopencode db\nEOF",
+    "sh <<'EOF'\n`echo opencode` db\nEOF",
+]
+HEREDOC_ALLOWED = [
+    "gh pr create --title t --body-file - <<'EOF'\n## Summary\n\n`a` b\n\n```bash\nnpm test\n```\nEOF",
+    "gh pr create --title t --body \"$(cat <<'EOF'\n## Summary\n`a` b\n```\nx\n```\nEOF\n)\"",
+    "git commit -F - <<'EOF'\nfix: x\n\n`a` b\nEOF",
+    'git commit -F - <<"EOF"\n`a` b\n$(c) d\nEOF',
+    "git commit -F - <<\\EOF\n`a` b\nEOF",
+    "git commit -F - <<-'EOF'\n\t`a` b\n\tEOF",
+]
+
+
+@pytest.mark.parametrize("command", HEREDOC_REFUSED)
+def test_an_unquoted_heredoc_or_one_into_a_shell_is_still_refused(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", HEREDOC_ALLOWED)
+def test_a_quoted_heredoc_body_with_backticks_is_literal_text(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+# PR A fix wave, 2: a working folder in the coven checkout runs the read-only allowlist and adds
+# worktrees under .claude/worktrees/.
+IN_COVEN_ALLOWED = [
+    "git status",
+    "git log --oneline",
+    "git diff HEAD~1",
+    "git worktree list",
+    "git worktree add .claude/worktrees/t1 -b t1",
+    "git worktree add -b t1 .claude/worktrees/t1",
+    "git worktree add <coven>/.claude/worktrees/t2 main",
+    "rg foo",
+    "cat pyproject.toml",
+    "ls hooks",
+    "git status 2>/dev/null",
+]
+IN_COVEN_REFUSED = [
+    "touch x",
+    "git commit -am x",
+    "rm pyproject.toml",
+    "git worktree add /tmp/x",
+    "git worktree add ../x",
+    "git worktree remove .claude/worktrees/x",
+    "npm test",
+    "echo x > notes.md",
+    "cat <profile>/profile.json",
+]
+
+
+@pytest.mark.parametrize("command", IN_COVEN_ALLOWED)
+def test_a_working_folder_in_the_coven_checkout_runs_reading_programs(
+    world: World, command: str
+) -> None:
+    assert call_in(world, world.fill(command), world.coven) is None
+
+
+@pytest.mark.parametrize("command", IN_COVEN_REFUSED)
+def test_a_working_folder_in_the_coven_checkout_refuses_writes(world: World, command: str) -> None:
+    text = call_in(world, world.fill(command), world.coven)
+    assert text
+
+
+def test_the_coven_checkout_refusal_names_the_worktrees_folder(world: World) -> None:
+    text = call_in(world, "touch x", world.coven)
+    assert text
+    assert ".claude/worktrees/" in text
+
+
+# PR A fix wave, 3: from a working folder that holds the profile, a line that first moves to a
+# literal folder holding no closed place is judged from there.
+FROM_HOME_ALLOWED = [
+    "cd proj && git log",
+    "git -C proj status",
+    "cd proj && grep -r x .",
+    "pushd proj && rg x",
+    "env -C proj grep -r x .",
+    "cd proj && npm test",
+]
+FROM_HOME_REFUSED = [
+    "grep -r password",
+    "cat notes.md",
+    "cd proj && cd .. && grep -r password",
+    "cd . && grep -r password",
+    "cd ~ && grep -r password",
+    "git -C . grep password",
+    "git -C proj status; grep -r password",
+    "git -C proj status && grep -r password",
+    "(cd proj && ls); grep -r password",
+    "pushd proj && popd && grep -r password",
+    "cd missing; grep -r password",
+    "cd proj && cat ../profile/state/serve/password",
+    "cd profile && ls -R",
+]
+
+
+@pytest.fixture
+def home_with_a_project(world: World) -> Path:
+    home = world.profile.parent
+    touch(home / "proj" / "README.md")
+    touch(home / "notes.md")
+    return home
+
+
+@pytest.mark.parametrize("command", FROM_HOME_ALLOWED)
+def test_a_line_that_first_moves_into_a_project_is_judged_from_there(
+    world: World, home_with_a_project: Path, command: str
+) -> None:
+    assert call_in(world, command, home_with_a_project) is None
+
+
+@pytest.mark.parametrize("command", FROM_HOME_REFUSED)
+def test_a_reading_program_run_from_a_folder_that_holds_the_profile_is_refused(
+    world: World, home_with_a_project: Path, command: str
+) -> None:
+    assert call_in(world, command, home_with_a_project)
+
+
+def test_the_working_folder_refusal_says_to_cd_into_a_project(
+    world: World, home_with_a_project: Path
+) -> None:
+    text = call_in(world, "grep -r password", home_with_a_project)
+    assert text
+    assert "the working folder holds coven's profile; cd into a project folder first" in text
+
+
+# PR A fix wave, 5: `opencode.exe` and `opencode serve` as one word name opencode.
+OPENCODE_WORD_REFUSED = [
+    "pkill -f 'opencode serve'",
+    "pkill -f opencode.exe",
+    "killall opencode.exe",
+    "opencode.exe db",
+]
+OPENCODE_WORD_ALLOWED = ["pkill -f vite", "killall node", "grep 'opencode serve' notes.md"]
+
+
+@pytest.mark.parametrize("command", OPENCODE_WORD_REFUSED)
+def test_a_word_that_names_opencode_with_a_suffix_is_refused(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", OPENCODE_WORD_ALLOWED)
+def test_other_process_names_are_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+# PR A fix wave, 7: WebFetch to the server's port.
+def test_web_fetch_to_the_server_port_is_refused(world: World) -> None:
+    for url in (f"http://127.0.0.1:{PORT}/session", f"http://localhost:{PORT}/api"):
+        assert world.call("WebFetch", "url", url)
+    assert world.call("WebFetch", "url", "https://example.com/") is None
+
+
+# PR A fix wave, 10 (Task 4 minors).
+NULL_REDIRECTS_ALLOWED = [
+    "ls <projects> 2>/dev/null",
+    "ls <projects> >/dev/null",
+    "ls <projects> &>/dev/null",
+    "ls <projects> 2>&1",
+    "rg foo <projects> 2>/dev/null | head",
+]
+WAVE_MINORS_REFUSED = [
+    "ls <projects> > x",
+    "ls <projects> 2>x",
+    "x=$(echo opencode); uv run $x db",
+    "x=$(echo opencode); uvx $x db",
+    "x=$(echo opencode); pipx run $x db",
+    "x=$(echo opencode); pdm run $x db",
+    "x=$(echo opencode); poetry run $x db",
+    "cd ~- && grep -r password",
+    "cd ~-/ && grep -r password",
+    "pushd ~- && grep -r password",
+    "cd ~1 && grep -r password",
+    "cd ~+1 && grep -r password",
+    "cd ~-1 && grep -r password",
+    "GIT_PAGER+=x git log",
+    "git rebase --ex 'opencode db' HEAD~1",
+    "git rebase --exe='opencode db' HEAD~1",
+    "git difftool --ext 'opencode db'",
+    "git difftool --ex='opencode db'",
+    "man --pag 'opencode db' ls",
+    "man --page='opencode db' ls",
+    "GIT_PAGER=more git log",
+    "GIT_PAGER=$X git log",
+    "PAGER='cat x' man ls",
+    "GIT_EDITOR=cat git commit",
+]
+WAVE_MINORS_ALLOWED = [
+    *NULL_REDIRECTS_ALLOWED,
+    "x=$(date); uv run pytest -k $x",
+    "cd ~+ && grep -r x",
+    "cd ~- && ls",
+    "git rebase --edit-todo",
+    "git rebase --empty=drop HEAD~1",
+    "git difftool --dir-diff HEAD~1",
+    "man --prompt=x ls",
+    "GIT_PAGER=cat git log",
+    "GIT_PAGER=less git log",
+    "GIT_PAGER= git log",
+    "GIT_PAGER='' git log",
+    "PAGER=cat man ls",
+]
+
+
+@pytest.mark.parametrize("command", WAVE_MINORS_REFUSED)
+def test_the_task_4_minors_of_the_fix_wave_are_refused(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", WAVE_MINORS_ALLOWED)
+def test_their_near_allows_stay_open(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+def test_the_unknown_cd_refusal_says_to_write_the_folder_literally(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("NOPE", raising=False)
+    text = world.call("Bash", "command", "cd $NOPE && grep -r password")
+    assert text
+    assert "write the folder literally" in text
 
 
 # main: the way Claude Code and the plugin run it.
