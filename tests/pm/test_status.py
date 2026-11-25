@@ -68,6 +68,26 @@ def test_idle_notice_after_the_gm_answered_says_no(env, capsys):
     ]
 
 
+def test_an_answer_absorbed_mid_turn_ends_the_wait(env, capsys):
+    one_pm(
+        env,
+        brief()
+        .send(GM, "QUESTION acme-1/3: which one?", at("10:02"))
+        .turn_end(at("10:03"))
+        .absorbed_peer(GM, "ANSWER acme-1/3: b", at("11:39"))
+        .text("on it", at("11:40")),
+        "working",
+    )
+    code, out, err = status(env, capsys)
+    assert (code, err) == (0, "")
+    assert out.splitlines() == [
+        "pm-acme-1  id=00000001  state=working 1h  since GM: no",
+        "  last out: 10:02 QUESTION acme-1/3: which one?   [delivered]",
+        "  last in:  11:39 ANSWER acme-1/3: b  (from gm-main)",
+        ONE_LIVE,
+    ]
+
+
 def test_message_after_the_gm_says_message(env, capsys):
     one_pm(
         env,
