@@ -21,6 +21,7 @@ SCRIPT = HOOKS / "opencode_server_guard.py"
 PORT = 43123
 
 guard = load_module(SCRIPT, "coven_opencode_server_guard", register=True, restore_path=True)
+wrapper_commands = load_module(HOOKS / "wrapper_commands.py", "coven_wrapper_commands")
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,8 @@ class World:
     def fill(self, text: str) -> str:
         marks = {
             "<profile>": self.profile,
+            "<home>": self.profile.parent,
+            "<root>": self.root,
             "<serve>": self.serve,
             "<coven>": self.coven,
             "<other>": self.other,
@@ -83,6 +86,10 @@ def world(tmp_path: Path) -> World:
     touch(coven / "hooks" / "deny_secrets.py")
     touch(coven / "opencode" / "src" / "guard.ts")
     touch(coven / "src" / "coven" / "cli.py")
+    touch(coven / "bin" / "coven")
+    touch(coven / "opencode" / "content" / "AGENTS.md")
+    touch(coven / "pyproject.toml")
+    touch(coven / ".claude" / "worktrees" / "x" / "hooks" / "deny_secrets.py")
     touch(other / "coven-worktree" / "hooks" / "deny_secrets.py")
     touch(project / "README.md")
     # Links under the writable `tmp/` that lead into the protected set.
@@ -90,6 +97,7 @@ def world(tmp_path: Path) -> World:
     (profile / "tmp" / "to-config").symlink_to(profile / "config")
     (profile / "tmp" / "to-serve").symlink_to(serve)
     (project / "to-hooks").symlink_to(coven / "hooks")
+    (coven / ".claude" / "worktrees" / "x" / "to-src").symlink_to(coven / "src")
     return World(tmp_path, profile, serve, coven, other, project)
 
 
@@ -153,6 +161,38 @@ OPENCODE_REFUSED = [
     'bash <<< "opencode db"',
     "echo $(bash -c 'opencode db')",
     "echo $(echo $(opencode db))",
+    # A program that runs another, and any word that names opencode after one that may run it.
+    "npm --prefix opencode test",
+    "taskset -c 0 opencode db",
+    "flock /tmp/l opencode db",
+    "flock -c 'opencode db' /tmp/l",
+    "script -qc 'opencode db' /dev/null",
+    "chrt -o 0 opencode db",
+    "unshare -U opencode db",
+    "unshare --map-root-user -- opencode db",
+    "setpriv --reuid 1000 opencode db",
+    "runuser -u x -- opencode db",
+    "runuser x -c 'opencode db'",
+    "coproc opencode db",
+    "coproc OC { opencode db; }",
+    "tmux new -d 'opencode db'",
+    "tmux new-session -d -s pm opencode db",
+    "screen -dm opencode db",
+    "strace -f opencode db",
+    "strace -o /tmp/t -f opencode db",
+    "ltrace opencode db",
+    "busybox sh -c 'opencode db'",
+    "busybox ash -c 'opencode db'",
+    "systemd-run --user opencode db",
+    "parallel opencode db ::: x",
+    "uv run opencode db",
+    "pipx run opencode db",
+    "nix-shell --run 'opencode db'",
+    "env bash -c 'opencode db'",
+    "hush -c 'opencode db'",
+    "tcsh -c 'opencode db'",
+    "python3 opencode db",
+    "stdbuf -oL opencode db",
 ]
 OPENCODE_ALLOWED = [
     "opencode --version",
@@ -166,7 +206,6 @@ OPENCODE_ALLOWED = [
     "grep -rn opencode .",
     "echo opencode db",
     "git commit -m 'fix opencode db'",
-    "npm --prefix opencode test",
     "git commit -m \"$(cat <<'EOF'\nmessage that names opencode db\nEOF\n)\"",
     "npm test",
     "git status",
@@ -187,6 +226,21 @@ OPENCODE_ALLOWED = [
     "mkdir -p out && cd out && ls",
     "ls /proc",
     "bash <<'EOF'\nnpm test\nEOF",
+    "taskset -c 0 opencode --version",
+    "timeout 5 opencode --help",
+    "which opencode",
+    "man opencode",
+    "type opencode",
+    "find . -name opencode",
+    "cp x opencode",
+    "mkdir -p opencode/out",
+    "tree opencode",
+    "ls opencode | head",
+    "wc -l opencode",
+    "cat opencode",
+    "coven opencode doctor",
+    "tmux new -d 'npm test'",
+    "busybox ls",
 ]
 
 
@@ -360,7 +414,10 @@ def test_the_shell_workdir_counts_as_the_working_directory(world: World) -> None
     assert guard.refusal(payload, world.profile, world.serve, world.coven, world.port)
     payload["tool_input"] = {"command": "cat README.md", "workdir": str(world.project)}
     assert guard.refusal(payload, world.profile, world.serve, world.coven, world.port) is None
-    payload["tool_input"] = {"command": "ls", "workdir": "../home/profile/state/serve"}
+    payload["tool_input"] = {
+        "command": "ls",
+        "workdir": os.path.relpath(world.serve, world.project),
+    }
     payload["cwd"] = str(world.project)
     assert guard.refusal(payload, world.profile, world.serve, world.coven, world.port)
 
@@ -408,6 +465,16 @@ PROTECTED_REFUSED = [
     ("Bash", "command", "touch <profile>/config/opencode/ag*"),
     ("Bash", "command", "ls <coven>/hooks"),
     ("Bash", "command", "cp <project>/to-hooks/deny_secrets.py /dev/null"),
+    # The whole coven root is closed to writes, but its worktrees folder.
+    ("Write", "file_path", "<coven>/bin/coven"),
+    ("Write", "file_path", "<coven>/opencode/content/AGENTS.md"),
+    ("Write", "file_path", "<coven>/pyproject.toml"),
+    ("Write", "file_path", "<coven>/docs/notes.md"),
+    ("Edit", "file_path", "<coven>/.claude/settings.json"),
+    ("Write", "file_path", "<coven>/.claude/worktrees/x/to-src/coven/cli.py"),
+    ("Bash", "command", "echo x > <coven>/pyproject.toml"),
+    ("Bash", "command", "cat <coven>/bin/coven"),
+    ("Bash", "command", "cd <coven> && echo x > pyproject.toml"),
 ]
 PROTECTED_ALLOWED = [
     ("Write", "file_path", "<profile>/tmp/body.md"),
@@ -415,8 +482,13 @@ PROTECTED_ALLOWED = [
     ("Write", "file_path", "<project>/notes.md"),
     ("Write", "file_path", "notes.md"),
     ("Write", "file_path", "<profile>/tmp/new/dir/file.txt"),
-    ("Write", "file_path", "<coven>/docs/notes.md"),
+    ("Write", "file_path", "<coven>/.claude/worktrees/x/hooks/deny_secrets.py"),
+    ("Edit", "file_path", "<coven>/.claude/worktrees/x/new.md"),
+    ("Read", "file_path", "<coven>/pyproject.toml"),
+    ("Read", "file_path", "<coven>/hooks/deny_secrets.py"),
+    ("Grep", "path", "<coven>/src"),
     ("Bash", "command", "echo x > <profile>/tmp/body.md"),
+    ("Bash", "command", "git -C <coven>/.claude/worktrees/x status"),
     ("Bash", "command", "cd <profile>/tmp && echo x > body.md"),
     ("Bash", "command", "cp <other>/coven-worktree/hooks/deny_secrets.py <project>/copy.py"),
     ("Bash", "command", "git status"),
@@ -518,12 +590,16 @@ def test_the_refusal_text_names_the_rule(world: World) -> None:
         "environ": world.call("Bash", "command", "cat /proc/1/environ"),
         "ps": world.call("Bash", "command", "ps eww"),
         "coven": world.call("Bash", "command", "coven opencode gm"),
+        "data": world.call("Read", "file_path", "<profile>/data/opencode/opencode.db"),
+        "ancestor": world.call("Grep", "path", "<home>"),
+        "substitution": world.call("Bash", "command", "$(echo opencode) db"),
     }
     for rule, text in texts.items():
         assert text, rule
         assert text.startswith("coven opencode-server-guard: "), rule
         assert len(text) < 400, rule
     assert len({text.split(";")[0] for text in texts.values()}) == len(texts)
+    assert "write the path literally" in texts["substitution"]
 
 
 def test_other_tools_are_not_checked(world: World) -> None:
@@ -556,6 +632,183 @@ def test_a_command_nested_too_deeply_is_refused(world: World) -> None:
     for _ in range(12):
         command = "bash -c " + json.dumps(command)
     assert world.call("Bash", "command", command)
+
+
+DATA_AND_ANCESTORS_REFUSED = [
+    # The profile's data folder (credentials, sessions) is closed to reads too.
+    ("Read", "file_path", "<profile>/data/opencode/auth.json"),
+    ("Read", "file_path", "<profile>/data/opencode/opencode.db"),
+    ("Read", "file_path", "<profile>/tmp/../data/opencode/opencode.db"),
+    ("Grep", "path", "<profile>/data"),
+    ("Glob", "path", "<profile>/data"),
+    ("Glob", "pattern", "<profile>/data/**/*.db"),
+    # A folder that holds the serve folder or the data folder is closed to the file tools.
+    ("Grep", "path", "<profile>"),
+    ("Grep", "path", "<profile>/state"),
+    ("Grep", "path", "<home>"),
+    ("Grep", "path", "/"),
+    ("Glob", "path", "<profile>"),
+    ("Read", "file_path", "<profile>"),
+    ("Read", "file_path", "<home>"),
+    ("Glob", "pattern", "<profile>/*"),
+    ("Glob", "pattern", "<profile>/st*"),
+    ("Glob", "pattern", "<home>/*"),
+    # And to every shell program that may read what is under it.
+    ("Bash", "command", "grep -r . <home>"),
+    ("Bash", "command", "grep -r . <profile>/state"),
+    ("Bash", "command", "grep -r . /"),
+    ("Bash", "command", "grep -r x .."),
+    ("Bash", "command", "cp -r <home> <project>/copy"),
+    ("Bash", "command", "cp -r <root> <project>/copy"),
+    ("Bash", "command", "rm -r <home>"),
+    ("Bash", "command", "tar cf - -C <home> profile | tar xOf -"),
+    ("Bash", "command", "rsync -a <home>/ <project>/copy/"),
+    ("Bash", "command", "find <home> -type f -exec cat {} +"),
+    ("Bash", "command", "cd <home> && grep -r . ."),
+    ("Bash", "command", "cd <home> && cp -r . <project>/copy"),
+    ("Bash", "command", "cat <home>/*/state/serve/password"),
+    ("Bash", "command", "ls <home> | grep x"),
+    ("Bash", "command", "grep -r . <coven>/.."),
+    ("Bash", "command", "bash -c 'grep -r . <home>'"),
+    ("Bash", "command", "grep -r . ~"),
+]
+DATA_AND_ANCESTORS_ALLOWED = [
+    ("Read", "file_path", "<profile>/plugin/coven/index.ts"),
+    ("Grep", "path", "<profile>/plugin"),
+    ("Grep", "path", "<profile>/config"),
+    ("Grep", "path", "<project>"),
+    ("Glob", "pattern", "<project>/*.md"),
+    ("Glob", "pattern", "<profile>/config/**/*.md"),
+    ("Bash", "command", "ls <home>"),
+    ("Bash", "command", "ls -la ~"),
+    ("Bash", "command", "cd <home>"),
+    ("Bash", "command", "cd .. && ls"),
+    ("Bash", "command", "stat <home>"),
+    ("Bash", "command", "test -d <home> && echo yes"),
+    ("Bash", "command", "du -sh <root>"),
+    ("Bash", "command", "mkdir -p <root>/out"),
+    ("Bash", "command", "dirname <home>/profile.d"),
+    ("Bash", "command", "echo <home>"),
+    ("Bash", "command", "grep -r foo ."),
+    ("Bash", "command", "grep -r foo <project>"),
+    ("Bash", "command", "grep -rn x /etc/hostname"),
+]
+
+
+@pytest.mark.parametrize(("tool", "field", "value"), DATA_AND_ANCESTORS_REFUSED)
+def test_the_data_folder_and_the_folders_above_the_serve_folder_are_refused(
+    world: World, tool: str, field: str, value: str
+) -> None:
+    assert world.call(tool, field, value)
+
+
+@pytest.mark.parametrize(("tool", "field", "value"), DATA_AND_ANCESTORS_ALLOWED)
+def test_reads_that_cannot_reach_the_serve_or_data_folder_stay_allowed(
+    world: World, tool: str, field: str, value: str
+) -> None:
+    assert world.call(tool, field, value) is None
+
+
+def test_a_grep_or_glob_with_no_path_reads_the_cwd(world: World) -> None:
+    assert world.call("Grep", "pattern", "password", cwd=world.profile.parent)
+    assert world.call("Grep", "pattern", "password", cwd=world.profile)
+    assert world.call("Glob", "pattern", "*.md", cwd=world.profile.parent)
+    assert world.call("Grep", "pattern", "password") is None
+    assert world.call("Glob", "pattern", "*.md") is None
+
+
+def test_the_coven_worktrees_folder_is_open_to_the_shell_and_the_file_tools(world: World) -> None:
+    worktree = world.coven / ".claude" / "worktrees" / "x"
+    assert world.call("Bash", "command", "cat hooks/deny_secrets.py", cwd=worktree) is None
+    assert world.call("Bash", "command", "git status", cwd=worktree) is None
+    assert world.call("Write", "file_path", "hooks/new.py", cwd=worktree) is None
+    assert world.call("Bash", "command", "cat ../../../pyproject.toml", cwd=worktree)
+    assert world.call("Write", "file_path", "to-src/coven/cli.py", cwd=worktree)
+
+
+SUBSTITUTION_REFUSED = [
+    "$(echo opencode) db",
+    "`echo opencode` db",
+    "$(printf opencode) api session.list",
+    "cat $(echo <home>)/profile/state/serve/password",
+    "d=$(echo <home>); cat $d/profile/state/serve/password",
+    "x=`echo <home>`; cat $x/profile/state/serve/password",
+    'cd "$(printf %s <profile>/state)" && cat serve/password',
+    "cd $(echo <profile>/state) && cat serve/password",
+    "d=$(echo <profile>/state); cd $d && cat serve/password",
+    'sqlite3 "$(printenv XDG_DATA_HOME)"/opencode/opencode.db',
+    "echo x > `echo <home>`/profile/config/opencode/opencode.jsonc",
+    "d=$(echo <profile>/tmp/body.md); echo x > $d",
+    "cat /opt/$(echo x)",
+    "env $(echo opencode) db",
+    "sudo -u x $(echo opencode) db",
+    "FOO=1 `echo opencode` db",
+    "bash -c '$(echo opencode) db'",
+    "ls && $(echo opencode) db",
+    "(`echo opencode` db)",
+    "echo ok; $(echo opencode) db",
+]
+SUBSTITUTION_ALLOWED = [
+    "echo $(date)",
+    "echo `date`",
+    "echo $(date) > out.txt",
+    'echo "today is $(date +%F)"',
+    "x=$(date); echo $x",
+    "sha=$(git rev-parse HEAD); git log $sha",
+    "git commit -m \"$(cat <<'EOF'\nmessage\nEOF\n)\"",
+    "echo $((1 + 2))",
+]
+
+
+@pytest.mark.parametrize("command", SUBSTITUTION_REFUSED)
+def test_a_substitution_that_builds_a_program_or_a_path_is_refused(
+    world: World, command: str
+) -> None:
+    text = world.call("Bash", "command", command)
+    assert text
+    assert "write the path literally" in text
+
+
+@pytest.mark.parametrize("command", SUBSTITUTION_ALLOWED)
+def test_a_substitution_in_an_argument_is_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+@pytest.mark.parametrize("name", sorted(wrapper_commands.WRAPPERS | wrapper_commands.LAUNCHERS))
+def test_every_command_the_shared_table_names_is_followed_to_opencode(
+    world: World, name: str
+) -> None:
+    assert world.call("Bash", "command", f"{name} opencode db")
+
+
+@pytest.mark.parametrize("name", sorted(wrapper_commands.SHELLS))
+def test_every_shell_of_the_shared_table_runs_command_strings_and_stdin(
+    world: World, name: str
+) -> None:
+    assert world.call("Bash", "command", f"{name} -c 'opencode db'")
+    assert world.call("Bash", "command", f"{name} -c 'cat <serve>/password'")
+    assert world.call("Bash", "command", f"cat script | {name}")
+    assert world.call("Bash", "command", f"{name} -c 'npm test'") is None
+    assert world.call("Bash", "command", f"{name} -c 'opencode --version'") is None
+
+
+def test_a_glob_that_reaches_the_match_cap_is_refused(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for index in range(5):
+        touch(world.project / "many" / f"f{index}.txt")
+    touch(world.project / "few" / "a.txt")
+    touch(world.project / "few" / "b.txt")
+    monkeypatch.setattr(guard, "MAX_GLOB_MATCHES", 3)
+    for tool, field, value in (
+        ("Bash", "command", "cat <project>/many/*.txt"),
+        ("Glob", "pattern", "<project>/many/*.txt"),
+    ):
+        text = world.call(tool, field, value)
+        assert text
+        assert "too many matches; narrow the glob" in text
+    assert world.call("Bash", "command", "cat <project>/few/*.txt") is None
+    assert world.call("Glob", "pattern", "<project>/few/*.txt") is None
 
 
 # main: the way Claude Code and the plugin run it.

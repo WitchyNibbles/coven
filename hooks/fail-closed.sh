@@ -122,7 +122,7 @@ fallback_prod_guard() {
 
 # The OpenCode server guard keeps a PM session away from the server's password and API. Skipping it
 # would open both on the machines where nobody sees the message, so with no usable python3 it
-# refuses every call it is run for (the plugin runs it for PM sessions only).
+# refuses every call it is run for (the plugin runs it for every session).
 fallback_opencode_server_guard() {
     payload=$1
     tell_once "$payload"

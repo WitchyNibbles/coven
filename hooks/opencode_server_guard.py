@@ -4,7 +4,7 @@
 A PM's shell and file tools run on the machine that runs the coven OpenCode server. This hook
 refuses a call that would let the PM reach the server's API, its password or environment, the
 profile's protected files, coven's own source or coven's lifecycle commands. The plugin runs it
-for PM sessions with `--profile DIR --serve DIR --coven-root DIR`, through fail-closed.sh, and
+for every session with `--profile DIR --serve DIR --coven-root DIR`, through fail-closed.sh, and
 sends the payload deny_secrets.py gets: `tool_name` (Bash, Read, Grep, Glob, Write, Edit,
 NotebookEdit or MultiEdit), `tool_input` (`command` and `workdir`, `file_path`, `path`, ...) and
 `cwd`. Exit 0 allows; exit 2 refuses with the text on stderr. Any other failure refuses too.
@@ -12,14 +12,21 @@ NotebookEdit or MultiEdit), `tool_input` (`command` and `workdir`, `file_path`, 
 What it refuses:
 
 - an `opencode` command (a bare name, a path, under `env`, `npx`, `xargs`, `bash -c`, `$(...)`...)
-  other than exactly `opencode --version` and `opencode --help`;
+  other than exactly `opencode --version` and `opencode --help`, and any word that names opencode
+  after a program that may run it (everything but a short list of programs that never run their
+  arguments: `echo`, `grep`, `ls`, `git`...);
 - any text that names the server's port (read from `<serve>/port` at call time; with no usable
   port file, any loopback address with a port);
-- a read, grep or glob of the serve folder, and `/proc/<pid>/environ`, `ps` options that print
-  environments (`e`, `-E`, `eww`);
+- a read, grep or glob of the serve folder or the profile's `data/` folder, and
+  `/proc/<pid>/environ`, `ps` options that print environments (`e`, `-E`, `eww`);
+- a folder that holds the serve or the `data/` folder (the profile, `/`...) for the file tools, and
+  a folder that holds the profile or the coven root for every shell program but the ones that
+  never read content (`ls`, `cd`, `stat`...);
 - a write, edit or patch, and any shell command that names a path, in the protected set: the
-  profile except its `tmp/` folder, the serve folder, and `hooks/`, `opencode/src/` and `src/`
-  of the coven root;
+  profile except its `tmp/` folder, the serve folder, and the coven root except its
+  `.claude/worktrees/` folder;
+- a command substitution (`$(...)`, backticks) that builds a program name, a path or a `cd`
+  target, because what it prints is not seen: the text says to write the path literally;
 - `coven opencode` with anything but `doctor` or `--help`, and a pipe into a shell.
 
 Paths are judged after `~`, `$HOME`, variables set on the same line, `..`, globs, braces, quote
@@ -40,7 +47,7 @@ import os
 import re
 import shlex
 import sys
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -50,6 +57,8 @@ from typing import NoReturn, Self
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # By name, not an import statement: ruff rejects one below code (E402) and suppressions are banned.
 hook_support = importlib.import_module("hook_support")
+# The names of the programs that run another are shared with prod_guard.py.
+wrapper_commands = hook_support.sibling("wrapper_commands")
 
 HOOK = "opencode-server-guard"
 GM_TOOLS = "coven_pm_list, coven_pm_resume, coven_pm_stop"
@@ -94,8 +103,10 @@ class Scope:
 
     profile: Path
     serve: Path
+    data: Path
     tmp: Path
-    coven: tuple[Path, ...]
+    coven: Path
+    worktrees: Path
     port: int | None
     home: Path
 
@@ -106,11 +117,18 @@ class Scope:
         return cls(
             profile=real_profile,
             serve=_real(serve),
+            data=real_profile / "data",
             tmp=real_profile / "tmp",
-            coven=tuple(real_root / name for name in ("hooks", "opencode/src", "src")),
+            coven=real_root,
+            worktrees=real_root / ".claude" / "worktrees",
             port=port,
             home=Path.home(),
         )
+
+    def closed_roots(self, mode: Mode) -> tuple[Path, ...]:
+        """The closed folders whose parents the mode keeps out of reach: the serve and data folders
+        for a read, the profile and the coven root otherwise."""
+        return (self.serve, self.data) if mode is Mode.READ else (self.profile, self.coven)
 
 
 def _real(path: Path) -> Path:
@@ -138,10 +156,23 @@ def hit(path: Path, scope: Scope, mode: Mode) -> str | None:
     if re.fullmatch(r"/proc/[^/]+(?:/task/[^/]+)?/environ", str(path)):
         return "another process's environment is closed to a PM"
     if mode is Mode.READ:
+        if path.is_relative_to(scope.data):
+            return "the profile's data folder (credentials and sessions) is closed to a PM"
         return None
     in_profile = path.is_relative_to(scope.profile) and not path.is_relative_to(scope.tmp)
-    if in_profile or any(path.is_relative_to(root) for root in scope.coven):
-        return "the profile and coven's own source are protected from a PM"
+    in_coven = path.is_relative_to(scope.coven) and not path.is_relative_to(scope.worktrees)
+    if in_profile or in_coven:
+        return "the profile and coven's own files are protected from a PM"
+    return None
+
+
+def holds_closed_place(path: Path, scope: Scope, mode: Mode) -> str | None:
+    """The rule a folder breaks by holding a place closed to the mode (a listing, a recursive
+    read or a copy of it reaches what is under it), or None."""
+    if any(root != path and root.is_relative_to(path) for root in scope.closed_roots(mode)):
+        return (
+            "a folder that holds the OpenCode profile or coven's own files is closed to this call"
+        )
     return None
 
 
@@ -258,22 +289,21 @@ def _drop_dollar(word: str) -> str:
 
 def _may_reach(folder: Path, scope: Scope, mode: Mode) -> bool:
     """Whether a pattern that starts in `folder` can match inside a place closed to the mode."""
-    roots = [scope.serve] if mode is Mode.READ else [scope.profile, scope.serve, *scope.coven]
+    roots = scope.closed_roots(mode)
     return any(root.is_relative_to(folder) or folder.is_relative_to(root) for root in roots)
 
 
-def _glob_paths(pattern: str, scope: Scope, mode: Mode) -> Iterable[Path]:
-    """The folder a glob starts in, and what it matches (a `**` is followed only where it could
-    reach a closed place, so that a pattern on a big tree stays cheap)."""
-    first = min(pattern.index(mark) for mark in GLOB_MARKS if mark in pattern)
-    folder = _real(Path(pattern[: pattern.rfind("/", 0, first) + 1] or "/"))
-    yield folder
+def _glob_matches(pattern: str, folder: Path, scope: Scope, mode: Mode) -> list[Path]:
+    """What a glob matches (a `**` is followed only where it could reach a closed place, so that a
+    pattern on a big tree stays cheap); raises Refused when it matches MAX_GLOB_MATCHES paths."""
     recursive = "**" in pattern and _may_reach(folder, scope, mode)
     try:
-        for found in itertools.islice(glob.iglob(pattern, recursive=recursive), MAX_GLOB_MATCHES):
-            yield _real(Path(found))
+        found = list(itertools.islice(glob.iglob(pattern, recursive=recursive), MAX_GLOB_MATCHES))
     except (OSError, ValueError):
-        return
+        return []
+    if len(found) >= MAX_GLOB_MATCHES:
+        raise Refused("the glob has too many matches; narrow the glob")
+    return [_real(Path(each)) for each in found]
 
 
 def _candidates(word: str, bases: Sequence[Path], cwd: Path, names: Names) -> list[str]:
@@ -294,18 +324,28 @@ class View:
     scope: Scope
     cwd: Path
     names: Names
+    # Whether a folder that holds a closed place is closed too (`grep -r . <home>`, Grep on `/`).
+    folders_closed: bool = True
 
 
 def check_word(word: str, bases: Sequence[Path], view: View, mode: Mode) -> None:
     """Raise Refused when the word, as a path from any of the folders, is closed to the mode."""
     for candidate in _candidates(word, bases, view.cwd, view.names):
         if any(mark in candidate for mark in GLOB_MARKS):
-            found = _glob_paths(candidate, view.scope, mode)
+            # The folder a glob starts in is not read; what it matches is.
+            first = min(candidate.index(mark) for mark in GLOB_MARKS if mark in candidate)
+            folder = _real(Path(candidate[: candidate.rfind("/", 0, first) + 1] or "/"))
+            rule = hit(folder, view.scope, mode)
+            if rule:
+                raise Refused(rule)
+            found = _glob_matches(candidate, folder, view.scope, mode)
         else:
             resolved = _resolve(candidate, view.cwd)
             found = [] if resolved is None else [resolved]
         for path in found:
             rule = hit(path, view.scope, mode)
+            if not rule and view.folders_closed:
+                rule = holds_closed_place(path, view.scope, mode)
             if rule:
                 raise Refused(rule)
 
@@ -343,7 +383,7 @@ class Argv:
 
 
 SEPARATORS = re.compile(r"(\|\||&&|\||;|&|\n)")
-SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"})
+SHELLS: frozenset[str] = wrapper_commands.SHELLS
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 OPENCODE_NAME = re.compile(r"opencode(?:[-@].*)?")
@@ -369,7 +409,10 @@ def _wrapper(valued: str = "", operands: int = 0, assignments: bool = False) -> 
     return Wrapper(frozenset(valued.split()), operands, assignments)
 
 
-WRAPPERS = {
+# How the wrappers of wrapper_commands.WRAPPERS that this guard walks past read their options. A
+# wrapper that is not here (a shell, `su`, `script`, `tmux`...) is not walked past; its command
+# strings are read, and any word that names opencode after it is refused anyway.
+OPTION_SYNTAX = {
     "env": _wrapper("-u --unset -C --chdir", assignments=True),
     "exec": _wrapper("-a"),
     "command": _wrapper(),
@@ -391,11 +434,54 @@ WRAPPERS = {
     "npx": _wrapper("-p --package -c --call"),
     "bunx": _wrapper("-p --package"),
     "pnpx": _wrapper("-p --package"),
+    "taskset": _wrapper(operands=1),
+    "chrt": _wrapper(operands=1),
+    "flock": _wrapper("-w -E -c --timeout --conflict-exit-code --command", operands=1),
+    "unshare": _wrapper("-S -G -R -w --root --wd --setuid --setgid --propagation --map-user"),
+    "setpriv": _wrapper(
+        "--reuid --regid --ruid --euid --rgid --egid --groups --inh-caps --bounding-set"
+        " --ambient-caps --securebits --pdeathsig --selinux-label --apparmor-profile"
+    ),
+    "runuser": _wrapper("-u -g -G -s -c -l --user --group --supp-group --shell --command"),
+    "strace": _wrapper("-e -o -p -s -u -E -a -I -P -S -X -b -O -U --env --output"),
+    "ltrace": _wrapper("-e -o -p -s -u -A -n -l --output"),
+    "parallel": _wrapper("-j -a -S -N -n -L -P --jobs --arg-file --sshlogin --max-args"),
+    "systemd-run": _wrapper(
+        "-p -u -E -M -G --property --unit --setenv --machine --slice --description --uid --gid"
+        " --working-directory --on-active --on-calendar"
+    ),
+    "busybox": _wrapper(),
 }
 RUNNER_OPTIONS = _wrapper("-p --package -c --call -C --prefix --workspace -w")
 FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 COMMAND_STRING_OPTIONS = frozenset({"-c", "--call"})
 RUNNER_NAMES = frozenset({"npx", "bunx", "pnpx", *RUNNER_ARGUMENTS})
+# Programs that run the text of an option as a shell command, and that option (a short option that
+# holds `c` for `sh -c`, `su -lc`, `script -qc`, `flock -c`).
+LAUNCHER_STRING_OPTIONS = {
+    "nix-shell": frozenset({"--run", "--command"}),
+    "nix": frozenset({"-c", "--command"}),
+}
+# Programs that never run a word of their own arguments as a program, so a word that names
+# opencode after one of them is only text (`grep -rn opencode .`, `cd opencode`). `find`'s actions
+# and `coven opencode` are checked by their own rules.
+NEVER_EXECUTES = frozenset(
+    {
+        *("echo", "printf", "git", "grep", "rg", "ls", "cd", "pwd", "cat", "head", "tail", "wc"),
+        *("test", "[", "man", "which", "type", "coven"),
+        # Added by the guard: they only read, copy or name paths.
+        *("find", "tree", "stat", "du", "diff", "cp", "mv", "mkdir", "touch", "file", "realpath"),
+        *("basename", "dirname"),
+    }
+)
+# Programs that never read the content of a folder they are given, so a folder that holds the
+# profile or coven's files may be named to them (`ls ~`, `cd ..`).
+NEVER_READS_CONTENT = frozenset(
+    {
+        *("ls", "cd", "pushd", "popd", "pwd", "stat", "test", "[", "[[", "echo", "printf"),
+        *("dirname", "basename", "realpath", "readlink", "du", "df", "mkdir", "true", "false", ":"),
+    }
+)
 
 
 def _base(word: str) -> str:
@@ -491,7 +577,7 @@ def _unwrapped(words: Sequence[str]) -> list[str]:
         if index >= len(current):
             break
         name = _base(current[index])
-        wrapper = WRAPPERS.get(name)
+        wrapper = OPTION_SYNTAX.get(name)
         if (
             wrapper is None
             and current[index + 1 : index + 2]
@@ -510,17 +596,27 @@ def _unwrapped(words: Sequence[str]) -> list[str]:
     return current[index:]
 
 
-def _command_strings(command: Sequence[str]) -> list[str]:
-    """The texts a command runs as shell: `bash -c X`, `su -c X`, `eval X`."""
-    if not command:
-        return []
-    name = _base(command[0])
-    rest = list(command[1:])
-    if name == "eval":
-        return [" ".join(rest)]
-    if name in SHELLS or name == "su":
-        return _after_option(rest, lambda word: word.startswith("-") and "c" in word.lstrip("-"))
-    return []
+def _short_c_option(word: str) -> bool:
+    """`-c`, `-lc`, `-qc`: a short option that holds `c`."""
+    return word.startswith("-") and not word.startswith("--") and "c" in word
+
+
+def _command_strings(words: Sequence[str]) -> list[str]:
+    """The texts that words run as shell, wherever the program that runs one stands in them (a
+    wrapper may put options and operands before it): `bash -c X`, `su -c X`, `script -qc X`,
+    `flock -c X`, `runuser u -c X`, `busybox sh -c X`, `nix-shell --run X`, `eval X`."""
+    found: list[str] = []
+    for index, word in enumerate(words):
+        name, rest = _base(word), list(words[index + 1 :])
+        if name == "eval":
+            found.append(" ".join(rest))
+        elif name in wrapper_commands.COMMAND_STRING_RUNNERS:
+            found.extend(_after_option(rest, _short_c_option))
+        elif name in LAUNCHER_STRING_OPTIONS:
+            found.extend(_after_option(rest, LAUNCHER_STRING_OPTIONS[name].__contains__))
+        elif name in wrapper_commands.ANYWHERE_WRAPPERS:
+            found.extend(rest)
+    return found
 
 
 def _after_option(words: Sequence[str], is_option: Callable[[str], bool]) -> list[str]:
@@ -534,6 +630,18 @@ def _runner_strings(words: Sequence[str]) -> list[str]:
     for index, word in enumerate(words):
         if _base(word) in RUNNER_NAMES:
             found.extend(_after_option(words[index + 1 :], COMMAND_STRING_OPTIONS.__contains__))
+    return found
+
+
+def _anywhere_commands(words: Sequence[str], piped: bool) -> list[Argv]:
+    """`tmux new -d -s pm opencode db`, `screen -dm opencode db`: the command may follow any of
+    their words, so every tail of the words is read as a command."""
+    found: list[Argv] = []
+    for index, word in enumerate(words):
+        if _base(word) in wrapper_commands.ANYWHERE_WRAPPERS:
+            found.extend(
+                Argv(tuple(words[later:]), piped) for later in range(index + 1, len(words))
+            )
     return found
 
 
@@ -558,7 +666,12 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
         raise Refused("a command nested this deeply cannot be checked")
     command = _unwrapped(argv.words)
     found: list[Argv] = []
-    strings = [*_command_strings(command), *_runner_strings(argv.words), *argv.substitutions]
+    strings = [
+        *_command_strings(argv.words),
+        *_command_strings(command),
+        *_runner_strings(argv.words),
+        *argv.substitutions,
+    ]
     if command and _base(command[0]) in SHELLS:
         strings.extend(argv.inputs)
     for inner in strings:
@@ -567,13 +680,88 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
         for action in _find_actions(command[1:], argv.piped):
             found.append(action)
             found.extend(_nested(action, depth + 1))
+    found.extend(_anywhere_commands(argv.words, argv.piped))
     return found
+
+
+SUBSTITUTION_RULE = (
+    "a command substitution builds a program or a path that cannot be checked,"
+    " so write the path literally"
+)
+# `$(` or a backtick where the program of a command goes: after a separator, a prefix word or a
+# wrapper that runs what follows it, and any `NAME=value` words.
+SUBSTITUTION_PROGRAM = re.compile(
+    r"(?:^|[;&|(\n{]|\b(?:then|do|else|elif|while|until|if|exec|env|nohup|command|builtin|sudo"
+    r"|doas|setsid|time|timeout|xargs|nice|stdbuf|watch|npx|bunx|eval)\b)"
+    r"\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\(|`)"
+)
+SUBSTITUTION_CD = re.compile(r"(?:^|[;&|(\s{])(?:cd|pushd)\s+(?:-\S+\s+)*(?:\$\(|`)")
+SUBSTITUTION_ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=(?:\$\(|`)")
+VARIABLE_TARGET = re.compile(r"(?:(?:^|[;&|(\s{])(?:cd|pushd)\s+(?:-\S+\s+)*|[<>]\s*)$")
+
+
+def _substitution_spans(text: str) -> list[tuple[int, int]]:
+    """Where each `$(...)` (to its closing parenthesis) and each backtick pair starts and ends."""
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("$(", index):
+            depth, end = 0, index + 1
+            while end < len(text):
+                depth += {"(": 1, ")": -1}.get(text[end], 0)
+                if depth == 0:
+                    break
+                end += 1
+            spans.append((index, min(end + 1, len(text))))
+            index += 2
+        elif text[index] == "`":
+            close = text.find("`", index + 1)
+            end = len(text) if close < 0 else close + 1
+            spans.append((index, end))
+            index = end
+        else:
+            index += 1
+    return spans
+
+
+def _variable_builds_a_path(plain: str, name: str) -> bool:
+    """Whether `$name` stands next to a `/`, is a `cd` target or is a redirection target."""
+    for use in re.finditer(rf"\$(?:\{{{name}\}}|{name}\b)", plain):
+        before, after = plain[: use.start()], plain[use.end() :]
+        if before.endswith("/") or after.startswith("/") or VARIABLE_TARGET.search(before):
+            return True
+    return False
+
+
+def check_substitutions(text: str) -> None:
+    """Raise Refused for a `$(...)` or backtick whose output is a program, a `cd` target or part
+    of a path (next to a `/`, or in a variable that is): what it prints is not seen, so a path
+    built by one cannot be judged. `echo $(date)` and `x=$(date); echo $x` are fine."""
+    for source in dict.fromkeys((text, _ansi_c(text))):
+        plain = re.sub(r"['\"\\]", "", source)
+        spans = _substitution_spans(plain)
+        if not spans:
+            continue
+        beside_path = any(
+            plain[start - 1 : start] == "/" or plain[end : end + 1] == "/" for start, end in spans
+        )
+        if (
+            beside_path
+            or SUBSTITUTION_PROGRAM.search(plain)
+            or SUBSTITUTION_CD.search(plain)
+            or any(
+                _variable_builds_a_path(plain, name)
+                for name in dict.fromkeys(SUBSTITUTION_ASSIGNMENT.findall(plain))
+            )
+        ):
+            raise Refused(SUBSTITUTION_RULE)
 
 
 def argvs(text: str, depth: int = 0) -> list[Argv]:
     """Every command in the text, through nested shell strings, `eval`, `$(...)` and `find -exec`."""
     if depth > MAX_NESTING:
         raise Refused("a command nested this deeply cannot be checked")
+    check_substitutions(text)
     found: list[Argv] = []
     for argv in _commands(text):
         found.append(argv)
@@ -626,16 +814,28 @@ def _coven_lifecycle(words: Sequence[str]) -> bool:
     return False
 
 
+def _names_opencode(words: Sequence[str]) -> bool:
+    """Whether a word after the program names opencode (`uv run opencode db`, `coproc opencode`)."""
+    start = _after_prefixes(words, 0)
+    return any(OPENCODE_NAME.fullmatch(_base(word)) for word in words[start + 1 :])
+
+
 def check_command(argv: Argv, names: Names) -> None:
+    words = [names.expand(word) for word in argv.words]
     command = [names.expand(word) for word in _unwrapped(argv.words)]
     if not command:
         return
     program = command[0]
-    if UNRESOLVED.search(program) or "`" in program:
+    if "$(" in program or "`" in program:
+        raise Refused(SUBSTITUTION_RULE)
+    if UNRESOLVED.search(program):
         raise Refused("a command whose program is built at run time cannot be checked")
     name = _base(program)
-    if OPENCODE_NAME.fullmatch(name) and tuple(command[1:]) not in ALLOWED_OPENCODE:
-        raise Refused("`opencode` is closed to a PM but for `opencode --version` and `--help`")
+    if OPENCODE_NAME.fullmatch(name):
+        if tuple(command[1:]) not in ALLOWED_OPENCODE:
+            raise Refused("`opencode` is closed to a PM but for `opencode --version` and `--help`")
+    elif name not in NEVER_EXECUTES and (_names_opencode(words) or _names_opencode(command)):
+        raise Refused("a program that may run `opencode` is closed to a PM when it names it")
     if name == "ps" and _ps_prints_environments(command[1:]):
         raise Refused("`ps` options that print other processes' environments are closed to a PM")
     if _coven_lifecycle(command):
@@ -655,14 +855,25 @@ def check_text(text: str, scope: Scope) -> None:
             raise Refused("another process's environment is closed to a PM")
 
 
+def _only_names_paths(commands: Sequence[Argv]) -> bool:
+    """Whether every program of the line is one that never reads the content of a folder."""
+    return all(
+        _base(program[0]) in NEVER_READS_CONTENT
+        for program in (_unwrapped(each.words) for each in commands)
+        if program
+    )
+
+
 def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
     check_text(command, scope)
-    view = View(scope, cwd, Names(command, scope, cwd))
+    names = Names(command, scope, cwd)
     rule = hit(cwd, scope, Mode.SHELL)
     if rule:
         raise Refused(rule)
-    for argv in argvs(command):
-        check_command(argv, view.names)
+    commands = argvs(command)
+    for argv in commands:
+        check_command(argv, names)
+    view = View(scope, cwd, names, folders_closed=not _only_names_paths(commands))
     bases = _folders(command, cwd, view.names, scope)
     for word in _words_of(command):
         check_word(word, bases, view, Mode.SHELL)
@@ -701,7 +912,8 @@ def path_problem(
     pattern = _text(tool_input, "pattern") if tool == "Glob" else None
     if tool in ("Read", "Write", "Edit", "NotebookEdit", "MultiEdit") and not paths:
         raise Refused("the file of this call cannot be read")
-    view = View(scope, cwd, Names("", scope, cwd))
+    # A folder that holds a closed place is closed to a read of it; a write cannot replace one.
+    view = View(scope, cwd, Names("", scope, cwd), folders_closed=mode is Mode.READ)
     for path in paths or [str(cwd)]:
         check_word(path, [cwd], view, mode)
     if pattern is not None:
