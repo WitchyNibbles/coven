@@ -115,14 +115,10 @@ plan.
 - Sessions, metadata and outcomes survive a server restart; in-flight turns and pending asks do
   not.
 - Config writes hot-reload plugins (`plugin.updated`).
-- Not seen, checked by the plan's Task 0: the TUI attached to a served server (`opencode
-  --server URL` or `attach`); whether session `permissions` survive a restart; whether a throw in
-  `create.before` stops the spawn; whether `create.before`'s `command` and `cwd` equal
-  `execute.before`'s `input.command` and `input.workdir` (or the location directory); which
-  process holds the port and what `/proc/<pid>/exe` names; whether `ctx.session.create` from a
-  plugin works for another location with `agent`, `metadata` and `permissions`; whether
-  `ctx.session.list` returns `metadata`; whether module-scope state is shared between the plugin
-  instances of two locations; two PMs busy at once.
+- Checked live in Task 0 (see "Task 0 results" at the end): TUI attach, a throw in
+  `create.before`, the hook argument match, permissions across a restart, the server process,
+  plugin `session.create` and `list`, the permissions schema, shared plugin state, code in
+  `cache/` and `state/`. Still not seen: two PMs busy at once.
 
 ## Approaches
 
@@ -160,8 +156,10 @@ plan.
 - `status`: one line (`running pid P port N` or `stopped`), then the PM sessions from
   `GET /api/session` (no `parentID`, `metadata.coven.role == "pm"`): code, title, busy or idle,
   last outcome, waiting asks. Read-only.
-- `coven opencode gm`: starts the server if needed, then opens the TUI attached to it with the
-  password in the TUI process env only (the plan's first task checks the 2.3.2 attach flag).
+- `coven opencode gm`: starts the server if needed, then opens the TUI attached to it,
+  `opencode --server http://127.0.0.1:<port>` in `run_env`, with `OPENCODE_SERVER_PASSWORD` in
+  the TUI process env only (`run_env` drops `OPENCODE_PASSWORD`, the name the TUI's own error
+  text gives).
 - `doctor` adds: the server answers when running, the plugin is `active` on it, the password
   file is 0600, and `/openapi.json` has every operation coven calls (so a runtime bump that drops
   one fails in doctor, not in a PM).
@@ -219,8 +217,9 @@ with a test that reads `src/coven/pm/text.py` and fails when the two differ (PM 
 test instead of a generated file, since the lists change rarely).
 
 State shared between tools and the notice tracker (the stop marks, the per-turn "messaged" marks,
-the shell queue) lives at module scope, so every location's plugin instance in the one server
-process sees it; Task 0 checks that the instances share one module.
+the shell queue) lives on `globalThis` under one coven key, so every location's plugin instance
+in the one server process sees it. Module scope is not enough: 2.3.2 evaluates the plugin once
+per location, and Task 0 saw three module copies in one process share only `globalThis`.
 
 ### PM rules on the session (D3)
 
@@ -249,7 +248,8 @@ call with the hook's message; any other failure refuses too. So `git push` of a 
 `gh pr create` and the rest are decided by the same engine as on Claude Code.
 
 The payload's `cwd`, for every hook the plugin runs, is the call's own working directory
-(`input.workdir` for a shell call) when it has one, and the location directory otherwise, so a PM
+(`input.workdir` for a shell call, resolved against the location directory when relative) when
+it has one, and the location directory otherwise, so a PM
 working in a worktree is judged in that worktree (pm-permissions resolves `--body-file` and the
 branch against it).
 
@@ -258,12 +258,14 @@ Each hook gets its own timeout: deny-secrets keeps its existing 5 s and the serv
 
 ### Role in the shell env
 
-`execute.before` for a shell call records `{sessionID, role, command, cwd}` in a module-scope
-queue keyed by `command + "\0" + cwd`. `create.before` takes the oldest entry with the same key
+`execute.before` for a shell call records `{sessionID, role, command, cwd}` in the shared queue,
+keyed by `command + "\0" + cwd`, where `cwd` is `input.workdir` exactly as given (Task 0:
+`create.before` sees the raw string, so a relative `sub` stays `sub`) or the location directory
+when there is none. `create.before` takes the oldest entry with the same key
 and sets coven's role variable in `event.env`. When there is no entry, or entries for the same
 key have different roles, it sets the most restrictive role present (`pm`), and with no role at
 all it sets none. Entries expire after 30 s. (PM call; the spike's single global variable is a
-race under parallel calls. Task 0 checks that the two hooks see the same `command` and `cwd`.)
+race under parallel calls.)
 
 ### Secret scrub
 
@@ -291,11 +293,12 @@ refuses to load when `python3` is missing or older than 3.12: the plugin is then
   `/proc/*/environ`, and `ps` with an option that prints other processes' env (`e`, `-E`, `eww`);
 - any edit, write or patch, and any shell command that names the path, under the protected set
   (the profile config guard): the profile's `config/`, `plugin/`, `runtime/`, `data/` (the
-  session database: a model with `sqlite3` could rewrite its own metadata or rules),
+  session database: a model with `sqlite3` could rewrite its own metadata or rules), `cache/`
+  (Task 0 found the `opencode-pty` binary and Bun's compiled cache there, code OpenCode runs),
   `profile.json` and the serve folder, plus coven's own `hooks/` and `opencode/src/` under the
   plugin's `covenRoot` (the guards themselves). A PM's worktree of the coven repo is another
-  path, so work on coven is not blocked. The profile's `tmp/` (where `TMPDIR` points) and
-  `cache/` stay writable. Paths are judged after resolving `cwd`, `..`, `~`, `$HOME` and symbolic
+  path, so work on coven is not blocked. The profile's `tmp/` (where `TMPDIR` points) stays
+  writable. Paths are judged after resolving `cwd`, `..`, `~`, `$HOME` and symbolic
   links where the tool names a path; for shell, as far as the command parser sees;
 - `coven opencode setup`, `install`, `serve` and `gm` from any model shell, the GM's included:
   a config write hot-reloads the plugin, and `serve stop` needs no password. The user runs these
@@ -427,12 +430,6 @@ Two new e2e groups in `opencode/test/e2e/`, run by `npm run e2e`, offline in `un
 
 ## Left to the builder
 
-- The exact attach flag for the TUI on 2.3.2, and the fallback if attach does not work (then the
-  GM is a plain lead session in a TUI on the same profile, and D1 comes back to the user).
-- Whether session `permissions` survive a restart; if not, the plugin re-applies the PM rules to
-  every PM session once per server process, from the first plugin instance to set up
-  (idempotent; one rule list, in TypeScript, with the secret rules passed in from the generated
-  config; PM call).
 - Module layout inside `opencode/src/pm/` and the split of PRs, inside the goals.
 - A live fact that fails later: the smallest fix that keeps the goals and anti-goals, recorded as
   a ruling. An anti-goal that cannot be kept is a stop.
@@ -475,7 +472,8 @@ or `serve status`, as on Claude Code.
 2. **For the user: if the TUI cannot attach to the server on 2.3.2.** Not seen in the spike. Then D1 needs a
    new answer: the GM runs as a plain lead TUI on the same profile with its own server process
    (which `run`'s refusal above rules out), or the GM moves to a Claude Code session after all.
-   The plan checks this first and stops there if it fails.
+   The plan checks this first and stops there if it fails. Settled by Task 0: the TUI attaches
+   with `opencode --server URL`, so D1 holds as written.
 3. **For the user: OS isolation for PM shells.** The scrub and the guards keep the password and
    the key away from a model that follows its role, but a same-user script that builds the path
    at run time can read the server's env (goal 5 is best effort, as the production guard is on
@@ -493,5 +491,37 @@ CEO REVIEW SUMMARY
 - Deferred: the guard-on flow and approvals (M3), the PM todo list, a Claude Code GM, `opencode
   service`.
 - Not in scope: 1.x, aquelarre, two GMs, starting the server at login.
-- Status: done with concerns (item 2 is open until the plan's first task; item 3 is the
-  user's).
+- Status: done with concerns (item 2 settled by Task 0; item 3 is the user's).
+
+## Task 0 results
+
+Run on 2026-11-25 against OpenCode 2.3.2, offline inside `unshare -rn` with the harness fake
+model, in a scratch profile (`COVEN_OPENCODE_HOME`, `HOME`, the XDG folders and `TMPDIR` under
+`/tmp`, the runtime copied in). A throwaway plugin `spike` sat next to `coven`. Nothing was
+committed but this section; the real profile and `~/.config/opencode` have no file newer than
+the run's start stamp, and no process of the run was left.
+
+| Check | Result | Receipt |
+|---|---|---|
+| TUI attach | yes | No `attach` subcommand; the form is `opencode --server URL`. Under `script -qc`, `coven opencode run -- --server http://127.0.0.1:4096 --prompt ...` created a lead session on the served server (`GET /api/session` went from 6 to 7; agent `build`, no metadata) and the fake model answered. Without a password the TUI prints `requires a password; set OPENCODE_PASSWORD`; through `coven opencode run` only `OPENCODE_SERVER_PASSWORD` works, since `run_env` drops the other name. |
+| Throw in `create.before` | yes, the spawn stops | `touch` of a marker left no file; the tool result was `{"status":"error","error":{"type":"unknown","message":"spike: refusing shell create ..."}}`. The control command ran. |
+| Hook argument match | `command` equal; `cwd` is the raw `workdir` | No `workdir`: `cwd` is the location directory. Absolute `workdir`: equal. Relative `workdir` `sub`: `cwd` is the string `sub` (resolved later by OpenCode). `create.before` has `command, cwd, timeout, shell, env` and no session id. |
+| Permissions across a restart | yes | Sessions with a `shell` deny on `*` and on `touch *` refused before and after a restart (SIGTERM to the port holder, new pid); `GET /api/session/{id}` still shows `permissions` and `metadata`. A control session ran shell. |
+| Server process | no wrapper | `.bin/opencode` is a symlink to `@opencode/cli/bin/opencode.exe`, an ELF binary. The pid that holds the port is the one `coven opencode run -- serve` started (the CLI execs into it); `/proc/<pid>/exe` names that `opencode.exe` under the profile's runtime. |
+| Plugin `session.create` and `list` | yes | `ctx.session.create({agent, location: {directory}, metadata, permissions, title})` made sessions in two other locations, one whose plugin instance had not loaded yet. `ctx.session.list({})` returns every location's sessions with `metadata` and `permissions`, plus a `cursor`. |
+| Permissions schema | same as coven's | `permissions` is an array of `Permission.Rule` `{action: string, resource: string, effect: "allow" \| "deny" \| "ask"}`, all required, no other fields: the shape of `generate.py`'s `_rule`. |
+| Shared plugin state | `globalThis` only | One server process evaluated the plugin three times (three module ids). A value set on `globalThis` from one location was seen from another; module-level values were not. |
+| Code in `cache/` and `state/` | `cache/` yes, `state/` no | `cache/` holds the `opencode-pty` binary and Bun compiled-cache files; `state/` holds pty service and lock files, prompt history and tabs. A deeper look (`file`, `strings`) was refused by this session's guard and not routed around. |
+
+What the results change:
+- D1 holds as written; `coven opencode gm` uses `opencode --server URL` with
+  `OPENCODE_SERVER_PASSWORD`.
+- Shared state goes on `globalThis` (Roles and the GM session; plan Tasks 6 and 10).
+- The shell queue key uses `workdir` exactly as given; the hook payload `cwd` resolves a
+  relative `workdir` against the location directory (plan Tasks 6 and 7).
+- No re-apply of PM rules after a restart is needed (plan Task 10 drops it).
+- `cache/` joins the protected set (plan Task 4).
+- Seen in passing: a session deny of `shell *` removes the shell tool from the model's list
+  (`No tool named "shell" is currently available`), while a narrower deny gives
+  `permission.rejected`. The PM ruleset denies only narrow patterns, so nothing changes.
+- Not run: a SIGKILL restart (only SIGTERM), two PMs busy at once.

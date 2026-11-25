@@ -91,6 +91,10 @@ PR C Tasks 11-13 (content, e2e, docs).
 
 ### Task 0: Live checks the design rests on
 
+Done on 2026-11-25; the results are in the spec's "Task 0 results", and the tasks below already
+follow them (no stop was hit: the TUI attaches, the hooks match, the plugin can create PM
+sessions, permissions survive a restart, shared state lives on `globalThis`).
+
 No product code. A scratch profile under `/tmp`, offline, fake model, as in the spike. Each step
 records what it saw.
 
@@ -178,7 +182,8 @@ What a failure changes:
   - `serve.ServeFiles(password: Path, port: Path, pid: Path, log: Path)`;
     `serve.files(layout: Layout) -> ServeFiles`.
   - `serve.ServerInfo(pid: int, port: int)`; `serve.running(layout) -> ServerInfo | None` (a live
-    pid that is the server process Task 0 Step 5 found).
+    pid whose `/proc/<pid>/exe` is the profile runtime's `@opencode/cli/bin/opencode.exe`; the
+    CLI execs into it, so there is no wrapper).
   - `serve.start(layout, profile, port: int | None = None, *, spawn=subprocess.Popen,
     wait_s: float = 20.0) -> ServerInfo`; `serve.stop(layout, *, grace_s: float = 10.0) -> bool`.
   - `serve.status(layout) -> list[str]` (the lines `serve status` prints).
@@ -225,8 +230,8 @@ What a failure changes:
   permission list and reply, event).
 
 - [ ] **Step 1: Write the failing tests**
-  - `test_gm_starts_server_when_stopped_then_execs_attach`: the exec'd argv is the attach form
-    Task 0 found, with the URL; `OPENCODE_SERVER_PASSWORD` is in the TUI env only.
+  - `test_gm_starts_server_when_stopped_then_execs_attach`: the exec'd argv ends in
+    `--server http://127.0.0.1:<port>`; `OPENCODE_SERVER_PASSWORD` is in the TUI env only.
   - `test_gm_stops_when_plugin_not_active`: `/api/plugin` without `coven` active → exit 1,
     "coven's plugin is not active on the server", no exec.
   - doctor: `test_doctor_server_password_mode`, `test_doctor_openapi_has_required_operations`
@@ -270,14 +275,15 @@ What a failure changes:
     `echo x > <profile>/config/opencode/agents/a.md`, Write on `<profile>/plugin/coven/index.ts`,
     `sqlite3 <profile>/data/opencode/opencode.db`, Edit of `<profile>/profile.json`, Write
     through a symbolic link under `<profile>/tmp/` that points at `<profile>/config/`, Write on
-    `<coven-root>/hooks/deny_secrets.py`, Edit of `<coven-root>/opencode/src/guard.ts`,
+    `<coven-root>/hooks/deny_secrets.py`, Edit of `<coven-root>/opencode/src/guard.ts`, Write in
+    the profile's `cache` folder (it holds the `opencode-pty` binary),
     `ln -s <profile>/config <profile>/tmp/c`.
   - Refused, coven commands: `coven opencode setup --model lead=x`, `coven opencode serve stop`,
     `coven opencode gm`, `coven opencode install`.
   - Allowed: `opencode --version`, `opencode --help`, `curl http://127.0.0.1:8080/` (another
     port), `ps aux`, `cat /proc/cpuinfo`, Read of `<profile>/config/opencode/AGENTS.md` (reading
     config with the Read tool is fine; writing it is not), `npm test`, Write on
-    `<profile>/tmp/body.md`, Write in the profile's `cache` folder, Edit of
+    `<profile>/tmp/body.md`, Edit of
     `<other>/coven-worktree/hooks/deny_secrets.py` (a worktree of the coven repo outside
     `<coven-root>`), `coven opencode doctor`, `coven pm --help`.
   - `test_no_port_file_still_refuses_opencode_api`.
@@ -338,9 +344,12 @@ What a failure changes:
     for a session in the chain, a cycle, or more than 32 hops returns `{role: "pm"}` (fail closed).
     A chain that ends cleanly with no role returns undefined.
   - `isRoot(s: SessionLike): boolean`.
-  - `pm/state.ts`: module-scope `sharedState` with `queue: ShellQueue`, `messaged: Set<string>`,
-    `stopped: Set<string>` (one per server process, Task 0 Step 7).
-  - `class ShellQueue { record(e: {sessionID: string; role: Role | undefined; command: string; cwd: string}, now: number): void; take(command: string, cwd: string, now: number): Role | undefined }` (key `command + "\0" + cwd`, as Task 0 Step 3 confirms; entries expire after 30 000 ms; mixed roles for one key → `"pm"`).
+  - `pm/state.ts`: `sharedState()` returns one object kept on `globalThis` under a coven symbol
+    key, with `queue: ShellQueue`, `messaged: Set<string>`, `stopped: Set<string>` (Task 0: the
+    plugin module is evaluated once per location, and only `globalThis` is shared).
+    Test: `two module copies see one sharedState` (import the module twice with a cache-busting
+    query).
+  - `class ShellQueue { record(e: {sessionID: string; role: Role | undefined; command: string; cwd: string}, now: number): void; take(command: string, cwd: string, now: number): Role | undefined }` (key `command + "\0" + cwd`; on the `execute.before` side `cwd` is `input.workdir` exactly as given, or the location directory when there is none, because `create.before` sees the raw string; entries expire after 30 000 ms; mixed roles for one key → `"pm"`). Test: `a relative workdir pairs by its raw string`.
   - `scrubEnv(env: Record<string, string | undefined>, keyEnv: string): void` (deletes
     `OPENCODE_SERVER_PASSWORD`, `OPENCODE_PASSWORD`, `keyEnv`, and any `OPENCODE_*` name ending in
     `_PASSWORD`, `_TOKEN` or `_KEY`).
@@ -376,7 +385,8 @@ What a failure changes:
   - `SpawnFn = (command: string, args: readonly string[], env?: NodeJS.ProcessEnv) => GuardChild`.
   - `runHookScript(covenRoot: string, script: string, extraArgs: readonly string[], payload: Payload, timeoutMs: number, env?: NodeJS.ProcessEnv, spawn?: SpawnFn): Promise<void>`.
   - `HOOK_TIMEOUTS_MS = { denySecrets: 5000, serverGuard: 5000, pmPermissions: 15000, prodGuard: 30000 }`.
-  - The payload `cwd` is `input.workdir` when the call has one, else the location directory.
+  - The payload `cwd` is `input.workdir` when the call has one (resolved against the location
+    directory when relative), else the location directory.
   - One `execute.before` hook that, per mapped payload, runs in order: `deny_secrets.py` (all
     sessions), `opencode_server_guard.py --profile <profileDir> --serve <serveDir> --coven-root <covenRoot>`
     (all sessions), then for PM-tree sessions `pm_permissions.py --pre-tool-use` and
@@ -477,10 +487,8 @@ What a failure changes:
 - Consumes: `follow` from `join/subscription.ts`; Tasks 6-9.
 - Produces: `class NoticeTracker { constructor(directory: string, deps); onEvent(event): Promise<void> }`
   (reads `sharedState.messaged` and `sharedState.stopped`); `pmSetup(ctx, options, deps): Promise<() => void>`
-  that registers the tools, the shell hooks, the evaluate hook and the tracker, and, if Task 0
-  Step 4 failed, re-applies `pmRules` to every PM session once per server process, from the
-  first plugin instance to set up (a module-scope flag; idempotent, so a second run changes
-  nothing). Test: `re-apply runs once and twice gives the same rules`.
+  that registers the tools, the shell hooks, the evaluate hook and the tracker. (No re-apply of
+  PM rules: Task 0 saw session permissions survive a restart.)
 
 - [ ] **Step 1: Write the failing tests**
   - `a pm turn with no message queues one notice into the GM with the exact text`.
@@ -559,7 +567,7 @@ What a failure changes:
 
 | Task | h |
 |---|---|
-| 0 live checks | 1-1.5 |
+| 0 live checks | done |
 | 1 role and options | 0.5-1 |
 | 2 server lifecycle | 1.5-2.5 |
 | 3 gm and doctor | 1-1.5 |
@@ -573,9 +581,8 @@ What a failure changes:
 | 11 manager and PM text | 1-2 |
 | 12 e2e | 2-3 |
 | 13 docs, full check, final review | 1-2 |
-| **Total** | **19-30 h** |
+| **Total (Tasks 1-13)** | **18-28.5 h** |
 
-Human gates on top: the user's spec review, PR reviews, and a stop after Task 0 if the TUI cannot
-attach, the shell hooks do not match, or the plugin cannot create a PM session. OS isolation of
+Human gates on top: the user's spec review and PR reviews. Task 0 hit none of its stops. OS isolation of
 PM shells (spec, "Raised by the review" item 3) is not in this plan; if the user adds it, about
 3 to 5 h more.
