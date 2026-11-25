@@ -77,7 +77,10 @@ _SHIM_CHECKOUT_FALLBACK: Final = """if [ -z "$root" ]; then
   exec "$checkout/bin/coven" "$@"
 fi
 """
-_SHIM_CHECKOUT_LINE: Final = re.compile(r"^  checkout=(.*)$", re.MULTILINE)
+# The quoted path may hold a newline, so it runs up to the `if` line that follows it.
+_SHIM_CHECKOUT_LINE: Final = re.compile(
+    r"^  checkout=(.*)\n  if \[ ! -x \"\$checkout/bin/coven\" \]", re.MULTILINE | re.DOTALL
+)
 JsonObject = dict[str, object]
 
 
@@ -338,10 +341,16 @@ def shim_text(checkout: Path | None) -> str:
 
 
 def _shim_checkout() -> Path | None:
-    """The clone the shim may fall back to; not a plugin-cache root, which is versioned and pruned."""
+    """The clone the shim may fall back to, or `None` when there is none to run.
+
+    Not a plugin-cache root (versioned, pruned), and not a root without an executable `bin/coven`
+    (a wheel install's root is `<venv>/lib/python3.x`).
+    """
     root = paths.root()
     plugins = paths.installed_plugins_file().parent.resolve()
-    return None if root.is_relative_to(plugins) else root
+    if root.is_relative_to(plugins) or not os.access(root / "bin" / "coven", os.X_OK):
+        return None
+    return root
 
 
 def _is_coven_shim(text: str) -> bool:

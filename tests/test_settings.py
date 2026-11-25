@@ -308,7 +308,13 @@ def test_undo_leaves_a_shim_someone_edited():
     assert shim_file().exists()
 
 
-def at_root(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
+def at_root(monkeypatch: pytest.MonkeyPatch, root: Path, *, runnable: bool = True) -> None:
+    """Make `root` the root of this install; `runnable` gives it an executable `bin/coven`."""
+    if runnable:
+        script = root / "bin" / "coven"
+        script.parent.mkdir(parents=True)
+        script.write_text("#!/bin/sh\n")
+        script.chmod(0o755)
     monkeypatch.setattr(paths, "root", lambda: root)
 
 
@@ -326,6 +332,17 @@ def test_a_shim_written_from_a_plugin_cache_root_is_the_plugin_only_text(
 ):
     # A plugin-cache root is versioned and gets pruned: baking it in would point at nothing.
     at_root(monkeypatch, paths.installed_plugins_file().parent / "cache" / "coven" / "0.1.0")
+
+    settings.apply(settings.plan(choices(shim=True)))
+
+    assert shim_file().read_text(encoding="utf-8") == settings.SHIM_TEXT
+
+
+def test_a_root_without_an_executable_bin_gets_the_plugin_only_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # A wheel install's root is <venv>/lib/python3.x: there is no clone to fall back to.
+    at_root(monkeypatch, tmp_path / "site-packages", runnable=False)
 
     settings.apply(settings.plan(choices(shim=True)))
 
@@ -368,6 +385,18 @@ def test_a_shim_written_for_another_clone_is_replaced(
     new_text = shim_file().read_text(encoding="utf-8")
     assert str(tmp_path / "new clone") in new_text
     assert "old clone" not in new_text
+
+
+def test_a_shim_for_a_clone_whose_path_holds_a_newline_is_coven_s_to_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    write_shim(settings.shim_text(tmp_path / "line one\nline two"))
+    at_root(monkeypatch, tmp_path / "clone")
+
+    [change] = shim_changes()
+
+    assert change.previously == (change.before,)
+    assert str(tmp_path / "clone") in str(change.after)
 
 
 def test_undo_removes_a_shim_that_replaced_todays_text(

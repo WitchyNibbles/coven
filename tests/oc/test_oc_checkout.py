@@ -58,6 +58,10 @@ def test_every_subcommand_refuses_a_wheel_install_before_doing_anything(
 ):
     profile = tmp_path / "profile"
     monkeypatch.setenv("COVEN_OPENCODE_HOME", str(profile))
+    # If the check ever regressed, `install` would stop at "npm not found", not reach the network.
+    no_tools = tmp_path / "no-tools"
+    no_tools.mkdir()
+    monkeypatch.setenv("PATH", str(no_tools))
 
     code = cli.main(["opencode", *args])
 

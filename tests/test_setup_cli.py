@@ -337,7 +337,9 @@ def test_shim_with_no_plugins_file_says_not_installed(store: Path, checkout: Pat
 def test_shim_names_both_when_neither_the_plugin_nor_the_checkout_is_there(
     store: Path, checkout: Path
 ):
+    install_fake_plugin(checkout, "clone")
     assert run_setup("--yes", "--shim", "--memory-path", str(store)) == 0
+    (checkout / "bin" / "coven").unlink()
 
     done = run_shim("doctor")
 
