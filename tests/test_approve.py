@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from support import REPO, git
+from support import REPO, git, neutral_hook
 
 from coven import approve, cli, guard
 from coven.errors import CovenError
@@ -58,6 +58,7 @@ def make_store(path: Path, guard_json: object = GUARD) -> Path:
     """A store with the real pre-commit hook, a committed guard.json, and coven's config pointing
     at it."""
     memory_store.init_store(path, None)
+    neutral_hook(path)
     (path / "systems").mkdir(exist_ok=True)
     (path / "systems" / "guard.json").write_text(json.dumps(guard_json))
     git(path, "add", "-A")
@@ -69,6 +70,33 @@ def make_store(path: Path, guard_json: object = GUARD) -> Path:
 @pytest.fixture
 def store() -> Path:
     return make_store(home() / "coven-memory")
+
+
+COMMIT_WITHOUT_ROLE = f"""
+import os, subprocess, sys
+env = {{key: value for key, value in os.environ.items() if key != {ROLE!r}}}
+done = subprocess.run(
+    ["git", "-C", sys.argv[1], "commit", "-q", "-m", "x"], env=env, capture_output=True, text=True
+)
+sys.stderr.write(done.stderr)
+sys.exit(done.returncode)
+"""
+
+
+def test_a_fixture_store_commits_under_a_parent_with_a_role(tmp_path: Path) -> None:
+    """The role sits on git's parent, not on git: the hook finds it only by walking the ancestors."""
+    made = make_store(tmp_path / "store")
+    (made / "note.txt").write_text("one new file\n")
+    git(made, "add", "note.txt")
+    outer = subprocess.run(
+        [sys.executable, "-I", "-c", COMMIT_WITHOUT_ROLE, str(made)],
+        check=False,
+        env={**os.environ, ROLE: "pm"},
+        capture_output=True,
+        text=True,
+    )
+    assert outer.returncode == 0, outer.stderr
+    assert git(made, "status", "--porcelain") == ""
 
 
 def head(store: Path) -> str:
@@ -649,6 +677,7 @@ def test_one_existing_file_stops_a_multi_system_approval_before_any_write(store:
 def test_a_store_with_no_committed_guard_json_has_nothing_to_approve_against() -> None:
     bare = home() / "bare-memory"
     memory_store.init_store(bare, None)
+    neutral_hook(bare)
     configure(bare)
     refused(bare, "step-ng", f"{ORDERS}\n", "no committed systems/guard.json")
     assert approval_files(bare) == []
