@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- The GM/PM hierarchy on OpenCode: `coven opencode serve start|stop|status` runs one
+  password-protected `opencode serve` on loopback for the profile, and `coven opencode gm` opens
+  the OpenCode TUI on it as the general manager. The GM launches, lists, messages, resumes and
+  stops project managers with the tools `coven_gm_claim`, `coven_pm_launch`, `coven_pm_list`,
+  `coven_send`, `coven_pm_resume` and `coven_pm_stop`; a PM's messages and turn-end
+  `[coven notice]` lines reach the GM on their own. `coven opencode run` refuses while the server
+  runs. The manager skill and a new `project-manager` agent (its model: `coven opencode setup
+  --model project-manager=ID`) ship with `coven opencode setup`. See
+  [opencode/README.md](opencode/README.md#hierarchy).
+- PM sessions on OpenCode run unattended: a prompt in a PM tree is refused and the PM sends it to
+  the GM as a `QUESTION` or `PROD-STEP`, the PM's shells carry the session role so the memory
+  store's pre-commit hook works, and a PM tree runs pm-permissions and a deny-only production
+  guard that refuses every call reaching a target in `systems/guard.json`. Until M3, a production
+  step on OpenCode is run by the GM after the user's yes.
+- A server guard (`hooks/opencode_server_guard.py`) runs for every OpenCode session. From a model's
+  shell it refuses the `opencode` command, the server's port, its password file, writes to the
+  profile and `coven opencode setup`, `install`, `serve` and `gm`. It keeps coven's own checkout
+  read-only: work happens in a worktree under `.claude/worktrees/`. Every shell command also
+  loses the server password and any `OPENCODE_` password, token or key variable.
+- On OpenCode 2.3.2 `coven_pm_stop` with `archive: true` hides a PM by a `coven.archived` metadata
+  flag; the session is not archived in OpenCode. `coven_pm_list` with `archived: true` shows
+  hidden PMs, and `coven_pm_resume` clears the flag.
+- `coven opencode doctor` adds the checks `python3`, `server`, `password` and `operations`.
+
 ## 0.2.0 (2026-11-25)
 
 - The coven plugin for OpenCode removes the provider key variable and `OPENCODE_SERVER_PASSWORD`

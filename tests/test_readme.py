@@ -393,12 +393,93 @@ def test_known_gaps_covers_opencode() -> None:
 
 
 def test_known_gaps_says_what_opencode_does_not_have() -> None:
-    hierarchy = bullet_about("GM/PM hierarchy")
-    assert "not" in hierarchy
-    assert "yet" in hierarchy
+    assert "GM/PM hierarchy" not in known_gaps()  # built in M2; its bullet is gone
+    assert "Only the deny-secrets guard runs" not in known_gaps()
+    later = bullet_about("guard-on flow")
+    assert "M3" in later
+    assert "approvals" in later.lower()
     guard = bullet_about("production guard")
-    assert "planned" not in guard  # only the hierarchy is planned
+    assert "planned" not in guard  # only M3 and the isolation follow-up are planned
     assert "aquelarre" in guard.lower()
+    for needle in ("server guard", "pm-permissions", "deny-only", "guard.json", "no targets"):
+        assert needle in guard, needle
+
+
+def test_known_gaps_says_what_archive_does_on_opencode_2_3_2() -> None:
+    archive = bullet_about("coven.archived")
+    for needle in (
+        "no plugin-side archive",
+        "`coven_pm_stop` with `archive: true`",
+        "hides a PM from `coven_pm_list`",
+        "does not archive the session in OpenCode",
+        "`archived: true`",
+        "unarchive it there before a resume",
+    ):
+        assert needle in archive, needle
+
+
+def test_known_gaps_says_os_isolation_of_pm_shells_is_a_follow_up() -> None:
+    isolation = bullet_about("OS isolation")
+    for needle in ("PID and mount namespaces", "planned follow-up", "not built"):
+        assert needle in isolation, needle
+
+
+def test_the_opencode_readme_has_a_hierarchy_section() -> None:
+    body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Hierarchy"))
+    for needle in (
+        "coven opencode serve start",
+        "coven opencode serve status",
+        "coven opencode serve stop",
+        "coven opencode gm",
+        "`coven_gm_claim`",
+        "`coven_pm_launch {",
+        "`coven_pm_list {",
+        "`coven_send {",
+        "`coven_pm_resume {",
+        "`coven_pm_stop {",
+        "`project-manager`",
+        "[coven notice]",
+        "No guard",
+        "until M3 a production step on OpenCode is always run by the GM, after the user's yes",
+        "`systems/guard.json`",
+        "has no targets",
+        "deny-only",
+    ):
+        assert needle in body, needle
+
+
+def test_the_hierarchy_section_says_what_archive_does_and_what_the_guards_keep() -> None:
+    body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Hierarchy"))
+    for needle in (
+        "`coven.archived`",
+        "does not archive the session in OpenCode",
+        "`coven_pm_list` with `archived: true`",
+        "unarchive it there before a resume",
+        "own checkout is read-only to every session",
+        "`.claude/worktrees/`",
+        "refuses while a server runs",
+    ):
+        assert needle in body, needle
+
+
+def test_the_changelog_lists_the_opencode_hierarchy_under_unreleased() -> None:
+    text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert text.index("## Unreleased") < text.index("## 0.2.0 (2026-11-25)")
+    between = text.split("## Unreleased", 1)[1].split("## 0.2.0 (2026-11-25)", 1)[0]
+    assert "\n## " not in between  # one section, directly above 0.2.0
+    entry = flat(between)
+    for needle in (
+        "coven opencode serve",
+        "coven opencode gm",
+        "coven_pm_launch",
+        "project-manager",
+        "server guard",
+        "deny-only",
+        "opencode/README.md#hierarchy",
+    ):
+        assert needle in entry, needle
+    released = text.split("## 0.2.0 (2026-11-25)", 1)[1]
+    assert "coven_pm_launch" not in released  # the released section stays as it was
 
 
 def test_known_gaps_says_where_the_opencode_superpowers_come_from() -> None:
