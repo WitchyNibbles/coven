@@ -177,7 +177,9 @@ plan.
   code>"}}`. Children copy it, so a PM's implementer is in the PM tree.
 - The GM session is the lead TUI session. It has no metadata at creation, so the GM marks itself
   with a `coven_gm_claim` tool (sets `role: gm` on its own session). The manager skill calls it
-  first. A claim takes over: the previous GM session, if any, becomes `role: former-gm`, so a
+  first. A claim takes over: the previous GM session, if any, becomes `role: former-gm` first and
+  the claimer becomes `gm` second (a claim that fails between the two leaves no GM, which PMs
+  see as "no GM session", never two GMs), so a
   user who opens a new TUI session tomorrow becomes the GM without archiving anything. A PM never
   stores the GM's id: `coven_send` to the GM and the notices go to the root session (no
   `parentID`) that holds `role: gm` when they are sent; a GM's child copies `role: gm` but is
@@ -251,8 +253,8 @@ The payload's `cwd`, for every hook the plugin runs, is the call's own working d
 working in a worktree is judged in that worktree (pm-permissions resolves `--body-file` and the
 branch against it).
 
-Each hook gets its own timeout, matching `hooks/hooks.json`: deny-secrets and the server guard
-5 s, pm-permissions 15 s, the production guard 30 s.
+Each hook gets its own timeout: deny-secrets keeps its existing 5 s and the server guard gets
+5 s; pm-permissions 15 s and the production guard 30 s, as in `hooks/hooks.json`.
 
 ### Role in the shell env
 
@@ -339,7 +341,8 @@ only the plugin instance whose location is that session's directory acts, so one
 per turn. If the PM called `coven_send` to the GM during that turn (tracked per session from the
 `session.execution.started` event to the end event), or the turn ended because the GM called
 `coven_pm_stop`, or the PM still has a busy child session (its report will wake the PM, so the PM
-has not stopped), no notice. A turn that ends `failed` always gets a notice, message or not.
+has not stopped), no notice. A turn that ends `failed` always gets a notice, message or not;
+after a message its text says `ended a turn (failed) after its message` instead.
 Otherwise it queues into the GM `[coven notice] pm-<code> ended a turn (<outcome>) without a
 message. Last line: <first 200 chars>`. (PM calls refining D4, listed under Decisions: a notice
 for a PM that is still working costs a GM turn for nothing, and a failure must never be hidden
@@ -427,8 +430,9 @@ Two new e2e groups in `opencode/test/e2e/`, run by `npm run e2e`, offline in `un
 - The exact attach flag for the TUI on 2.3.2, and the fallback if attach does not work (then the
   GM is a plain lead session in a TUI on the same profile, and D1 comes back to the user).
 - Whether session `permissions` survive a restart; if not, the plugin re-applies the PM rules to
-  every PM session when it starts in the GM's location (one rule list, in TypeScript; PM call).
-  No PM turn runs before that: PMs only move when the GM or a notice prompts them.
+  every PM session once per server process, from the first plugin instance to set up
+  (idempotent; one rule list, in TypeScript, with the secret rules passed in from the generated
+  config; PM call).
 - Module layout inside `opencode/src/pm/` and the split of PRs, inside the goals.
 - A live fact that fails later: the smallest fix that keeps the goals and anti-goals, recorded as
   a ruling. An anti-goal that cannot be kept is a stop.

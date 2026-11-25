@@ -32,8 +32,8 @@ on Node (`node --test`), OpenCode 2.3.2 plugin API; the offline fake-model e2e h
   contract test that reads that dict.
 - Every hook fails closed: a throw, a timeout, a spawn error, an unknown exit or a failed role
   lookup refuses.
-- Hook timeouts match `hooks/hooks.json`: deny-secrets and the server guard 5 000 ms,
-  pm-permissions 15 000 ms, the production guard 30 000 ms.
+- Hook timeouts: deny-secrets keeps its existing 5 000 ms, the server guard 5 000 ms;
+  pm-permissions 15 000 ms and the production guard 30 000 ms, as in `hooks/hooks.json`.
 - The server binds `127.0.0.1` only. The password is 32 random bytes, hex, file mode 0600. The
   serve folder is `<profile>/state/serve/` (`Layout.serve_dir`).
 - PM prefixes: PM to GM `QUESTION`, `PROD-STEP`, `DRAFT`, `DONE`, `BLOCKED`; GM to PM `ANSWER`,
@@ -41,7 +41,8 @@ on Node (`node --test`), OpenCode 2.3.2 plugin API; the offline fake-model e2e h
 - Metadata shape: `{"coven": {"role": "gm" | "pm" | "former-gm", "code": "<code>"}}`; a PM finds
   the GM as the live root session (no `parentID`) holding `role: gm`.
 - Notice text: `[coven notice] pm-<code> ended a turn (<outcome>) without a message. Last line:
-  <first 200 chars>`.
+  <first 200 chars>`; for a failed turn that did message the GM, `[coven notice] pm-<code>
+  ended a turn (failed) after its message. Last line: <first 200 chars>`.
 - Checks: `python3 .coven/check.py fast <files>` during a task; the e2e by hand with
   `npm run e2e` (in `opencode/`), output pasted in the PR. No suppressions.
 
@@ -107,7 +108,8 @@ records what it saw.
   which pid holds the listening port (`ss -ltnp`), and what that pid's `/proc/<pid>/exe` names.
 - [ ] **Step 6: Plugin session calls.** From the plugin, `ctx.session.create` in another location
   with `agent`, `metadata` and `permissions`; then `ctx.session.list` and check it returns
-  `metadata`.
+  `metadata`. Check the `permissions` schema of `POST /api/session` in `/openapi.json` against the
+  `{action, resource, effect}` shape of `generate.py`'s `_rule`.
 - [ ] **Step 7: Shared module state.** Two locations on one server: confirm a module-scope value
   set by one location's plugin instance is seen by the other's.
 - [ ] **Step 8:** Append the results to the spec as `## Amendment (Task 0)` and commit
@@ -122,8 +124,10 @@ What a failure changes:
   every PM session when the plugin starts in the GM's location. Task 12's restart check covers it.
 - Step 5: Task 2's `running` matches the process Step 5 found.
 - Step 6 fails: `BLOCKED` (the launch tool cannot be built as designed).
-- Step 7 fails: `pm/state.ts` keeps the shared state in a file under the profile's `tmp/`
-  instead, keyed by session id. Record this as a ruling.
+- Step 7 fails: `pm/state.ts` keeps the shared state in a file in the serve folder (protected
+  from models by the server guard) instead, keyed by session id. Record this as a ruling.
+- Also record whether anything loaded as code lives in the profile's `cache/` or `state/`; if so,
+  that folder joins the protected set in Task 4.
 
 ### Task 1: Profile role and plugin options
 
@@ -137,8 +141,10 @@ What a failure changes:
 - Produces: `ROLES` gains `"project-manager"`; `Profile.model("project-manager")` falls back to
   lead. `Layout.serve_dir: Path` (`<profile>/state/serve`). `config_data` writes
   `agents["project-manager"].model`. `plugin_options(profile, coven_root, layout, store)` adds
-  `keyEnv: str`, `profileDir: str`, `serveDir: str`, `store: str | None`. TS `CovenOptions` adds
-  `keyEnv: string`, `profileDir: string`, `serveDir: string`, `store: string | null`.
+  `keyEnv: str`, `profileDir: str`, `serveDir: str`, `store: str | None`, `secretRules` (the
+  `SECRET_RULES` list plus the skills edit deny, as `_rule` dicts, so the plugin never keeps its
+  own copy). TS `CovenOptions` adds `keyEnv: string`, `profileDir: string`, `serveDir: string`,
+  `store: string | null`, `secretRules: PermissionRule[]`.
 
 - [ ] **Step 1: Write the failing tests**
   - `test_project_manager_model_defaults_to_lead`: profile with only `lead=fake` →
@@ -147,7 +153,7 @@ What a failure changes:
     generated config has `agents["project-manager"]["model"]` ending in `fake-pm`.
   - `test_plugin_options_carry_key_env_profile_and_store`: `keyEnv == "TEST_KEY"`,
     `profileDir == str(layout.root)`, `serveDir == str(layout.serve_dir)`, `store` is the store
-    path or `None`.
+    path or `None`, `secretRules` equals `[_rule(*r) for r in SECRET_RULES]` plus the skills deny.
   - `options.test.ts` "parses keyEnv, profileDir, serveDir and store": a missing `keyEnv` throws
     `OptionsError`; `store: null` is accepted.
   - Update the setup and profile output tests for the new role.
@@ -199,7 +205,9 @@ What a failure changes:
     running; use `coven opencode gm`".
 - [ ] **Step 2: Run** `python3 .coven/check.py fast tests/oc/test_oc_serve.py tests/oc/test_oc_canary.py`. Expected: FAIL.
 - [ ] **Step 3: Implement** with `runtime.run_env` for the child env plus
-  `OPENCODE_SERVER_PASSWORD`; `start_new_session=True`; `--port 0` by default.
+  `OPENCODE_SERVER_PASSWORD`; `start_new_session=True`; `--port 0` by default. The server's
+  stdout and stderr go to the serve `log` file (never a pipe to `serve start`, which exits), and
+  the port is read from the listening line in that file.
 - [ ] **Step 4: Run** the same. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(opencode): coven opencode serve start/stop/status`.
 
@@ -247,7 +255,9 @@ What a failure changes:
   (`Path.resolve`), before the protected-set check. In the tests `<serve>` is `<profile>/state/serve`.
 
 - [ ] **Step 1: Write the failing tests** (parametrized; each refusal next to a near allow)
-  - Refused, the `opencode` allowlist: `opencode api session.list`, `opencode session list`,
+  - Refused, the `opencode` allowlist (matched by program name: a bare `opencode`, a full path,
+    the profile's `.bin/opencode`, `npx opencode`): `npx opencode api x`,
+    `<profile>/runtime/node_modules/.bin/opencode db`, `opencode api session.list`, `opencode session list`,
     `opencode run --session x`, `opencode db`, `opencode export x`, `opencode import f`,
     `opencode --server http://127.0.0.1:4096`.
   - Refused, the port: `curl -u x http://127.0.0.1:<port>/api/session`, `curl localhost:<port>`,
@@ -316,7 +326,8 @@ What a failure changes:
 - Produces:
   - In `context.ts`: `SessionLike { id: string; parentID?: string; directory: string; metadata?: Record<string, unknown> }`;
     `SessionApi` (the `ctx.session` calls the plugin uses: `create`, `get`, `list`, `prompt`,
-    `interrupt`, `update`); `PermissionRule { permission: string; pattern: string; action: "allow" | "deny" | "ask" }`;
+    `interrupt`, `update`); `PermissionRule { action: string; resource: string; effect: "allow" | "deny" | "ask" }`
+    (the shape of `generate.py`'s `_rule`, as Task 0 Step 6 confirms for session `permissions`);
     `EvaluateEvent` (the `permission.hook("evaluate")` event, with `sessionID` and a mutable
     `effect` and `reason`).
   - `ROLE_ENV: string` (equal to the key of `pm_settings`'s `env` dict; the contract test reads
@@ -407,7 +418,8 @@ What a failure changes:
 - [ ] **Step 1: Write the failing tests**
   - `prefix lists match src/coven/pm/text.py` (reads the file, extracts both tuples).
   - claim: `first claim sets metadata role gm`; `a second claim takes over: the old GM becomes
-    former-gm, a PM's send now reaches the new GM`; `claim refused for a session with parentID`;
+    former-gm first, then the new one gm; a PM's send now reaches the new GM`; `a claim whose
+    second write fails leaves no GM and is a tool error`; `claim refused for a session with parentID`;
     `claim refused for a pm`.
   - `findGm ignores a GM's child that copied role gm`.
   - send: `gm to pm by code with ANSWER queues "[from gm] ANSWER ..."`; `pm to gm with DONE
@@ -430,10 +442,10 @@ What a failure changes:
 **Interfaces:**
 - Consumes: `resolveRole`, `findGm`, `sharedState.stopped` (Tasks 6, 8).
 - Produces:
-  - `pmRules(o: {store: string | null; storeResolved: string | null; tmp: string; skills: string; extraRepos: readonly string[]}): PermissionRule[]`
+  - `pmRules(o: {store: string | null; storeResolved: string | null; tmp: string; secretRules: readonly PermissionRule[]; extraRepos: readonly string[]}): PermissionRule[]`
     (the spec's "PM rules on the session" list in its order: allows, `external_directory`
-    allows, the `DENY` list, store edits by both paths, webfetch and question, then the secret
-    rules from the generated config and the skills edit deny last).
+    allows, the `DENY` list, store edits by both paths, webfetch and question, then
+    `secretRules` from the plugin options, which end with the skills edit deny).
   - `pmLaunchTool`, `pmListTool`, `pmResumeTool`, `pmStopTool`; GM-only.
 
 - [ ] **Step 1: Write the failing tests** (fake `ctx.session`, a real `git init` repo in a tmp dir)
@@ -466,7 +478,9 @@ What a failure changes:
 - Produces: `class NoticeTracker { constructor(directory: string, deps); onEvent(event): Promise<void> }`
   (reads `sharedState.messaged` and `sharedState.stopped`); `pmSetup(ctx, options, deps): Promise<() => void>`
   that registers the tools, the shell hooks, the evaluate hook and the tracker, and, if Task 0
-  Step 4 failed, re-applies `pmRules` to every PM session when it starts in the GM's location.
+  Step 4 failed, re-applies `pmRules` to every PM session once per server process, from the
+  first plugin instance to set up (a module-scope flag; idempotent, so a second run changes
+  nothing). Test: `re-apply runs once and twice gives the same rules`.
 
 - [ ] **Step 1: Write the failing tests**
   - `a pm turn with no message queues one notice into the GM with the exact text`.
