@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from coven.opencode import runtime
 from coven.opencode.canary import (
@@ -43,6 +43,9 @@ MORE_SESSIONS: Final = "more sessions exist; this list may be incomplete"
 STARTING: Final = "a server is starting"
 UNKNOWN_ASK: Final = "unknown id"
 ACTIVE_PATH: Final = "/api/session/active"
+SESSIONS_PATH: Final = "/api/session"
+# A listing longer than this many pages is cut and said so; 2.3.2 pages hold 50 sessions.
+MAX_SESSION_PAGES: Final = 20
 
 
 class ServeError(OpencodeError):
@@ -357,6 +360,28 @@ def _active_ids(payload: object, path: str) -> set[str]:
     return set(data)
 
 
+def _next_page(listing: object) -> str | None:
+    """The path of the page after `listing`: 2.3.2 puts a string in `cursor.next` on every page
+    that has sessions and null on the page after the last (None when there is no next page)."""
+    after = _sub(_sub(listing, "cursor"), "next")
+    if isinstance(after, str) and after:
+        return f"{SESSIONS_PATH}?{urlencode({'cursor': after})}"
+    return None
+
+
+def _sessions(fetch: Callable[[str], object]) -> tuple[list[dict[str, object]], bool]:
+    """Every session of the listing, and whether the page cap stopped the walk."""
+    sessions: list[dict[str, object]] = []
+    path = SESSIONS_PATH
+    for _ in range(MAX_SESSION_PAGES):
+        listing = fetch(path)
+        sessions.extend(data_items(listing, path))
+        if (after := _next_page(listing)) is None:
+            return sessions, False
+        path = after
+    return sessions, True
+
+
 def _pm_lines(info: ServerInfo, password: str) -> list[str]:
     def fetch(path: str) -> object:
         return http_json("GET", f"http://{HOST}:{info.port}{path}", password)
@@ -365,16 +390,15 @@ def _pm_lines(info: ServerInfo, password: str) -> list[str]:
         return data_items(fetch(path), path)
 
     busy = _active_ids(fetch(ACTIVE_PATH), ACTIVE_PATH)
-    listing = fetch("/api/session")
+    sessions, cut = _sessions(fetch)
     lines = []
-    for session in data_items(listing, "/api/session"):
+    for session in sessions:
         code, session_id = _pm_code(session), session.get("id")
         if code is None or not isinstance(session_id, str):
             continue
         asks = [_ask_id(ask) for ask in get(f"/api/session/{session_id}/permission")]
         lines.append(_pm_line(code, session, session_id in busy, asks))
-    # The cursor's request parameter is unverified, so a longer list is reported, not followed.
-    if _sub(listing, "cursor"):
+    if cut:
         lines.append(MORE_SESSIONS)
     return lines
 

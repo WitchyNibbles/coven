@@ -16,8 +16,10 @@ from coven.opencode import serve
 from coven.opencode.profile import load_profile
 
 WAIT = 10.0
+# 2.3.2 ends a session listing on a page whose cursor object holds nothing.
+LAST_CURSOR = {"previous": None, "next": None}
 # The server's answer to every route the fake does not know.
-SESSIONS = {"data": [], "cursor": None}
+SESSIONS = {"data": [], "cursor": LAST_CURSOR}
 ACTIVE_PLUGINS = {"data": [{"id": "coven", "state": {"status": "active"}}]}
 SKILLS = {"data": [{"id": "opencode", "path": "skill://opencode/SKILL.md"}]}
 
