@@ -12,6 +12,8 @@ export interface SharedState {
   stopped: Set<string>;
   /** Project codes a `coven_pm_launch` is running for, so two calls cannot both create one. */
   launching: Set<string>;
+  /** Shell events a `createBefore` already took an entry for, so a second plugin copy takes none. */
+  taken: WeakSet<object>;
   /** True while a `coven_gm_claim` is running, so two claims cannot both write `gm`. */
   claiming: boolean;
 }
@@ -28,6 +30,7 @@ export function sharedState(): SharedState {
     messaged: new Set(),
     stopped: new Set(),
     launching: new Set(),
+    taken: new WeakSet(),
     claiming: false,
   };
   return holder[KEY];

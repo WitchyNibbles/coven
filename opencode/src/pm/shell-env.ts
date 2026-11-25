@@ -93,6 +93,8 @@ export interface ShellEnvDeps {
   /** The location directory: the `cwd` of a shell call that gave no `workdir`. */
   directory: string;
   queue: ShellQueue;
+  /** Shell events already taken for, shared by every plugin copy (`SharedState.taken`). */
+  taken: WeakSet<object>;
   now: () => number;
   get: (id: string) => Promise<SessionLike | undefined>;
 }
@@ -116,7 +118,8 @@ function shellCall(
 /**
  * The two shell hooks. `executeBefore` notes which role a shell call belongs to; `createBefore`
  * scrubs the environment of the shell that starts, then gives a PM's shell `ROLE_ENV`. A throw
- * from `createBefore` stops the shell. A GM's shell gets no `ROLE_ENV`: the memory store's
+ * from `createBefore` stops the shell. Every plugin copy hooks the same shell event, so only
+ * the first to run takes a queue entry; each still scrubs. A GM's shell gets no `ROLE_ENV`: the memory store's
  * pre-commit hook refuses a commit whenever it is set, and the GM writes the store.
  */
 export function shellEnvHooks(deps: ShellEnvDeps): {
@@ -137,6 +140,10 @@ export function shellEnvHooks(deps: ShellEnvDeps): {
     },
     createBefore(event) {
       scrubEnv(event.env, deps.keyEnv);
+      if (deps.taken.has(event)) {
+        return;
+      }
+      deps.taken.add(event);
       const role = deps.queue.take(event.command, event.cwd, deps.now());
       if (role === "pm") {
         event.env[ROLE_ENV] = role;

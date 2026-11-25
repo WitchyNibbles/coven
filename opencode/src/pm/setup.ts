@@ -1,7 +1,11 @@
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CovenContext, ExecuteBeforeEvent } from "../context.ts";
+import type {
+  CovenContext,
+  ExecuteBeforeEvent,
+  Registration,
+} from "../context.ts";
 import { messageOf } from "../join/fields.ts";
 import { createHost } from "../join/host.ts";
 import { follow } from "../join/subscription.ts";
@@ -41,6 +45,13 @@ export function serveLogger(
   };
 }
 
+/** Removes a hook registration, when the runtime handed back one that can be removed. */
+function dispose(registration: unknown): void {
+  if (typeof registration === "object" && registration !== null) {
+    (registration as Partial<Registration>).dispose?.();
+  }
+}
+
 /**
  * Wires the hierarchy into one plugin context: the GM and PM tools, the shell environment hooks
  * (the role variable), the evaluate hook (a PM's ask becomes a deny) and the turn-end notices.
@@ -51,6 +62,7 @@ export async function pmSetup(
   options: CovenOptions,
   deps: PmDeps,
 ): Promise<() => void> {
+  const startedAt = deps.now();
   const get = (sessionID: string) => ctx.session.get({ sessionID });
   const host = createHost(ctx, deps.now);
   const toolDeps = { session: ctx.session, resolve: resolveRole };
@@ -59,6 +71,7 @@ export async function pmSetup(
     keyEnv: options.keyEnv,
     directory: ctx.location.directory,
     queue: state.queue,
+    taken: state.taken,
     now: deps.now,
     get,
   });
@@ -90,20 +103,27 @@ export async function pmSetup(
     await shell.executeBefore(event);
   });
   const stop = new AbortController();
+  const registrations: unknown[] = [];
   const cleanup = (): void => {
     stop.abort();
     guard.dispose();
+    registrations.forEach(dispose);
   };
   try {
-    await ctx.shell.hook("create.before", (event) => shell.createBefore(event));
-    await ctx.permission.hook(
-      "evaluate",
-      askToDeny((id) => resolveRole(id, get)),
+    registrations.push(
+      await ctx.shell.hook("create.before", (event) =>
+        shell.createBefore(event),
+      ),
+      await ctx.permission.hook(
+        "evaluate",
+        askToDeny((id) => resolveRole(id, get)),
+      ),
     );
     const tracker = new NoticeTracker(ctx.location.directory, {
       session: ctx.session,
       state,
       lastText: (id) => host.lastAssistantText(id),
+      startedAt,
       log: deps.serveLog ?? serveLogger(options.serveDir, deps),
     });
     void follow(ctx, stop.signal, (event) => {

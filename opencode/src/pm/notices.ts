@@ -1,4 +1,4 @@
-import type { SessionApi } from "../context.ts";
+import type { SessionApi, SessionLike } from "../context.ts";
 import { isPlainObject, messageOf, ownString } from "../join/fields.ts";
 import { descendants, isBusy } from "./busy.ts";
 import { findGm } from "./find.ts";
@@ -21,6 +21,8 @@ export interface NoticeDeps {
   state: Pick<SharedState, "messaged" | "stopped">;
   /** The text of the PM's last assistant message; empty when it has none. */
   lastText: (sessionID: string) => Promise<string>;
+  /** Epoch ms the plugin started: a child busy since before then is a turn a restart cut off. */
+  startedAt: number;
   /** Where a notice that cannot be delivered goes: the serve folder's `log`. */
   log: (line: string) => void;
 }
@@ -94,7 +96,7 @@ export class NoticeTracker {
       return;
     }
     // a failure is always news; anything else is quiet after a message or while a child works
-    if (outcome !== "failed" && (await this.quiet(sessionID, marks))) {
+    if (outcome !== "failed" && (await this.quiet(sessionID, code, marks))) {
       return;
     }
     const how =
@@ -128,16 +130,37 @@ export class NoticeTracker {
     return role?.role === "pm" ? role.code : undefined;
   }
 
-  private async quiet(sessionID: string, marks: Marks): Promise<boolean> {
-    return marks.messaged || (await this.busyChild(sessionID));
+  /** True after a message, or while a child works (said in the serve log, so it can be found). */
+  private async quiet(
+    sessionID: string,
+    code: string,
+    marks: Marks,
+  ): Promise<boolean> {
+    if (marks.messaged) {
+      return true;
+    }
+    const child = await this.busyChild(sessionID, code);
+    if (child !== undefined) {
+      this.deps.log(
+        `coven notice: held back for pm-${code}: child ${child.id} is busy`,
+      );
+    }
+    return child !== undefined;
   }
 
-  /** True while any session below the PM works. A tree that cannot be read counts as not busy. */
-  private async busyChild(sessionID: string): Promise<boolean> {
+  /** A session below the PM that works. A tree that cannot be read counts as none: the notice goes out. */
+  private async busyChild(
+    sessionID: string,
+    code: string,
+  ): Promise<SessionLike | undefined> {
     try {
-      return (await descendants(this.deps.session, sessionID)).some(isBusy);
-    } catch {
-      return false;
+      const tree = await descendants(this.deps.session, sessionID);
+      return tree.find((child) => isBusy(child, this.deps.startedAt));
+    } catch (error) {
+      this.deps.log(
+        `coven notice: cannot read the children of pm-${code}: ${messageOf(error)}`,
+      );
+      return undefined;
     }
   }
 

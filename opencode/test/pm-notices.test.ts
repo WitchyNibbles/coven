@@ -25,6 +25,7 @@ function rig(
   extra: readonly SessionLike[] = [],
   text: () => Promise<string> = () => Promise.resolve("working\nall done\n"),
   directory = HERE,
+  startedAt = 0,
 ): Rig {
   const world = gmWorld([GM, PM, ...extra]);
   const state = { messaged: new Set<string>(), stopped: new Set<string>() };
@@ -33,6 +34,7 @@ function rig(
     session: world,
     state,
     lastText: text,
+    startedAt,
     log: (line) => logs.push(line),
   });
   return { world, tracker, state, logs };
@@ -215,8 +217,8 @@ await test("a session that cannot be read is logged, not guessed", async () => {
   assert.match(logs[0] ?? "", /pm1.*get down/);
 });
 
-await test("a busy-child read that fails still gives the notice", async () => {
-  const { world, tracker } = rig();
+await test("a busy-child read that fails still gives the notice, and is logged", async () => {
+  const { world, tracker, logs } = rig();
   const list = world.list.bind(world);
   world.list = (input) =>
     input.parentID === undefined
@@ -224,6 +226,7 @@ await test("a busy-child read that fails still gives the notice", async () => {
       : Promise.reject(new Error("list down"));
   await tracker.onEvent(end("pm1"));
   assert.equal(world.prompts.length, 1);
+  assert.match(logs[0] ?? "", /cannot read the children of pm-acme.*list down/);
 });
 
 await test("a turn start clears the stop and message marks of that session only", async () => {
@@ -261,5 +264,38 @@ await test("events that are not turn events change nothing", async () => {
   await tracker.onEvent({ type: "session.execution.succeeded", data: {} });
   await tracker.onEvent("nonsense");
   await tracker.onEvent(undefined);
+  assert.deepEqual(world.prompts, []);
+});
+
+await test("a busy child holds the notice back and says so in the serve log", async () => {
+  const { world, tracker, logs } = rig([
+    { id: "kid1", parentID: "pm1", time: { busy: 900 } },
+  ]);
+  await tracker.onEvent(end("pm1"));
+  assert.deepEqual(world.prompts, []);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0] ?? "", /pm-acme.*kid1.*busy/);
+});
+
+await test("a child busy since before this plugin started does not hold a notice back", async () => {
+  const { world, tracker, logs } = rig(
+    [{ id: "kid1", parentID: "pm1", time: { busy: 900 } }],
+    undefined,
+    HERE,
+    1000,
+  );
+  await tracker.onEvent(end("pm1"));
+  assert.equal(world.prompts.length, 1);
+  assert.deepEqual(logs, []);
+});
+
+await test("a child that turned busy after the plugin started still does", async () => {
+  const { world, tracker } = rig(
+    [{ id: "kid1", parentID: "pm1", time: { busy: 1500 } }],
+    undefined,
+    HERE,
+    1000,
+  );
+  await tracker.onEvent(end("pm1"));
   assert.deepEqual(world.prompts, []);
 });

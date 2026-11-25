@@ -70,6 +70,8 @@ interface Setup {
   options?: Readonly<Record<string, unknown>>;
   /** Tool names the fake `tool.list` leaves out, as if they never registered. */
   unlisted?: readonly string[];
+  /** False makes the shell and evaluate hooks return no registration to dispose. */
+  disposable?: boolean;
   /** What each guard child the fake spawn starts does; it allows the call by default. */
   guard?: Behaviour;
   /** What the `python3` version check does; it passes by default, whatever `guard` does. */
@@ -80,6 +82,7 @@ function makeWorld({
   clock = { now: 1_000_000 },
   options,
   unlisted = [],
+  disposable = true,
   guard = exits(0),
   python = exits(0),
 }: Setup) {
@@ -99,6 +102,9 @@ function makeWorld({
     ],
     [PM_KID, { id: PM_KID, parentID: PM }],
   ]);
+  const disposals: string[] = [];
+  const registration = (name: string): object =>
+    disposable ? { dispose: () => disposals.push(name) } : {};
   const prompts: SessionPromptInput[] = [];
   const evaluateHooks: ((event: EvaluateEvent) => Promise<void> | void)[] = [];
   const asks = new Map<string, unknown[]>();
@@ -169,14 +175,14 @@ function makeWorld({
     permission: {
       hook: (_name, callback) => {
         evaluateHooks.push(callback);
-        return Promise.resolve({});
+        return Promise.resolve(registration("evaluate"));
       },
       list: ({ sessionID }) => Promise.resolve(asks.get(sessionID) ?? []),
     },
     shell: {
       hook: (name, callback) => {
         shellHooks.push({ name, callback });
-        return Promise.resolve({});
+        return Promise.resolve(registration(name));
       },
     },
     tool: {
@@ -215,6 +221,7 @@ function makeWorld({
     toolHooks,
     shellHooks,
     prompts,
+    disposals,
     evaluateHooks,
     asks,
     spawn,

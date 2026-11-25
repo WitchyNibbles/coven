@@ -7,10 +7,12 @@ const MAX_TREE = 500;
 /**
  * True while the session's turn runs: it turned busy and has not gone idle since. 2.3.2 puts both
  * times on the session (`time.busy`, `time.idle`), so the server itself says who is working.
+ * A session that turned busy before `since` is not counted: a restart mid-turn never writes
+ * `idle`, and that turn is gone.
  */
-export function isBusy(session: SessionLike): boolean {
+export function isBusy(session: SessionLike, since = 0): boolean {
   const busy = session.time?.busy;
-  if (busy === undefined) {
+  if (busy === undefined || busy < since) {
     return false;
   }
   const idle = session.time?.idle;

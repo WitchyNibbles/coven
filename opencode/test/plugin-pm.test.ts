@@ -152,12 +152,6 @@ await test("coven_pm_list reads the PM's state from the server's own records", a
   );
 });
 
-await test("the plugins this file started stop", () => {
-  for (const stop of cleanups) {
-    stop();
-  }
-});
-
 await test("cleanup stops the notice subscription and disposes the one execute.before hook", async () => {
   const p = bootCoven({ options: COVEN });
   const cleanup = await p.outcome;
@@ -175,5 +169,44 @@ await test("the self-check fails when any hierarchy tool is missing", async () =
       p.outcome,
       new RegExp(`^Error: coven: tools not registered: ${name}$`),
     );
+  }
+});
+
+await test("teardown disposes the shell and evaluate registrations", async () => {
+  const p = bootCoven({ options: COVEN });
+  const cleanup = await p.outcome;
+  cleanup();
+  assert.deepEqual([...p.disposals].sort(), ["create.before", "evaluate"]);
+});
+
+await test("teardown copes with registrations that cannot be disposed", async () => {
+  const p = bootCoven({ options: COVEN, disposable: false });
+  const cleanup = await p.outcome;
+  cleanup();
+  assert.deepEqual(p.disposals, []);
+});
+
+await test("a child busy since before the plugin started does not hold a PM notice back", async () => {
+  const p = await booted();
+  p.sessions.set(PM_KID, { id: PM_KID, parentID: PM, time: { busy: 999_000 } });
+  await p.emit(ended(PM), 1);
+  assert.equal(p.prompts.length, 1);
+});
+
+await test("a child busy since after the plugin started holds it back, and the log says so", async () => {
+  const p = await booted();
+  p.sessions.set(PM_KID, {
+    id: PM_KID,
+    parentID: PM,
+    time: { busy: 1_000_001 },
+  });
+  await p.emit(ended(PM), 1);
+  assert.deepEqual(p.prompts, []);
+  assert.match(p.serveLogs[0] ?? "", /held back for pm-proj: child ses_pm_kid/);
+});
+
+await test("the plugins this file started stop", () => {
+  for (const stop of cleanups) {
+    stop();
   }
 });

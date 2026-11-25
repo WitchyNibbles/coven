@@ -165,6 +165,25 @@ await test("a tool no guard covers starts no child and no lookup", async () => {
   assert.deepEqual(p.lookups, []);
 });
 
+await test("a guard refusal on a shell call records nothing for its shell", async () => {
+  const { p, run } = await booted({
+    guard: perScript({ "deny_secrets.py": exits(2, "deny: no") }),
+  });
+  await assert.rejects(
+    run(toolEvent(PM, { command: "echo refused" })),
+    /^Error: deny: no$/,
+  );
+  const shell = p.shellHooks[0];
+  assert.ok(shell !== undefined);
+  const event = {
+    command: "echo refused",
+    cwd: DIRECTORY,
+    env: {} as Record<string, string>,
+  };
+  await shell.callback(event);
+  assert.equal(event.env[ROLE_ENV], undefined);
+});
+
 await test("the plugins the guard tests started stop", () => {
   for (const stop of cleanups) {
     stop();

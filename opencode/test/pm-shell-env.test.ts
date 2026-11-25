@@ -39,12 +39,6 @@ await test("two module copies see one sharedState", async () => {
   assert.ok(sharedState().stopped instanceof Set);
 });
 
-await test("the shared state hangs on globalThis under a symbol key", () => {
-  const state = sharedState();
-  const holder = globalThis as Record<symbol, unknown>;
-  assert.equal(holder[Symbol.for("coven.opencode.shared")], state);
-});
-
 await test("take returns the role recorded for the command and cwd", () => {
   const queue = new ShellQueue();
   queue.record(entry("pm"), 1000);
@@ -193,6 +187,7 @@ function world(sessions: Record<string, SessionLike | Error> = {}) {
     keyEnv: KEY,
     directory: "/loc",
     queue,
+    taken: new WeakSet(),
     now: () => clock.now,
     get: (id) => {
       const found = sessions[id];
