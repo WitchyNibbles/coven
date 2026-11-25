@@ -650,9 +650,10 @@ def test_manager_brief_lists_the_users_language() -> None:
     assert "`User language:" in brief
 
 
-def test_project_manager_drafts_in_the_briefs_user_language() -> None:
+def test_project_manager_drafts_follow_their_reader_and_default_to_the_briefs_language() -> None:
     text = " ".join((REPO / "agents" / "project-manager.md").read_text(encoding="utf-8").split())
-    assert "`User language`" in text
+    assert "in the language of its reader" in text
+    assert "`User language`, when the reader is not named" in text
 
 
 @pytest.mark.parametrize(
