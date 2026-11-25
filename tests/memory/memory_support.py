@@ -4,30 +4,17 @@ import subprocess
 from pathlib import Path
 from types import ModuleType
 
-from support import load_module
+from support import PROC_LINE as PROC_LINE
+from support import load_module, neutral_hook
 
 from coven.memory import store
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
-PROC_LINE = 'PROC_ROOT = Path("/proc")'
 
 
 def load_hook(name: str) -> ModuleType:
     """A script of the repo's hooks folder, loaded by path (hooks are not a package)."""
     return load_module(HOOKS / f"{name}.py", f"coven_test_{name}")
-
-
-def neutral_hook(store_path: Path) -> None:
-    """Point the installed hook's ancestor walk at a folder without processes.
-
-    The real process tree may or may not run under a session role (a test run from a project
-    manager does), and a hook that git starts as a subprocess cannot be monkeypatched. The role
-    refusal itself is tested in process with a fake /proc.
-    """
-    hook = store_path / ".git" / "hooks" / "pre-commit"
-    text = hook.read_text(encoding="utf-8")
-    assert PROC_LINE in text
-    hook.write_text(text.replace(PROC_LINE, 'PROC_ROOT = Path("/nonexistent-coven-proc")'))
 
 
 class Lab:

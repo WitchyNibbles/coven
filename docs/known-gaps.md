@@ -34,7 +34,8 @@ A spike on Claude Code 2.1.323 (2026-11-13) checked what carries into a backgrou
   under `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/`. Neither is a documented format. The parser
   keeps to one module, ignores fields and records it does not know, and shows `unknown` for what it
   cannot read. It was tested against Claude Code 2.1.325 (`LAST_TESTED` in
-  `src/coven/claude_version.py`), and `coven doctor` warns when your version is newer.
+  `src/coven/claude_version.py`); the mid-turn `queued_command` attachment shape it also reads was
+  seen from 2.1.331. `coven doctor` warns when your version is newer.
 - `coven doctor` checks that superpowers is installed, not which version. The spec has it warn when
   superpowers is newer than the version coven was tested with; that is not built in v1, so a
   superpowers update that renames a skill coven names shows up only as that skill failing to load.
@@ -180,7 +181,10 @@ store and the approvals in it.
   - a write of a brace word past 64 words, or with a range the guard cannot work out, that may
     name the folder, even when none of its words does (`rm -rf ~/.cl{a,b}x{1..100}`);
   - a count through a bare `xargs` (`n=$(ls ~/.claude | wc -l | xargs)`): a bare `xargs` after a
-    read of the folder is refused on its own.
+    read of the folder is refused on its own;
+  - a write after a `cd` the guard cannot follow (`W=/x; cd $W && uv run tool d/*.json`): a
+    relative glob such as `*.json` may match `~/.claude.json`. The refusal says so; use
+    `cd /literal/path` or an absolute glob.
 - The user folder (`~/.claude`, CLAUDE_CONFIG_DIR, `~/.claude.json`) is a zone with no `.claude`
   token, so a PM may write in a repo's own `.claude/worktrees/`, where Claude Code keeps its
   worktrees. A PM may read it in Bash with the readers (`cat`, `ls`, `grep`, `rg`, `find` without
