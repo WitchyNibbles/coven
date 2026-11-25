@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- pm-permissions: a plain `git push` after `cd <dir> &&` is checked in `<dir>` alone, so a PM can
+  push a worktree's branch from the main checkout; after `;`, `||`, `|` or a subshell the old
+  directory is still checked.
+
 ## 0.2.0 (2026-11-25)
 
 - The coven plugin for OpenCode removes the provider key variable and `OPENCODE_SERVER_PASSWORD`

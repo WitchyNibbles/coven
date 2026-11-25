@@ -585,6 +585,110 @@ def test_cd_without_an_argument_goes_home(repo):
     denied("cd && git push origin feature", repo)
 
 
+def feature_worktree(repo, tmp_path, name="wt-feature"):
+    """A worktree on a new branch `name` that tracks origin/<name>: set in config only, so a push
+    from it is checked by the hook and never sent anywhere."""
+    path = tmp_path / name
+    git(repo, "worktree", "add", "-q", "-b", name, str(path))
+    git(path, "config", f"branch.{name}.remote", "origin")
+    git(path, "config", f"branch.{name}.merge", f"refs/heads/{name}")
+    return path
+
+
+@pytest.fixture
+def on_main(repo):
+    """The `repo` checkout, switched to main."""
+    git(repo, "checkout", "-q", "main")
+    return repo
+
+
+@pytest.fixture
+def worktree(on_main, tmp_path):
+    """A feature-branch worktree of `on_main`, with an upstream of the same name."""
+    return feature_worktree(on_main, tmp_path)
+
+
+def test_a_plain_push_from_a_feature_worktree_is_allowed(worktree):
+    assert verdict("git push", worktree)["behavior"] == "allow"
+
+
+def test_a_plain_push_from_a_worktree_on_main_is_refused(repo, tmp_path):
+    main_worktree = tmp_path / "wt-main"
+    git(repo, "worktree", "add", "-q", str(main_worktree), "main")
+    assert "pushing to main" in denied("git push", main_worktree)
+
+
+def test_git_dash_c_a_feature_worktree_from_main_is_allowed(on_main, worktree):
+    assert verdict(f"git -C {worktree} push", on_main)["behavior"] == "allow"
+
+
+@pytest.mark.parametrize(
+    "command", ["cd {wt} && git push", "cd {wt} && git push 2>&1 | tail -n 2"]
+)
+def test_cd_and_push_from_main_to_a_feature_worktree_is_allowed(on_main, worktree, command):
+    assert verdict(command.format(wt=worktree), on_main)["behavior"] == "allow"
+
+
+def test_cd_and_push_into_a_worktree_on_main_is_refused(repo, tmp_path):
+    main_worktree = tmp_path / "wt-main"
+    git(repo, "worktree", "add", "-q", str(main_worktree), "main")
+    assert "pushing to main" in denied(f"cd {main_worktree} && git push", repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd {wt}; git push",
+        "git status || cd {wt} && git push",
+        "(cd {wt}) && git push",
+        "cd {wt} && git status; git push",
+        "(cd {wt} && git status) && git push",
+    ],
+)
+def test_a_cd_that_may_not_run_keeps_the_old_directory(on_main, worktree, command):
+    assert "pushing to main" in denied(command.format(wt=worktree), on_main)
+
+
+def test_a_newline_after_a_cd_is_refused_not_read_as_a_separator(on_main, worktree):
+    # The tokenizer refuses every control character but tab, a newline included, so the text
+    # never reaches `_segments` as a `cd` joined by nothing to the push.
+    assert "not allowed" in denied(f"cd {worktree}\ngit push", on_main)
+
+
+def test_cd_into_a_missing_directory_and_push_is_refused(on_main, tmp_path):
+    denied(f"cd {tmp_path / 'missing'} && git push", on_main)
+
+
+def test_chained_cds_leave_only_the_last_directory(on_main, worktree, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    assert verdict(f"cd {other} && cd {worktree} && git push", on_main)["behavior"] == "allow"
+
+
+def test_a_relative_cd_resolves_against_the_payload_cwd(on_main, worktree):
+    relative = os.path.relpath(worktree, on_main)
+    assert verdict(f"cd {relative} && git push", on_main)["behavior"] == "allow"
+
+
+def test_a_cd_and_a_git_dash_c_move_on_together(on_main, worktree):
+    assert verdict(f"cd {worktree.parent} && git -C {worktree.name} push", on_main)[
+        "behavior"
+    ] == "allow"
+
+
+def test_gh_after_a_cd_is_still_checked_in_the_old_directory_too(repo, tmp_path):
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(repo), str(other)], check=True, env=clean_env())
+    git(repo, "remote", "set-url", "origin", "https://github.com/acme/one.git")
+    git(other, "remote", "set-url", "origin", "https://github.com/acme/two.git")
+    # Only the `&&` chain's directory is narrowed for a push; a gh segment keeps every directory
+    # it may have followed, so one origin matching `other` alone is not enough.
+    for command in ("cd {o} && gh pr view --repo acme/two", "cd {o}; gh pr view --repo acme/two"):
+        assert "another repository" in denied(command.format(o=other), repo)
+    assert verdict(f"cd {repo} && gh pr view --repo acme/one", repo)["behavior"] == "allow"
+
+
+
 @pytest.mark.parametrize(
     "command",
     ["git merge feature", "python manage.py migrate", "git commit --amend", "git add ."],
