@@ -21,6 +21,7 @@ import { CHECKS } from "./checks.ts";
 import type { Runs } from "./checks.ts";
 import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
+import { evaluateSuite } from "./evaluate/checks.ts";
 import { runtimeSuite } from "./runtime/checks.ts";
 import type { Outcome } from "./runtime/checks.ts";
 import { decide } from "./script.ts";
@@ -74,6 +75,7 @@ const joinSuite: Suite = async (harness) => {
 const SUITES: Record<string, Suite> = {
   runtime: runtimeSuite,
   join: joinSuite,
+  evaluate: evaluateSuite,
 };
 
 /** The suites to run, or the refusal when one is not known. */
