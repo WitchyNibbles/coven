@@ -16,6 +16,7 @@ from serve_kit import Procs, install_fake, start
 
 from coven import cli
 from coven.opencode import serve
+from coven.opencode.canary import http_json
 from coven.opencode.profile import OpencodeError
 
 PASSWORD_SHAPE = re.compile(r"[0-9a-f]{64}")
@@ -42,25 +43,38 @@ def test_start_writes_password_port_pid_and_answers(fake: Good, procs: Procs) ->
     assert serve.running(fake.layout) == info
 
 
-def test_start_writes_the_port_file_atomically(
+def test_a_port_file_write_that_fails_leaves_the_old_port_file_whole(
     fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The server guard reads a port file that is there but not a port as "refuse every loopback
-    # port", so a reader must never see it half written.
-    written: list[Path] = []
-    real = serve.write_atomic
+    # port", so a reader must never see it half written: a write that dies midway leaves the
+    # earlier file as it was, and no stray file in the serve folder.
+    files = serve.files(fake.layout)
+    files.password.parent.mkdir(parents=True, exist_ok=True)
+    files.password.write_text("0" * 64 + "\n")  # kept by the start, so only the port file syncs
+    files.port.write_text("11111\n")
 
-    def recording(file: Path, payload: bytes, *, mode: int, backup: bool) -> None:
-        written.append(file)
-        real(file, payload, mode=mode, backup=backup)
+    def failing_sync(_fd: int) -> None:
+        raise OSError("disk full")
 
-    monkeypatch.setattr(serve, "write_atomic", recording)
+    monkeypatch.setattr(os, "fsync", failing_sync)
 
+    with pytest.raises(OSError, match="disk full"):
+        start(fake, procs)
+
+    assert files.port.read_text() == "11111\n"
+    assert list(files.port.parent.glob("coven-*")) == []
+
+
+def test_a_started_server_leaves_a_whole_port_file_and_no_stray_file(
+    fake: Good, procs: Procs
+) -> None:
     info = start(fake, procs)
 
     files = serve.files(fake.layout)
-    assert files.port in written
     assert files.port.read_text() == f"{info.port}\n"
+    assert stat.S_IMODE(files.port.stat().st_mode) == serve.PORT_MODE
+    assert list(files.port.parent.glob("coven-*")) == []
 
 
 def test_password_is_kept_across_starts(fake: Good, procs: Procs) -> None:
@@ -416,24 +430,23 @@ def test_the_command_starts_reports_and_stops_a_server(
     assert capsys.readouterr().out == "no server was running\n"
 
 
-def test_the_server_log_is_emptied_then_shared_with_other_writers(good: Good) -> None:
-    layout = good.layout
-    log = serve.files(layout).log
+def test_a_started_server_shares_its_log_with_the_plugins_writes(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_fake(tmp_path, monkeypatch, echo_requests=True)
+    log = serve.files(good.layout).log
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("a line of an earlier run\n")
 
-    def spawn(*_args: Any, **named: Any) -> Any:
-        out = named["stdout"]
-        assert "a" in out.mode
-        assert log.read_text() == ""
-        out.write(b"server line 1\n")
-        out.flush()
-        with log.open("ab") as other:  # the plugin's serve log writer
-            other.write(b"coven notice\n")
-        out.write(b"server line 2\n")
-        out.flush()
-        return None
+    info = start(good, procs)
+    with log.open("ab") as plugin_writer:  # an undelivered notice
+        plugin_writer.write(b"coven notice\n")
+    password = serve.read_password(good.layout)
+    http_json("GET", f"http://127.0.0.1:{info.port}/api/session", password)
 
-    serve._spawn(spawn, Path("/opencode"), 0, {}, layout)
-
-    assert log.read_text() == "server line 1\ncoven notice\nserver line 2\n"
+    lines = log.read_text().splitlines()
+    assert "a line of an earlier run" not in lines
+    assert f"server listening on http://127.0.0.1:{info.port}" in lines
+    assert lines.count("coven notice") == 1
+    assert lines[-1] == "request /api/session"
+    assert lines.index("coven notice") < len(lines) - 1
