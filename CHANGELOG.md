@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-25)
 
 - The coven plugin for OpenCode removes the provider key variable and `OPENCODE_SERVER_PASSWORD`
   from the environment of every shell command the model runs (OpenCode 2.3.2 passed the key on,
