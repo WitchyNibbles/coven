@@ -22,6 +22,7 @@ import type { Runs } from "./checks.ts";
 import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
 import { evaluateSuite } from "./evaluate/checks.ts";
+import { pmApiSuite } from "./pm-api/checks.ts";
 import { runtimeSuite } from "./runtime/checks.ts";
 import type { Outcome } from "./runtime/checks.ts";
 import { decideIn } from "./script.ts";
@@ -76,6 +77,7 @@ const SUITES: Record<string, Suite> = {
   runtime: runtimeSuite,
   join: joinSuite,
   evaluate: evaluateSuite,
+  "pm-api": pmApiSuite,
 };
 
 /** The suites to run, or the refusal when one is not known. */
