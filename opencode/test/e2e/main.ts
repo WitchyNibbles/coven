@@ -23,6 +23,7 @@ import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
 import { evaluateSuite } from "./evaluate/checks.ts";
 import { hierarchySuite } from "./hierarchy/checks.ts";
+import { pmApiSuite } from "./pm-api/checks.ts";
 import { servedSuite } from "./served/checks.ts";
 import { runtimeSuite } from "./runtime/checks.ts";
 import type { Outcome } from "./runtime/checks.ts";
@@ -78,6 +79,7 @@ const SUITES: Record<string, Suite> = {
   runtime: runtimeSuite,
   join: joinSuite,
   evaluate: evaluateSuite,
+  "pm-api": pmApiSuite,
   hierarchy: hierarchySuite,
   served: servedSuite,
 };
