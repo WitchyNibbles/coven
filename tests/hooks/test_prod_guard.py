@@ -6714,8 +6714,12 @@ NON_WRITERS = frozenset(
         "pm health",  # reads state records
         "project",  # writes the standard into the repo it is pointed at; see the next test
         "opencode doctor",  # reads the profile folder and runs a loopback canary server
+        "opencode gm",  # starts the server if needed and attaches the TUI
         "opencode install",  # npm into the profile folder
         "opencode run",  # starts the pinned OpenCode with the profile env
+        "opencode serve start",  # starts the profile's server; writes only the profile's serve folder
+        "opencode serve status",  # reads the serve folder and the server's API
+        "opencode serve stop",  # stops it; removes the pid and port files
         "opencode setup",  # writes the profile folder only, never the store or the config
     }
 )
