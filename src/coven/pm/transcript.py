@@ -5,6 +5,13 @@ Claude Code transcript format, not a public one, last checked against the versio
 `coven.claude_version.LAST_TESTED`. A line that is not JSON, a record type or a field this does
 not know is skipped or ignored, never an error: `Facts` counts what was read so that the caller can
 say `unknown` when nothing was.
+
+A message from a peer (the GM) is written in one of two shapes. Delivered at a turn boundary it is
+a `user` entry whose `origin.kind` is `peer`. Absorbed mid-turn it is a `queue-operation` removal
+followed by an `attachment` entry of type `queued_command`, with the same `origin`. Only the
+attachment is read: the removal has no structured origin and always comes with its attachment, so
+reading both would count the message twice. A message carrying an `origin.msg_id` already counted
+is not counted again.
 """
 
 from __future__ import annotations
@@ -108,6 +115,7 @@ class _Reader:
         self.facts = Facts()
         self._now = EPOCH
         self._waiting: dict[str, int] = {}  # send tool_use id -> index in facts.sent
+        self._peer_ids: set[str] = set()  # origin.msg_id of the peer messages already counted
 
     def feed(self, line: str) -> None:
         if not line.strip():
@@ -142,6 +150,9 @@ class _Reader:
             case "user":
                 self.facts.recognized += 1
                 self._user(entry, at)
+            case "attachment" if (origin := _queued_peer_origin(entry)) is not None:
+                self.facts.recognized += 1
+                self._peer(origin, at)
             case "system" if entry.get("subtype") == "turn_duration":
                 self.facts.recognized += 1
                 self.facts.turn_ends.append(at)
@@ -153,7 +164,8 @@ class _Reader:
         stamped = _parse_time(entry.get("timestamp"))
         if stamped is not None:
             self._now = stamped
-            self.facts.last_entry_at = stamped
+            latest = self.facts.last_entry_at
+            self.facts.last_entry_at = stamped if latest is None else max(latest, stamped)
         return self._now
 
     def _assistant(self, entry: Entry, at: datetime) -> None:
@@ -191,8 +203,14 @@ class _Reader:
 
     def _peer(self, origin: Entry, at: datetime) -> None:
         sender, body = origin.get("name"), origin.get("body")
-        if isinstance(sender, str) and isinstance(body, str):
-            self.facts.received.append(Received(_message(at, body), sender, "peer"))
+        if not isinstance(sender, str) or not isinstance(body, str):
+            return
+        msg_id = origin.get("msg_id")
+        if isinstance(msg_id, str):
+            if msg_id in self._peer_ids:
+                return
+            self._peer_ids.add(msg_id)
+        self.facts.received.append(Received(_message(at, body), sender, "peer"))
 
     def _prompt(self, text: str, at: datetime) -> None:
         # A resume prompt is the role body, then the note: only the note speaks for the GM.
@@ -220,6 +238,15 @@ class _Reader:
             self.facts.sent[index] = replace(self.facts.sent[index], delivered=False, reason=reason)
         elif success is True:
             self.facts.sent[index] = replace(self.facts.sent[index], delivered=True)
+
+
+def _queued_peer_origin(entry: Entry) -> Entry | None:
+    """The origin of a message absorbed mid-turn, or None for any other attachment."""
+    attachment = _as_entry(entry.get("attachment"))
+    if attachment.get("type") != "queued_command":
+        return None
+    origin = _as_entry(attachment.get("origin"))
+    return origin if origin.get("kind") == "peer" else None
 
 
 def _message(at: datetime, text: str) -> Message:
