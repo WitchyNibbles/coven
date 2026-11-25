@@ -26,11 +26,13 @@ from coven.opencode.canary import (
     stop_server,
 )
 from coven.opencode.profile import Layout, OpencodeError, Profile
+from coven.settings import write_atomic
 
 type Spawn = Callable[..., subprocess.Popen[bytes]]
 type Kill = Callable[[int, int], None]
 
 HOST: Final = "127.0.0.1"
+PASSWORD_MODE: Final = 0o600
 POLL: Final = 0.05
 # After SIGKILL the process is gone within a moment; this only bounds a stuck wait.
 KILL_WAIT: Final = 5.0
@@ -110,10 +112,7 @@ def _password(paths: ServeFiles) -> str:
     if saved:
         return saved
     fresh = secrets.token_hex(32)
-    handle = os.open(paths.password, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(handle, "w") as stream:
-        os.fchmod(stream.fileno(), 0o600)
-        stream.write(f"{fresh}\n")
+    write_atomic(paths.password, f"{fresh}\n".encode(), mode=PASSWORD_MODE, backup=False)
     return fresh
 
 

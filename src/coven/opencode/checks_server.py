@@ -41,7 +41,6 @@ REQUIRED_OPERATIONS: Final = (
 )
 PYTHON_MINIMUM: Final = (3, 12)
 PYTHON_VERSION: Final = re.compile(r"Python (\d+)\.(\d+)\.(\d+)")
-PASSWORD_MODE: Final = 0o600
 RESTART: Final = "run coven opencode serve stop, then coven opencode serve start"
 
 
@@ -96,8 +95,8 @@ def password_check(ctx: Context) -> Outcome:
         )
     except OSError as error:
         return Outcome("fail", f"cannot read {path}: {one_line(str(error))}")
-    if mode != PASSWORD_MODE:
-        detail = f"{path} is mode {mode:04o}; it must be {PASSWORD_MODE:04o}"
+    if mode != serve.PASSWORD_MODE:
+        detail = f"{path} is mode {mode:04o}; it must be {serve.PASSWORD_MODE:04o}"
         return Outcome("fail", detail, f"chmod 600 {path}")
     return Outcome("ok", f"{path} is mode {mode:04o}")
 
