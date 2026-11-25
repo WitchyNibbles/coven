@@ -16,7 +16,7 @@ function covenOf(session: SessionLike): Record<string, unknown> {
  * going after `MAX_PAGES` pages, throws: "nobody found" is never a safe answer from a lookup
  * that did not finish.
  */
-export async function* roots(
+async function* roots(
   session: SessionApi,
   archived = false,
 ): AsyncGenerator<SessionLike> {

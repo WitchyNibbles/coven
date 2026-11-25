@@ -9,6 +9,7 @@ import { isPlainObject, messageOf, show } from "../join/fields.ts";
 import { LINE_LIMIT, isValidCode } from "./code.ts";
 import { findPm } from "./find.ts";
 import { pmRules } from "./rules.ts";
+import { sharedState } from "./state.ts";
 import { ToolError, asToolError, requireGm } from "./tools.ts";
 import type { ToolDeps } from "./tools.ts";
 
@@ -54,7 +55,11 @@ function extraRepos(raw: unknown): string[] {
         `extraRepos must hold absolute paths, got ${show(folder)}`,
       );
     }
-    return folder;
+    const trimmed = folder.replace(/\/+$/, "");
+    if (trimmed === "") {
+      throw new ToolError("extraRepos must not hold the root folder");
+    }
+    return trimmed;
   });
 }
 
@@ -81,21 +86,44 @@ function cleanEnv(): NodeJS.ProcessEnv {
   );
 }
 
-/** True when `dir` is the top folder of a git checkout (a worktree counts). */
-async function isCheckout(dir: string): Promise<boolean> {
-  if (!isAbsolute(dir)) {
-    return false;
-  }
+const NOT_A_CHECKOUT = /not a git repository|must be run in a work tree/;
+
+/**
+ * The top folder git reports for `dir`, or undefined when `dir` is not in a work tree. A git
+ * that fails any other way (cannot start, timed out, broke) throws: that is not an answer.
+ */
+async function gitTop(dir: string): Promise<string | undefined> {
   try {
     const { stdout } = await run(
       "git",
       ["-C", dir, "rev-parse", "--show-toplevel"],
       { env: cleanEnv(), timeout: GIT_TIMEOUT_MS },
     );
-    return (await realpath(stdout.trim())) === (await realpath(dir));
+    return stdout.trim();
+  } catch (error) {
+    const stderr = isPlainObject(error) ? error["stderr"] : undefined;
+    const line =
+      (typeof stderr === "string" ? stderr : "").split("\n")[0] ?? "";
+    if (NOT_A_CHECKOUT.test(line)) {
+      return undefined;
+    }
+    throw new ToolError(`git failed: ${line.trim() || messageOf(error)}`);
+  }
+}
+
+/** True when `dir` is the top folder of a git checkout (a worktree counts). */
+async function isCheckout(dir: string): Promise<boolean> {
+  if (!isAbsolute(dir)) {
+    return false;
+  }
+  let real: string;
+  try {
+    real = await realpath(dir);
   } catch {
     return false;
   }
+  const top = await gitTop(real);
+  return top !== undefined && (await realpath(top)) === real;
 }
 
 /** The store with its links resolved, or null when it has none or cannot be resolved. */
@@ -178,10 +206,20 @@ export function pmLaunchTool(deps: LaunchDeps): ToolDefinition {
     options: { codemode: false },
     execute: (raw, context) =>
       asToolError(async () => {
-        await requireGm(deps, context.sessionID, "coven_pm_launch");
         const input = parseLaunch(raw);
-        await check(deps, input);
-        return { content: await launch(deps, input) };
+        // no await between the check and the add: two launches of one code cannot both pass
+        const { launching } = sharedState();
+        if (launching.has(input.code)) {
+          throw new ToolError(`already launching ${input.code}`);
+        }
+        launching.add(input.code);
+        try {
+          await requireGm(deps, context.sessionID, "coven_pm_launch");
+          await check(deps, input);
+          return { content: await launch(deps, input) };
+        } finally {
+          launching.delete(input.code);
+        }
       }),
   };
 }

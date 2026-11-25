@@ -1,6 +1,6 @@
 import type { SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
-import { isPlainObject, show } from "../join/fields.ts";
+import { isPlainObject, messageOf, show } from "../join/fields.ts";
 import { findPm, listPms } from "./find.ts";
 import { sharedState } from "./state.ts";
 import { ToolError, asToolError, requireGm } from "./tools.ts";
@@ -14,6 +14,9 @@ const HEAD_LIMIT = 200;
 /**
  * What the list needs beyond `ctx.session`: the server's own view of who is working and the
  * plugin's record of the PMs' children. The plugin setup wires it to the real thing.
+ *
+ * Every method rejects when the server cannot be read; a resolved value means known, so
+ * "nothing busy" and "no asks" are never what a failed read looks like.
  */
 export interface PmStatus {
   /** Ids of the sessions with a turn running. */
@@ -38,12 +41,29 @@ function head(message: string): string {
     : first;
 }
 
-async function exists(deps: ToolDeps, sessionID: string): Promise<boolean> {
-  try {
-    await deps.session.get({ sessionID });
-    return true;
-  } catch {
+const NOT_FOUND = /not.?found|no session/i;
+
+/** A `get` error that says the session is gone: a 404 or a not-found name or message. */
+function isNotFound(error: unknown): boolean {
+  if (!isPlainObject(error)) {
     return false;
+  }
+  const code = error["status"] ?? error["statusCode"];
+  return (
+    code === 404 ||
+    NOT_FOUND.test(`${String(error["name"])} ${String(error["message"])}`)
+  );
+}
+
+/** What `get` says about the session, or the line to show when it cannot say. */
+async function fetched(
+  deps: ToolDeps,
+  sessionID: string,
+): Promise<SessionLike | "missing" | { unavailable: string }> {
+  try {
+    return await deps.session.get({ sessionID });
+  } catch (error) {
+    return isNotFound(error) ? "missing" : { unavailable: messageOf(error) };
   }
 }
 
@@ -52,27 +72,38 @@ async function describe(
   busy: ReadonlySet<string>,
   pm: { session: SessionLike; code: string },
 ): Promise<string> {
-  const { id, outcome } = pm.session;
+  const { id } = pm.session;
   const who = `pm-${pm.code}  ${id}`;
-  if (!(await exists(deps, id))) {
+  const got = await fetched(deps, id);
+  if (got === "missing") {
     return `${who}  missing`;
   }
+  if ("unavailable" in got) {
+    return `${who}  status unavailable: ${got.unavailable}`;
+  }
   const parts = [who, busy.has(id) ? "busy" : "idle"];
+  const outcome = got.outcome ?? pm.session.outcome;
   if (outcome !== undefined) {
     parts.push(`last ${outcome}`);
   }
-  for (const ask of await deps.status.asks(id)) {
-    parts.push(`ASK WAITING (bug) ${ask}`);
-  }
-  const child = await deps.status.childBusyMs(id);
+  parts.push(...(await watched(deps.status, id)));
+  return parts.join("  ");
+}
+
+/** The waiting asks, a long-busy child and the last message of one PM, as line parts. */
+async function watched(status: PmStatus, id: string): Promise<string[]> {
+  const parts = (await status.asks(id)).map(
+    (ask) => `ASK WAITING (bug) ${ask}`,
+  );
+  const child = await status.childBusyMs(id);
   if (child !== undefined && child >= CHILD_BUSY_SHOWN_MS) {
     parts.push(`child busy ${Math.floor(child / MINUTE_MS)}m`);
   }
-  const last = await deps.status.lastMessage(id);
+  const last = await status.lastMessage(id);
   if (last !== undefined && head(last) !== "") {
     parts.push(`"${head(last)}"`);
   }
-  return parts.join("  ");
+  return parts;
 }
 
 export function pmListTool(deps: ListDeps): ToolDefinition {

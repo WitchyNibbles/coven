@@ -13,7 +13,7 @@ export interface PmRulesInput {
 }
 
 /** The `DENY` list of `src/coven/pm/profile.py`, as shell command patterns. */
-const DENIED_COMMANDS = [
+export const DENIED_COMMANDS: readonly string[] = [
   "git push --force*",
   "git push -f*",
   "git push --force-with-lease*",

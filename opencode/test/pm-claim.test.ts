@@ -181,3 +181,35 @@ await test("findGm fails closed on a list that throws or never ends", async () =
   await assert.rejects(findGm(endless), /more than 50 pages/);
   assert.equal(endless.pages, MAX_PAGES);
 });
+
+await test("two claims at once leave exactly one GM", async () => {
+  const fake = fakeSession([root("s1"), root("s2")]);
+  const results = await Promise.allSettled([
+    claim(fake, "s1"),
+    claim(fake, "s2"),
+  ]);
+  assert.deepEqual(results.map((each) => each.status).sort(), [
+    "fulfilled",
+    "rejected",
+  ]);
+  const refused = results.find((each) => each.status === "rejected");
+  assert.match(
+    String((refused as PromiseRejectedResult).reason),
+    /a claim is already running/,
+  );
+  const gms = [...fake.sessions.values()].filter(
+    (each) =>
+      (each.metadata?.["coven"] as { role?: string } | undefined)?.role ===
+      "gm",
+  );
+  assert.equal(gms.length, 1);
+});
+
+await test("a failed claim frees the lock", async () => {
+  const fake = fakeSession([root("s1")]);
+  fake.failList = true;
+  await assert.rejects(claim(fake, "s1"), /list down/);
+  fake.failList = false;
+  await claim(fake, "s1");
+  assert.equal((await findGm(fake))?.id, "s1");
+});

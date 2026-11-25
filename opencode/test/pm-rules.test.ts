@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import type { PermissionRule } from "../src/context.ts";
-import { pmRules } from "../src/pm/rules.ts";
+import { DENIED_COMMANDS, pmRules } from "../src/pm/rules.ts";
 
 const rule = (
   action: string,
@@ -137,4 +138,17 @@ await test("pmRules does not change the rules it was given", () => {
   pmRules({ ...BASE, extraRepos: extra });
   assert.deepEqual(extra, ["/placeholder/other-repo"]);
   assert.equal(SECRET.length, 6);
+});
+
+await test("the denied commands are the DENY list of src/coven/pm/profile.py", () => {
+  const source = readFileSync(
+    new URL("../../src/coven/pm/profile.py", import.meta.url),
+    "utf8",
+  );
+  const body = /^DENY = \[([^\]]*)\]/m.exec(source)?.[1] ?? "";
+  const python = [...body.matchAll(/"Bash\(([^"]+):\*\)"/g)].map(
+    (match) => `${match[1] ?? ""}*`,
+  );
+  assert.notEqual(python.length, 0);
+  assert.deepEqual([...new Set(python)].sort(), [...DENIED_COMMANDS].sort());
 });
