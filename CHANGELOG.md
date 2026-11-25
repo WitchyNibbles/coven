@@ -5,6 +5,9 @@
 - pm-permissions: a plain `git push` after `cd <dir> &&` is checked in `<dir>` alone, so a PM can
   push a worktree's branch from the main checkout; after `;`, `||`, `|` or a subshell the old
   directory is still checked.
+- The manager, and the routing on Claude Code and OpenCode, keep replies to the user in the language
+  they write in, also after a compaction or a resume; briefs and messages to agents stay English.
+  The handoff and the PM brief name the user's language.
 
 ## 0.2.0 (2026-11-25)
 

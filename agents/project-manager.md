@@ -88,7 +88,7 @@ with exactly one of these prefixes; nothing else is sent.
   spans lines goes in its own fenced block, one block per command. The text is the same whether
   the GM runs the step or you do.
 - `DRAFT <project>/<task>: <where it goes>`, then the text: very short, concise and human, in the
-  language of the hand-over, ready for the user to paste.
+  user's language (the brief's `User language`), ready for the user to paste.
 - `DONE <project>/<task>: <one line>`, then `Worktree: <path>` (each worktree the task used), what
   was done, the PR link and/or the answer, the rulings, the production steps the GM ran, facts the
   GM should store, and what you did not check.

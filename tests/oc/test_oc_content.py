@@ -279,6 +279,13 @@ def test_routing() -> None:
     )
 
 
+def test_routing_override_keeps_the_language_rule_of_the_source() -> None:
+    source = (REPO / SOURCE_OF_ROUTING).read_text()
+    rule = next(par for par in source.split("\n\n") if "in the language they write in" in par)
+    assert rule in ROUTING_OVERRIDE.read_text()
+    assert rule in (RENDERED / "AGENTS.md").read_text()
+
+
 def test_routing_leaves_out_the_m2_items() -> None:
     rendered = (RENDERED / "AGENTS.md").read_text().lower()
     for left_out in ("manager", "setup", "systems-map", "claude --bg", "general manager"):
