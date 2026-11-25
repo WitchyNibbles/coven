@@ -15,7 +15,15 @@ from coven.errors import CovenError, warn
 from coven.settings import write_atomic
 
 PINNED_VERSION: Final = "2.3.2"
-ROLES: Final = ("lead", "implementer", "reviewer", "explorer", "final-reviewer", "title")
+ROLES: Final = (
+    "lead",
+    "implementer",
+    "reviewer",
+    "explorer",
+    "final-reviewer",
+    "title",
+    "project-manager",
+)
 AGENT_ROLES: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
 OPENCODE_KEY_ENV: Final = "OPENCODE_API_KEY"
 PRESETS: Final = ("litellm", "opencode")
@@ -57,6 +65,10 @@ class Layout:
     @property
     def state(self) -> Path:
         return self.root / "state"
+
+    @property
+    def serve_dir(self) -> Path:
+        return self.state / "serve"
 
     @property
     def home(self) -> Path:

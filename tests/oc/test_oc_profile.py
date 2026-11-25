@@ -42,6 +42,7 @@ def test_constants():
         "explorer",
         "final-reviewer",
         "title",
+        "project-manager",
     )
     assert profile.AGENT_ROLES == ("explorer", "implementer", "reviewer", "final-reviewer")
     assert profile.OPENCODE_KEY_ENV == "OPENCODE_API_KEY"
@@ -55,6 +56,20 @@ def test_litellm_profile_falls_back_to_lead():
     assert made.model("title") == "big"
     assert made.provider_id == "litellm"
     assert dict(made.models) == {"lead": "big", "explorer": "small"}
+
+
+def test_project_manager_model_defaults_to_lead():
+    made = make_profile("litellm", LITELLM_URL, "GATEWAY_KEY", ["lead=fake"])
+    assert made.model("project-manager") == "fake"
+    given = make_profile(
+        "litellm", LITELLM_URL, "GATEWAY_KEY", ["lead=fake", "project-manager=fake-pm"]
+    )
+    assert given.model("project-manager") == "fake-pm"
+    assert "fake-pm" in given.model_ids
+
+
+def test_layout_serve_dir_is_under_state(tmp_path: Path):
+    assert Layout(tmp_path).serve_dir == tmp_path / "state" / "serve"
 
 
 def test_opencode_preset_uses_the_fixed_key_env():

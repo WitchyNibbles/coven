@@ -38,10 +38,16 @@ def plugin_source() -> Path:
     return paths.root() / "opencode" / "src"
 
 
-def plugin_options(profile: Profile, coven_root: Path) -> dict[str, object]:
+def plugin_options(
+    profile: Profile, coven_root: Path, layout: Layout, store: Path | None
+) -> dict[str, object]:
     return {
         "covenRoot": str(coven_root),
         "keyEnv": profile.key_env,
+        "profileDir": str(layout.root),
+        "serveDir": str(layout.serve_dir),
+        "store": str(store) if store else None,
+        "secretRules": secret_rules(layout),
         "toolChoiceAuto": ["litellm"] if profile.preset == "litellm" else [],
         "guardTimeoutMs": GUARD_TIMEOUT_MS,
     }
@@ -66,16 +72,29 @@ def _rule(action: str, resource: str, effect: str) -> dict[str, str]:
     return {"action": action, "resource": resource, "effect": effect}
 
 
+def _secret_rules() -> list[dict[str, str]]:
+    return [_rule(*rule) for rule in SECRET_RULES]
+
+
+def _skills_deny(layout: Layout) -> list[dict[str, str]]:
+    return [_rule("edit", f"{layout.config_dir / 'skills'}/*", "deny")]
+
+
+def secret_rules(layout: Layout) -> list[dict[str, str]]:
+    """The rules the plugin applies to a session it creates: the secret rules, then the deny of
+    edits to the installed skills, so it never keeps its own copy of them."""
+    return _secret_rules() + _skills_deny(layout)
+
+
 def permissions(layout: Layout, store: Path | None) -> list[dict[str, str]]:
     """The secret rules, the allows for the files the prompts and the routing point at, a deny of
     edits to the installed skills (the allow on that folder covers writes too), then the asks for
     shell and webfetch, last so no agent's own rule re-allows them."""
-    rules = [_rule(*rule) for rule in SECRET_RULES]
     skills = layout.config_dir / "skills"
     outside = [skills, *([store] if store else [])]
     allows = [_rule("external_directory", f"{folder}/*", "allow") for folder in outside]
-    skills_deny = [_rule("edit", f"{skills}/*", "deny")]
-    return rules + allows + skills_deny + [_rule(*rule) for rule in ASK_RULES]
+    asks = [_rule(*rule) for rule in ASK_RULES]
+    return _secret_rules() + allows + _skills_deny(layout) + asks
 
 
 def config_data(
@@ -89,12 +108,17 @@ def config_data(
     data: dict[str, object] = {
         "update": "disable",
         "model": model_ref("lead"),
-        "agents": {role: {"model": model_ref(role)} for role in (*AGENT_ROLES, "title")},
+        "agents": {
+            role: {"model": model_ref(role)} for role in (*AGENT_ROLES, "project-manager", "title")
+        },
     }
     if profile.preset == "litellm":
         data["providers"] = {"litellm": _provider(profile)}
     data["plugins"] = [
-        {"package": str(layout.plugin_dir), "options": plugin_options(profile, coven_root)}
+        {
+            "package": str(layout.plugin_dir),
+            "options": plugin_options(profile, coven_root, layout, store),
+        }
     ]
     data["experimental"] = {"todo": True}
     data["permissions"] = permissions(layout, store)

@@ -71,6 +71,7 @@ def test_setup_writes_config_profile_and_plugin(
         "explorer: small",
         "final-reviewer: big",
         "title: small",
+        "project-manager: big",
         NO_LIMIT_WARNING,
         "superpowers: Claude Code plugin",
         "next: coven opencode doctor",
@@ -223,7 +224,7 @@ def test_limits_reach_the_config_the_profile_and_the_summary(
         "small": {"context": 50000},
     }
     lines = capsys.readouterr().out.splitlines()
-    first = lines.index("title: small") + 1
+    first = lines.index("project-manager: big") + 1
     assert lines[first : first + 2] == [
         "limit big: 100000 context, 8000 output",
         "limit small: 50000 context",

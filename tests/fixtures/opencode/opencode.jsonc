@@ -14,6 +14,9 @@
     "final-reviewer": {
       "model": "opencode/big"
     },
+    "project-manager": {
+      "model": "opencode/big"
+    },
     "title": {
       "model": "opencode/big"
     }
@@ -24,6 +27,41 @@
       "options": {
         "covenRoot": "<COVEN_ROOT>",
         "keyEnv": "OPENCODE_API_KEY",
+        "profileDir": "<P>",
+        "serveDir": "<P>/state/serve",
+        "store": null,
+        "secretRules": [
+          {
+            "action": "read",
+            "resource": "*.env",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "*.env.*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "*.env.example",
+            "effect": "allow"
+          },
+          {
+            "action": "edit",
+            "resource": "*.env",
+            "effect": "deny"
+          },
+          {
+            "action": "edit",
+            "resource": "*.env.*",
+            "effect": "deny"
+          },
+          {
+            "action": "edit",
+            "resource": "<P>/config/opencode/skills/*",
+            "effect": "deny"
+          }
+        ],
         "toolChoiceAuto": [],
         "guardTimeoutMs": 5000
       }

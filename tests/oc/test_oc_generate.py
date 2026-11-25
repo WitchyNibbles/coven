@@ -49,6 +49,7 @@ def test_config_is_plain_json_with_the_documented_key_order(tmp_path: Path):
         "implementer",
         "reviewer",
         "final-reviewer",
+        "project-manager",
         "title",
     ]
     assert "providers" not in json.loads(rendered(OPENCODE, tmp_path))
@@ -94,16 +95,40 @@ def test_without_a_store_there_is_no_store_allow(tmp_path: Path):
     assert all(rule["resource"].endswith("/config/opencode/skills/*") for rule in rules[5:7])
 
 
+def test_config_data_sets_the_project_manager_model(tmp_path: Path):
+    profile = make_profile("opencode", None, None, ["lead=fake", "project-manager=fake-pm"])
+    layout = Layout(tmp_path / "profile")
+    data = generate.config_data(profile, layout, tmp_path / "coven")
+    assert data["agents"]["project-manager"]["model"] == "opencode/fake-pm"
+    plain = generate.config_data(OPENCODE, layout, tmp_path / "coven")
+    assert plain["agents"]["project-manager"]["model"] == "opencode/big"
+
+
 def test_plugin_options(tmp_path: Path):
-    assert generate.plugin_options(LITELLM, tmp_path) == {
-        "covenRoot": str(tmp_path),
-        "keyEnv": "GATEWAY_KEY",
-        "toolChoiceAuto": ["litellm"],
-        "guardTimeoutMs": 5000,
-    }
-    assert generate.plugin_options(OPENCODE, tmp_path)["toolChoiceAuto"] == []
-    assert generate.plugin_options(OPENCODE, tmp_path)["keyEnv"] == "OPENCODE_API_KEY"
+    layout, store = Layout(tmp_path / "profile"), tmp_path / "store"
+    options = generate.plugin_options(LITELLM, tmp_path, layout, store)
+    assert options["covenRoot"] == str(tmp_path)
+    assert options["toolChoiceAuto"] == ["litellm"]
+    assert options["guardTimeoutMs"] == 5000
+    other = generate.plugin_options(OPENCODE, tmp_path, layout, None)
+    assert other["toolChoiceAuto"] == []
+    assert other["keyEnv"] == "OPENCODE_API_KEY"
     assert generate.GUARD_TIMEOUT_MS == 5000
+
+
+def test_plugin_options_carry_key_env_profile_and_store(tmp_path: Path):
+    layout, store = Layout(tmp_path / "profile"), tmp_path / "store"
+    options = generate.plugin_options(LITELLM, tmp_path, layout, store)
+    assert options["keyEnv"] == "GATEWAY_KEY"
+    assert options["profileDir"] == str(layout.root)
+    assert options["serveDir"] == str(layout.serve_dir)
+    assert options["store"] == str(store)
+    assert generate.plugin_options(LITELLM, tmp_path, layout, None)["store"] is None
+    skills_deny = generate._rule("edit", f"{layout.config_dir}/skills/*", "deny")
+    assert options["secretRules"] == [
+        *(generate._rule(*rule) for rule in generate.SECRET_RULES),
+        skills_deny,
+    ]
 
 
 def test_plugin_source_is_the_checkout_folder():
