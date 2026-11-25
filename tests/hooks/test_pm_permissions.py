@@ -647,6 +647,34 @@ def test_a_cd_that_may_not_run_keeps_the_old_directory(on_main, worktree, comman
     assert "pushing to main" in denied(command.format(wt=worktree), on_main)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "(git status; cd {wt}) && git push",
+        "(cd {other}; cd {wt}) && git push",
+        "cd {other} && (git status; cd {wt}) && git push",
+        "(git status; cd {wt}) ; git push",
+        "git status && (cd {other}; cd {wt}) && git push",
+    ],
+)
+def test_a_subshells_cd_never_narrows_the_directory_of_a_push(on_main, worktree, tmp_path, command):
+    # The subshell's cd ends at its `)`: the push runs where the command started.
+    other = tmp_path / "other"
+    other.mkdir()
+    message = denied(command.format(wt=worktree, other=other), on_main)
+    assert "pushing to main" in message
+
+
+def test_segment_after_is_the_last_separator_before_the_segment():
+    # An empty part between two separators (`) &&`) is skipped: the later one is kept.
+    segments = pm._segments(["(", "cd", "x", ")", "&&", "git", "push", "|", "(", "tail", ")"])
+    assert [(segment.words[0], segment.after) for segment in segments] == [
+        ("cd", "("),
+        ("git", "&&"),
+        ("tail", "("),
+    ]
+
+
 def test_a_newline_after_a_cd_is_refused_not_read_as_a_separator(on_main, worktree):
     # The tokenizer refuses every control character but tab, a newline included, so the text
     # never reaches `_segments` as a `cd` joined by nothing to the push.

@@ -28,16 +28,20 @@ with the payload's `cwd` in the worktree already checks that worktree. Both need
 ### Fix
 
 Track, next to the set of every directory a segment may run in, the directories a segment runs in
-when it is reached through an unbroken `&&` chain from the start of its list:
+when it is reached through an unbroken `&&` chain from the start of its list. This applies only to a
+command without a parenthesis; a command with `(` or `)` is never narrowed (see the last bullet).
 
 - A segment reached by `&&`, with only `&&` between it and the start of the list (the command's
   start, or the last `;`), runs in the directories the previous segment ran in, moved by that
   segment when it was a `cd`.
-- Any other segment (the first one, one after `;`, or anything after `||`, `|`, `(` or `)` in the
-  same list) runs in every directory any segment so far may have reached: today's behaviour.
-- `||`, `|`, `(` and `)` taint the rest of the list up to the next `;`: `git status || cd X &&
-  git push` may push from the old directory when `git status` succeeds, and a subshell's `cd`
-  does not outlive its `)`.
+- Any other segment (the first one, one after `;`, or anything after `||` or `|` in the same list)
+  runs in every directory any segment so far may have reached: today's behaviour.
+- `||` and `|` taint the rest of the list up to the next `;`: `git status || cd X && git push` may
+  push from the old directory when `git status` succeeds.
+- When the command holds any parenthesis, nothing is narrowed: every segment runs in every
+  directory any segment so far may have reached. A subshell's `cd` ends at its `)`, and a `;`
+  inside it would otherwise reset the chain: `(git status; cd X) && git push` pushes from the old
+  directory.
 
 A push whose branch cannot be resolved in a directory it may run in is still refused: a missing
 `cd` target, a directory that is not a repo, a detached HEAD.

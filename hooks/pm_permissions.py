@@ -73,8 +73,10 @@ Every directory a push could run in is checked with git. A segment joined to the
 that `cd` fails, nothing after it runs, so `cd <dir> && git push` is checked in `<dir>` alone, and
 `cd A && cd B && git push` in `B`. Any other segment may run where any earlier one did, so each
 `cd` adds a candidate and none is dropped: after `;` (the push runs when the `cd` failed), and in
-the rest of a list that holds a `||`, a `|` or a parenthesis (`git status || cd X && git push`
-may skip the `cd`; a subshell's `cd` ends at its `)`). A newline is refused with the other control
+the rest of a list that holds a `||` or a `|` (`git status || cd X && git push` may skip the
+`cd`). A command with a parenthesis is never narrowed: a subshell's `cd` ends at its `)`, and
+a `;` inside it must not reset the chain, so every segment may run wherever any earlier one did.
+A newline is refused with the other control
 characters, so it never joins two commands. A `gh` segment keeps the wider reading: its `--repo` and
 file options are checked in every directory any earlier segment may have reached. The remote (the
 one named, else the one git picks: branch.<b>.pushRemote, remote.pushDefault, branch.<b>.remote,
@@ -349,9 +351,9 @@ TRIMMERS = frozenset({"tail", "head"})
 TRIM_OPTIONS = re.compile(r"(?:-n [0-9]+|-[0-9]+)?")
 SEPARATORS = frozenset({"&&", "||", ";", "|"})
 PARENS = frozenset({"(", ")"})
-# What breaks an `&&` chain until the next `;`: `a || cd X && git push` may run the push in the old
-# directory, and a subshell's `cd` does not outlive its `)`.
-TAINTING = frozenset({"||", "|", "(", ")"})
+# What breaks an `&&` chain until the next `;` in a command without parentheses: `a || cd X && git
+# push` may run the push in the old directory. (With a parenthesis nothing is narrowed at all.)
+TAINTING = frozenset({"||", "|"})
 OPERATOR_CHARS = frozenset("();<>|&")
 # The guard's scanner. The shell's operators by length, longest first when read (`|&` is a pipe
 # and a lone `&` runs in the background: both separate commands); the redirects among them; and
@@ -532,8 +534,9 @@ class Call:
 
 @dataclass(frozen=True)
 class Segment:
-    """The words of one command and the separator token right before it (`&&`, `||`, `;`, `|`, `(`
-    or `)`; "" for the first segment)."""
+    """The words of one command and the last separator token before it (`&&`, `||`, `;`, `|`, `(`
+    or `)`; "" for the first segment). An empty part between two separators is skipped: in
+    `(a) && b`, `b` follows `&&`, not `)`, and in `a | (b)`, `b` follows `(`, not `|`."""
 
     words: list[str]
     after: str
@@ -923,11 +926,14 @@ def _check_gh(arguments: Sequence[str], cwd: str, directories: Sequence[str]) ->
 
 
 def _chain_after(
-    separator: str, possible: list[str], chained: list[str] | None
+    separator: str, possible: list[str], chained: list[str] | None, narrowing: bool
 ) -> list[str] | None:
     """Where an `&&` segment runs, given the separator before the segment: the first segment and
-    one after `;` run wherever any earlier one may have; `||`, `|` and parentheses taint the list
-    (None) until the next `;`; `&&` keeps the chain."""
+    one after `;` run wherever any earlier one may have; `||` and `|` taint the list (None) until
+    the next `;`; `&&` keeps the chain. Without `narrowing` (the command has a parenthesis, whose
+    subshell's `cd` ends at its `)`) every segment runs wherever any earlier one may have."""
+    if not narrowing:
+        return None
     if separator in ("", ";"):
         return possible
     return None if separator in TAINTING else chained
@@ -939,9 +945,11 @@ def _plan(command: str, cwd: str) -> list[GitStep]:
     possible = [cwd]  # every directory a segment so far may have run in or moved to
     chained: list[str] | None = [cwd]  # where an `&&` segment runs; None once the list is tainted
     steps: list[GitStep] = []
-    segments = _segments(_tokens(command))
+    tokens = _tokens(command)
+    narrowing = not any(token in PARENS for token in tokens)
+    segments = _segments(tokens)
     for index, segment in enumerate(segments):
-        chained = _chain_after(segment.after, possible, chained)
+        chained = _chain_after(segment.after, possible, chained, narrowing)
         directories = possible if chained is None else chained
         words, _ = _without_merge(segment.words)
         if words[0] != "gh" and any(TITLE_WORD in word for word in words):
