@@ -6029,8 +6029,9 @@ def _unreadable_config(exc: ConfigError, role: str | None, stdin: TextIO) -> int
 
 
 def _check(argv: Sequence[str]) -> int:
-    """`--check <guard.json>`: 0 and `ok: N targets` for a valid file, 1 and the reason if not."""
-    if len(argv) != 1:
+    """`--check <guard.json>`: 0 and `ok: N targets` for a valid file, 1 and the reason if not.
+    An option in place of the file (`--check --no-approvals`) is a usage error."""
+    if len(argv) != 1 or argv[0].startswith("--"):
         print(f"{PREFIX} {USAGE}", file=sys.stderr)
         return 2
     try:

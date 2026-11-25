@@ -7075,3 +7075,45 @@ def test_unknown_argument_is_still_a_usage_error(run: Run) -> None:
         proc = run("", args=args)
         assert proc.returncode == 2, args
         assert "usage:" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--check", "--no-approvals"),
+        ("--no-approvals", "--no-approvals"),
+        ("--no-approvals=yes",),
+        ("--no-approvals=",),
+    ],
+)
+def test_a_misused_no_approvals_flag_is_a_usage_error(
+    run: Run, example_store: Path, args: tuple[str, ...]
+) -> None:
+    proc = run(bash("ls"), args=args)
+    assert proc.returncode == 2
+    assert "usage:" in proc.stderr
+
+
+def test_no_approvals_refuses_a_tool_a_live_tool_approval_covers(run: Run, store: Path) -> None:
+    approve(store, commands=[], tools=["mcp__orders__write"])
+    assert run(tool("mcp__orders__write")).returncode == 0
+
+    proc = run(tool("mcp__orders__write"), args=NO_APPROVALS)
+
+    assert proc.returncode == 2
+    assert "'orders-db' is production" in proc.stderr
+    assert OPENCODE_REFUSAL in proc.stderr
+
+
+def test_no_approvals_never_reads_a_corrupt_approvals_folder(run: Run, example_store: Path) -> None:
+    blob_id = git(example_store, "rev-parse", "HEAD:approvals/a.json")
+    (example_store / ".git" / "objects" / blob_id[:2] / blob_id[2:]).unlink()
+    unread = run(bash(EXAMPLE_COMMAND))
+    assert unread.returncode == 2
+    assert OPENCODE_REFUSAL not in unread.stderr
+
+    proc = run(bash(EXAMPLE_COMMAND), args=NO_APPROVALS)
+
+    assert proc.returncode == 2
+    assert "'example-db' is production" in proc.stderr
+    assert OPENCODE_REFUSAL in proc.stderr
