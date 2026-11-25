@@ -64,9 +64,12 @@ import os
 import re
 import shlex
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
+from functools import cached_property
 from pathlib import Path
 from typing import NoReturn, Self
 
@@ -168,15 +171,36 @@ def _real(path: Path) -> Path:
         return Path(os.path.abspath(path))
 
 
+# The paths `_resolve` has answered during one call of the hook (None outside one), so that a word
+# read from several folders or under several quotings is looked up on disk once.
+_RESOLVED: ContextVar[dict[tuple[str, Path], Path] | None] = ContextVar("resolved", default=None)
+
+
+@contextmanager
+def _remembering_paths() -> Iterator[None]:
+    token = _RESOLVED.set({})
+    try:
+        yield
+    finally:
+        _RESOLVED.reset(token)
+
+
 def _resolve(text: str, base: Path) -> Path | None:
     """The real path `text` names from folder `base`; None when it cannot be a path."""
     if "\0" in text:
         return None
-    joined = Path(os.path.join(base, text))
-    try:
-        return joined.resolve()
-    except (OSError, RuntimeError, ValueError):
-        return Path(os.path.abspath(joined))
+    remembered = _RESOLVED.get()
+    if remembered is not None and (text, base) in remembered:
+        return remembered[text, base]
+    found = _real(Path(os.path.join(base, text)))
+    if remembered is not None:
+        remembered[text, base] = found
+    return found
+
+
+def _folder_of(word: str, cwd: Path) -> Path | None:
+    """The real path a word names from `cwd`, `~` read as the shell reads it."""
+    return _resolve(_tilde(word, cwd), cwd)
 
 
 def hit(path: Path, scope: Scope, mode: Mode, *, coven_open: bool = False) -> str | None:
@@ -202,13 +226,15 @@ def _in_coven_checkout(path: Path, scope: Scope) -> bool:
     return path.is_relative_to(scope.coven) and not path.is_relative_to(scope.worktrees)
 
 
+def _holds_a_root(path: Path, roots: Iterable[Path]) -> bool:
+    """Whether one of the closed roots sits strictly under the path."""
+    return any(root != path and root.is_relative_to(path) for root in roots)
+
+
 def holds_closed_place(path: Path, view: "View", mode: Mode) -> str | None:
     """The rule a folder breaks by holding a place closed to the mode (a listing, a recursive
     read or a copy of it reaches what is under it), or None."""
-    roots = view.scope.roots_to_hold(
-        mode, profile_side=view.profile_folders_closed, coven_side=view.coven_folders_closed
-    )
-    if any(root != path and root.is_relative_to(path) for root in roots):
+    if _holds_a_root(path, view.roots_to_hold(mode)):
         return (
             "a folder that holds the OpenCode profile or coven's own files is closed to this call"
         )
@@ -264,14 +290,25 @@ def _ansi_c(text: str) -> str:
     return ANSI_C.sub(decode, text)
 
 
-def _variants(text: str) -> list[str]:
-    """The text with its quoting taken off in the two ways a word can be cut: quotes as breaks,
-    and quotes and backslashes removed (`pass""word` is `password`)."""
-    found: list[str] = []
-    for source in dict.fromkeys((text, _ansi_c(text))):
-        found.append(re.sub(r"['\"`\\]", " ", source))
-        found.append(re.sub(r"['\"\\]", "", source).replace("`", " "))
-    return list(dict.fromkeys(found))
+@dataclass(frozen=True)
+class Quoting:
+    """A shell text read as plain text, built once per call: the text, its sources (as written
+    and with `$'...'` decoded), and the variants of those sources with their quoting taken off
+    in the two ways a word can be cut: quotes as breaks, and quotes and backslashes removed
+    (`pass""word` is `password`)."""
+
+    text: str
+    sources: tuple[str, ...]
+    variants: tuple[str, ...]
+
+    @classmethod
+    def of(cls, text: str) -> Self:
+        sources = tuple(dict.fromkeys((text, _ansi_c(text))))
+        found: list[str] = []
+        for source in sources:
+            found.append(re.sub(r"['\"`\\]", " ", source))
+            found.append(re.sub(r"['\"\\]", "", source).replace("`", " "))
+        return cls(text, sources, tuple(dict.fromkeys(found)))
 
 
 def _braces(word: str) -> list[str]:
@@ -289,11 +326,11 @@ def _braces(word: str) -> list[str]:
     return done + pending
 
 
-def _words_of(text: str) -> list[str]:
+def _words_of(quoting: Quoting) -> list[str]:
     """Every word, brace expansion of a word and part of a word (`--opt=/x`, `A=/x:/y`) of the
     text under each of its variants, without repeats."""
     found: dict[str, None] = {}
-    for variant in _variants(text):
+    for variant in quoting.variants:
         for chunk in WORD_BREAKS.split(variant):
             for word in _braces(chunk) if chunk else []:
                 found[word] = None
@@ -305,13 +342,13 @@ class Names:
     """The variables a command line can be told apart by: what it sets itself, then HOME and PWD,
     then this process's own environment."""
 
-    def __init__(self, text: str, scope: Scope, cwd: Path) -> None:
+    def __init__(self, quoting: Quoting, scope: Scope, cwd: Path) -> None:
         self.values: dict[str, str] = {}
         # What a `$(...)` or backtick prints is not seen, so a variable set from one has no value.
         self.unknown: set[str] = set()
-        for source in dict.fromkeys((text, _ansi_c(text))):
+        for source in quoting.sources:
             self.unknown.update(SUBSTITUTION_ASSIGNMENT.findall(re.sub(r"['\"\\]", "", source)))
-        for variant in _variants(text):
+        for variant in quoting.variants:
             for name, value in ASSIGNMENT.findall(variant):
                 if name not in self.unknown:
                     self.values[name] = value
@@ -405,6 +442,26 @@ class View:
     # A line that only reads, run in coven's checkout, may name coven's own files.
     coven_open: bool = False
 
+    @cached_property
+    def _read_roots(self) -> list[Path]:
+        return self.scope.roots_to_hold(
+            Mode.READ,
+            profile_side=self.profile_folders_closed,
+            coven_side=self.coven_folders_closed,
+        )
+
+    @cached_property
+    def _written_roots(self) -> list[Path]:
+        return self.scope.roots_to_hold(
+            Mode.WRITE,
+            profile_side=self.profile_folders_closed,
+            coven_side=self.coven_folders_closed,
+        )
+
+    def roots_to_hold(self, mode: Mode) -> list[Path]:
+        """The closed folders a folder may not hold in this mode, worked out once per view."""
+        return self._read_roots if mode is Mode.READ else self._written_roots
+
 
 def check_word(word: str, bases: Sequence[Path], view: View, mode: Mode) -> None:
     """Raise RefusedError when the word, as a path from any of the folders, is closed to the
@@ -465,11 +522,11 @@ class Moves:
         return tuple(dict.fromkeys((self.start, *self.later)))
 
 
-def _moves(text: str, cwd: Path, names: Names, scope: Scope) -> Moves:
+def _moves(quoting: Quoting, cwd: Path, names: Names, scope: Scope) -> Moves:
     later: list[Path] = []
     unknown = False
     home = _real(scope.home)
-    for variant in _variants(text):
+    for variant in quoting.variants:
         here = cwd
         for verb, words in CD_LINE.findall(variant):
             target = _cd_target(words)
@@ -504,6 +561,23 @@ class Argv:
     piped: bool = False
     substitutions: tuple[str, ...] = ()
     inputs: tuple[str, ...] = ()
+
+    @cached_property
+    def _unwrapping(self) -> tuple[list[str], int]:
+        return _unwrap(self.words)
+
+    @cached_property
+    def command(self) -> tuple[str, ...]:
+        """The words under their assignments and wrappers (env, timeout, xargs, npx, pnpm dlx...),
+        worked out once."""
+        words, start = self._unwrapping
+        return tuple(words[start:])
+
+    @cached_property
+    def prefix(self) -> tuple[str, ...]:
+        """The words before the command: its assignments, wrappers and their options."""
+        words, start = self._unwrapping
+        return tuple(words[:start])
 
 
 SEPARATORS = re.compile(r"(\|\||&&|\||;|&|\n)")
@@ -756,18 +830,6 @@ def _split_string(words: Sequence[str], index: int) -> list[str] | None:
         return [*words[:index], *value.split(), *rest]
 
 
-def _unwrapped(words: Sequence[str]) -> list[str]:
-    """The command under its assignments and wrappers (env, timeout, xargs, npx, pnpm dlx...)."""
-    current, start = _unwrap(words)
-    return current[start:]
-
-
-def _prefix(words: Sequence[str]) -> list[str]:
-    """The words before the command: its assignments, wrappers and their options."""
-    current, start = _unwrap(words)
-    return current[:start]
-
-
 def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
     """The words (with an `env -S` string split) and where the command under its assignments and
     wrappers starts in them."""
@@ -864,7 +926,7 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
     """The commands inside one: shell strings, `eval`, runner strings and find actions."""
     if depth > MAX_NESTING:
         raise RefusedError("a command nested this deeply cannot be checked")
-    command = _unwrapped(argv.words)
+    command = argv.command
     found: list[Argv] = []
     strings = [
         *_command_strings(argv.words),
@@ -1027,7 +1089,7 @@ def _coven_lifecycle(words: Sequence[str]) -> bool:
 
 
 def _is_directory(word: str, cwd: Path) -> bool:
-    resolved = _resolve(_tilde(word, cwd), cwd)
+    resolved = _folder_of(word, cwd)
     return resolved is not None and resolved.is_dir()
 
 
@@ -1076,12 +1138,12 @@ def _launched(command: Sequence[str]) -> list[str]:
     return []
 
 
-def _sets_a_running_variable(words: Sequence[str], command: Sequence[str]) -> bool:
+def _sets_a_running_variable(prefix: Sequence[str], command: Sequence[str]) -> bool:
     """Whether a variable that git or man runs as a command is assigned before the program
     (`GIT_PAGER=x git log`, `env PAGER=x man ls`) or by `export`; the same text in an argument
     (`git commit -m 'set PAGER=less'`) is not an assignment, and a pager variable may be set to
     a plain pager (`GIT_PAGER=cat`)."""
-    assignments = _prefix(words)
+    assignments = list(prefix)
     if command and _base(command[0]) in ASSIGNING_BUILTINS:
         assignments.extend(command[1:])
     return any(_runs_its_value(each) for each in assignments)
@@ -1115,8 +1177,8 @@ def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -
 
 def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     words = [names.expand(word) for word in argv.words]
-    command = [names.expand(word) for word in _unwrapped(argv.words)]
-    if _sets_a_running_variable(argv.words, command):
+    command = [names.expand(word) for word in argv.command]
+    if _sets_a_running_variable(argv.prefix, command):
         raise RefusedError("a variable that makes git or man run a command is closed to a PM")
     if not command:
         return
@@ -1141,9 +1203,9 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
         raise RefusedError("a pipe into a shell cannot be checked")
 
 
-def check_text(text: str, scope: Scope) -> None:
+def check_text(quoting: Quoting, scope: Scope) -> None:
     """The rules that read the text of a command or a path as it stands."""
-    for variant in (text, *_variants(text)):
+    for variant in (quoting.text, *quoting.variants):
         if scope.port is not None and re.search(rf"(?<!\d){scope.port}(?!\d)", variant):
             raise RefusedError("the coven OpenCode server's port is closed to a PM")
         if scope.port is None and LOOPBACK_PORT.search(variant):
@@ -1158,7 +1220,7 @@ def _only_names_paths(commands: Sequence[Argv]) -> bool:
     """Whether every program of the line is one that never reads the content of a folder."""
     return all(
         _base(program[0]) in NEVER_READS_CONTENT
-        for program in (_unwrapped(each.words) for each in commands)
+        for program in (each.command for each in commands)
         if program
     )
 
@@ -1241,9 +1303,7 @@ def _writes_a_file(command: str) -> bool:
 
 def _only_reads(command: str, commands: Sequence[Argv]) -> bool:
     """Whether every program of the line only reads and nothing is redirected to a file."""
-    return not _writes_a_file(command) and all(
-        _reads_only(_unwrapped(each.words)) for each in commands
-    )
+    return not _writes_a_file(command) and all(_reads_only(each.command) for each in commands)
 
 
 def _adds_or_lists_worktrees(words: Sequence[str], cwd: Path, scope: Scope) -> bool:
@@ -1263,7 +1323,7 @@ def _adds_or_lists_worktrees(words: Sequence[str], cwd: Path, scope: Scope) -> b
         if word in WORKTREE_ADD_VALUED:
             next(arguments, None)
         elif not word.startswith("-"):
-            folder = _resolve(_tilde(word, cwd), cwd)
+            folder = _folder_of(word, cwd)
             return folder is not None and folder.is_relative_to(scope.worktrees)
     return False
 
@@ -1272,7 +1332,7 @@ def _coven_checkout_allows(command: str, commands: Sequence[Argv], cwd: Path, sc
     """Whether a line run in coven's checkout only reads or adds and lists worktrees."""
     return not _writes_a_file(command) and all(
         _reads_only(program) or _adds_or_lists_worktrees(program, cwd, scope)
-        for program in (_unwrapped(each.words) for each in commands)
+        for program in (each.command for each in commands)
     )
 
 
@@ -1297,7 +1357,7 @@ def _first_folder(command: str, cwd: Path) -> Path | None:
         return None
     if "$" in target or any(mark in target for mark in GLOB_MARKS):
         return None
-    folder = _resolve(_tilde(target, cwd), cwd)
+    folder = _folder_of(target, cwd)
     return folder if folder is not None and folder.is_dir() else None
 
 
@@ -1311,11 +1371,11 @@ def _chdir_value(arguments: Sequence[str]) -> str | None:
 
 
 def _working_folder_rule(cwd: Path, view: View) -> str:
-    holds_profile = any(
-        root != cwd and root.is_relative_to(cwd)
-        for root in view.scope.roots_to_hold(
+    holds_profile = _holds_a_root(
+        cwd,
+        view.scope.roots_to_hold(
             Mode.SHELL, profile_side=view.profile_folders_closed, coven_side=False
-        )
+        ),
     )
     return WORKING_FOLDER_RULE.format("profile" if holds_profile else "own files")
 
@@ -1337,8 +1397,9 @@ def _bases(command: str, moves: Moves, view: View) -> tuple[Path, ...]:
 
 
 def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
-    check_text(command, scope)
-    names = Names(command, scope, cwd)
+    quoting = Quoting.of(command)
+    check_text(quoting, scope)
+    names = Names(quoting, scope, cwd)
     in_coven = _in_coven_checkout(cwd, scope)
     rule = hit(cwd, scope, Mode.SHELL)
     if rule and not in_coven:
@@ -1356,7 +1417,7 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         coven_folders_closed=not _only_reads(command, commands),
         coven_open=in_coven,
     )
-    moves = _moves(command, cwd, view.names, scope)
+    moves = _moves(quoting, cwd, view.names, scope)
     if moves.unknown and view.profile_folders_closed:
         raise RefusedError(
             "a `cd` to a folder that cannot be known (`cd -`, an unset variable) is closed"
@@ -1369,7 +1430,7 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         rule = holds_closed_place(folder, view, Mode.SHELL)
         if rule:
             raise RefusedError(rule)
-    for word in _words_of(command):
+    for word in _words_of(quoting):
         check_word(word, bases, view, Mode.SHELL)
 
 
@@ -1407,7 +1468,8 @@ def path_problem(
     if tool in ("Read", "Write", "Edit", "NotebookEdit", "MultiEdit") and not paths:
         raise RefusedError("the file of this call cannot be read")
     # A folder that holds a closed place is closed to a read of it; a write cannot replace one.
-    view = View(scope, cwd, Names("", scope, cwd), profile_folders_closed=mode is Mode.READ)
+    names = Names(Quoting.of(""), scope, cwd)
+    view = View(scope, cwd, names, profile_folders_closed=mode is Mode.READ)
     for path in paths or [str(cwd)]:
         check_word(path, [cwd], view, mode)
     if pattern is not None:
@@ -1424,6 +1486,17 @@ def refusal(
     port: int | None,
 ) -> str | None:
     """The text that refuses the call, or None to allow it."""
+    with _remembering_paths():
+        return _refusal(payload, profile, serve, coven_root, port)
+
+
+def _refusal(
+    payload: Mapping[str, object],
+    profile: Path,
+    serve: Path,
+    coven_root: Path,
+    port: int | None,
+) -> str | None:
     try:
         tool = payload.get("tool_name")
         if not isinstance(tool, str):
@@ -1436,7 +1509,7 @@ def refusal(
             raise RefusedError("the input of this call cannot be read")
         scope = Scope.of(profile, serve, coven_root, port)
         if mode is Mode.FETCH:
-            check_text(_text(tool_input, "url", required=True) or "", scope)
+            check_text(Quoting.of(_text(tool_input, "url", required=True) or ""), scope)
             return None
         cwd = _directory(payload, tool_input)
         if mode is Mode.SHELL:
@@ -1464,6 +1537,13 @@ def read_port(serve: Path) -> int | None:
         return None
     port = int(text)
     return port if 0 < port < 65536 else None
+
+
+def _port_for(payload: Mapping[str, object], serve: Path) -> int | None:
+    """The server's port, read only for a call whose text can name it: a shell command or a URL."""
+    tool = payload.get("tool_name")
+    mode = TOOL_MODES.get(tool) if isinstance(tool, str) else None
+    return read_port(serve) if mode in (Mode.SHELL, Mode.FETCH) else None
 
 
 class _Arguments(argparse.ArgumentParser):
@@ -1494,7 +1574,7 @@ def run(argv: Sequence[str]) -> int:
         arguments.profile,
         arguments.serve,
         arguments.coven_root,
-        read_port(arguments.serve),
+        _port_for(payload, arguments.serve),
     )
     if text:
         print(text, file=sys.stderr)
