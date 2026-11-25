@@ -177,6 +177,15 @@ async function livePm(deps: ToolDeps, code: string): Promise<SessionLike> {
   return found;
 }
 
+/**
+ * Whether the server holds the session archived. `update` answers nothing either way, and 2.3.2's
+ * plugin side leaves `archived` alone, so only the session read back says what happened.
+ */
+async function isArchived(deps: ToolDeps, sessionID: string): Promise<boolean> {
+  const read = await deps.session.get({ sessionID });
+  return typeof read.time?.archived === "number";
+}
+
 export function pmResumeTool(deps: ToolDeps): ToolDefinition {
   return {
     name: "coven_pm_resume",
@@ -206,6 +215,11 @@ export function pmResumeTool(deps: ToolDeps): ToolDefinition {
         }
         if (live === undefined) {
           await deps.session.update({ sessionID: target.id, archived: false });
+          if (await isArchived(deps, target.id)) {
+            throw new ToolError(
+              `pm-${code} is still archived: the server did not unarchive it, so nothing was sent`,
+            );
+          }
         }
         sharedState().stopped.delete(target.id);
         await deps.session.prompt({
@@ -231,7 +245,8 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
     name: "coven_pm_stop",
     description:
       "Stops a PM by its code: interrupts its turn (which also ends a waiting ask) and, with " +
-      "archive true, archives the session. No turn-end notice follows the stop.",
+      "archive true, archives the session and reads it back; an error says when the server did " +
+      "not archive it. No turn-end notice follows the stop.",
     input: {
       type: "object",
       properties: {
@@ -260,6 +275,11 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
         }
         if (archive) {
           await deps.session.update({ sessionID: target.id, archived: true });
+          if (!(await isArchived(deps, target.id))) {
+            throw new ToolError(
+              `stopped pm-${code} but the server did not archive it`,
+            );
+          }
         }
         return {
           content: `stopped pm-${code}${archive ? " and archived it" : ""}`,
