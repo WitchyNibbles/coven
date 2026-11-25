@@ -10,6 +10,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
+import shlex
 import shutil
 import stat
 import tempfile
@@ -59,6 +61,26 @@ if [ ! -x "$root/bin/coven" ]; then
 fi
 exec "$root/bin/coven" "$@"
 """
+_SHIM_NOT_INSTALLED: Final = """if [ -z "$root" ]; then
+  echo "coven: plugin coven@coven is not installed" >&2
+  exit 1
+fi
+"""
+# What replaces it in a shim written from a clone (not a plugin-cache root): with no plugin
+# installed, run the clone that wrote the shim. `{checkout}` is its path, shell-quoted.
+_SHIM_CHECKOUT_FALLBACK: Final = """if [ -z "$root" ]; then
+  checkout={checkout}
+  if [ ! -x "$checkout/bin/coven" ]; then
+    echo "coven: plugin coven@coven is not installed and $checkout/bin/coven is missing" >&2
+    exit 1
+  fi
+  exec "$checkout/bin/coven" "$@"
+fi
+"""
+# The quoted path may hold a newline, so it runs up to the `if` line that follows it.
+_SHIM_CHECKOUT_LINE: Final = re.compile(
+    r"^  checkout=(.*)\n  if \[ ! -x \"\$checkout/bin/coven\" \]", re.MULTILINE | re.DOTALL
+)
 JsonObject = dict[str, object]
 
 
@@ -310,14 +332,52 @@ def _plan_config(choices: Choices) -> list[Change]:
     return [change for change in changes if change]
 
 
+def shim_text(checkout: Path | None) -> str:
+    """The shim for `checkout`; `None` gives the plugin-only text."""
+    if checkout is None:
+        return SHIM_TEXT
+    fallback = _SHIM_CHECKOUT_FALLBACK.format(checkout=shlex.quote(str(checkout)))
+    return SHIM_TEXT.replace(_SHIM_NOT_INSTALLED, fallback)
+
+
+def _shim_checkout() -> Path | None:
+    """The clone the shim may fall back to, or `None` when there is none to run.
+
+    Not a plugin-cache root (versioned, pruned), and not a root without an executable `bin/coven`
+    (a wheel install's root is `<venv>/lib/python3.x`).
+    """
+    root = paths.root()
+    plugins = paths.installed_plugins_file().parent.resolve()
+    if root.is_relative_to(plugins) or not os.access(root / "bin" / "coven", os.X_OK):
+        return None
+    return root
+
+
+def _is_coven_shim(text: str) -> bool:
+    """Whether `text` is today's plugin-only shim or one this code wrote for some clone."""
+    if text == SHIM_TEXT:
+        return True
+    found = _SHIM_CHECKOUT_LINE.search(text)
+    if found is None:
+        return False
+    try:
+        (checkout,) = shlex.split(found.group(1))
+    except ValueError:
+        return False
+    return text == shim_text(Path(checkout))
+
+
 def _plan_shim() -> list[Change]:
     file = shim_file()
+    wanted = shim_text(_shim_checkout())
     current = _read_text(file)
-    if current == SHIM_TEXT:
+    if current == wanted:
         return []
-    if not isinstance(current, _Missing):
+    if isinstance(current, _Missing):
+        return [Change(file, (), current, wanted)]
+    if not _is_coven_shim(current):
         raise CovenError(f"{file} exists and is not coven's shim; move it or skip --shim")
-    return [Change(file, (), current, SHIM_TEXT)]
+    return [Change(file, (), current, wanted, previously=(current,))]
 
 
 def plan(choices: Choices) -> list[Change]:
@@ -572,7 +632,7 @@ def _undo_text(change: Change, *, dry_run: bool) -> tuple[list[str], list[str]]:
     current = _read_text(change.file)
     if isinstance(current, _Missing):
         return [], []
-    if not _same(current, change.after):
+    if not any(_same(current, written) for written in (change.after, *change.previously)):
         return [], [_skipped(change)]
     if not dry_run:
         change.file.unlink()

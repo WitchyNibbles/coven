@@ -355,8 +355,8 @@ What `coven opencode` does not do, or does not know. The install steps are in
 
 - Context limits: OpenCode 2.3.2 assumes 200000 tokens of context and 32000 of output for a gateway
   model with no limit set, so a model with a smaller window can overflow before OpenCode compacts.
-  Give each gateway model its real window if your version of setup offers a way to (see
-  `coven opencode setup` in opencode/README.md); otherwise use models with at least that window.
+  Give each gateway model its real window with `coven opencode setup --limit ID=CONTEXT[:OUTPUT]`
+  (see opencode/README.md); setup and doctor warn about a litellm model with no `--limit`.
 - Every `shell` and `webfetch` call asks. A headless `opencode run` rejects the ask, so it cannot
   use shell.
 - The GM/PM hierarchy does not run on OpenCode yet; it is planned.
@@ -366,7 +366,8 @@ What `coven opencode` does not do, or does not know. The install steps are in
 - Superpowers skills come only from Claude Code's superpowers plugin. Without it, a step that loads
   one is skipped.
 - Coven runs from a full copy of the repo (a git clone), not an installed wheel: `opencode/` and
-  `hooks/` must sit beside `src/`. Moving it breaks `covenRoot` and the deny-secrets guard until
-  `coven opencode setup` runs again.
+  `hooks/` must sit beside `src/`, and `coven opencode` refuses to start without them. Moving the
+  clone breaks `covenRoot` and the deny-secrets guard until `coven opencode setup` runs again, and
+  breaks the shim's fallback until `coven setup --shim` runs again.
 - Tested on Linux and WSL 2 with Node 24 only. No CI job installs the real OpenCode: the
   end-to-end run needs `unshare` and a 2.3.2 binary.

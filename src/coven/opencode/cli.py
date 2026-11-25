@@ -9,6 +9,7 @@ from typing import Any
 
 from coven import paths
 from coven.opencode import checks, generate, install, runtime
+from coven.opencode.checkout import needs_checkout
 from coven.opencode.profile import (
     ASSUMED_CONTEXT,
     PINNED_VERSION,
@@ -129,20 +130,20 @@ def register(subparsers: Any) -> None:
         help="a model's token window, litellm only; without one OpenCode assumes "
         f"{ASSUMED_CONTEXT} tokens of context",
     )
-    setup.set_defaults(handler=run_setup)
+    setup.set_defaults(handler=needs_checkout(run_setup))
     run = commands.add_parser(
         "run", help="start the pinned OpenCode in coven's profile (arguments follow --)"
     )
     run.add_argument("opencode_args", nargs=argparse.REMAINDER, metavar="-- ARGS")
-    run.set_defaults(handler=run_run)
+    run.set_defaults(handler=needs_checkout(run_run))
     install_parser = commands.add_parser(
         "install", help="install the pinned OpenCode runtime into the profile with npm"
     )
     install_parser.add_argument(
         "--version", default=PINNED_VERSION, metavar="X.Y.Z", help=f"default {PINNED_VERSION}"
     )
-    install_parser.set_defaults(handler=run_install)
+    install_parser.set_defaults(handler=needs_checkout(run_install))
     doctor = commands.add_parser(
         "doctor", help="check the runtime, the profile's isolation and coven's plugin"
     )
-    doctor.set_defaults(handler=run_doctor_command)
+    doctor.set_defaults(handler=needs_checkout(run_doctor_command))

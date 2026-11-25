@@ -346,7 +346,7 @@ def test_the_opencode_install_section_has_each_paragraph() -> None:
         "git clone",
         "bin/coven",
         "only `src/`",  # why a clone, not a wheel
-        "plugin coven@coven is not installed",  # why not the Claude Code shim
+        "falls back to the clone",  # the shim works without Claude Code
         "`covenRoot`",  # moving the clone
         "`coven root` check fails",
         "regenerates from `profile.json`",
@@ -401,7 +401,9 @@ def test_known_gaps_says_what_opencode_does_not_have() -> None:
 
 
 def test_known_gaps_names_the_opencode_context_limit_and_the_clone() -> None:
-    assert "OpenCode 2.3.2 assumes 200000 tokens of context" in bullet_about("200000")
+    limits = bullet_about("200000")
+    assert "OpenCode 2.3.2 assumes 200000 tokens of context" in limits
+    assert "setup --limit ID=CONTEXT[:OUTPUT]`" in limits
     clone = bullet_about("git clone")
     assert "not an installed wheel" in clone
     assert "`opencode/` and `hooks/` must sit beside `src/`" in clone
