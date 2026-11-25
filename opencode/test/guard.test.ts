@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
+import { basename } from "node:path";
 import { mock, test } from "node:test";
 import { setImmediate as tick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-
-import { basename } from "node:path";
 
 import type { Payload } from "../src/deny-secrets.ts";
 import { guardsHook, runHookScript } from "../src/guard.ts";

@@ -42,6 +42,27 @@ def test_start_writes_password_port_pid_and_answers(fake: Good, procs: Procs) ->
     assert serve.running(fake.layout) == info
 
 
+def test_start_writes_the_port_file_atomically(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The server guard reads a port file that is there but not a port as "refuse every loopback
+    # port", so a reader must never see it half written.
+    written: list[Path] = []
+    real = serve.write_atomic
+
+    def recording(file: Path, payload: bytes, *, mode: int, backup: bool) -> None:
+        written.append(file)
+        real(file, payload, mode=mode, backup=backup)
+
+    monkeypatch.setattr(serve, "write_atomic", recording)
+
+    info = start(fake, procs)
+
+    files = serve.files(fake.layout)
+    assert files.port in written
+    assert files.port.read_text() == f"{info.port}\n"
+
+
 def test_password_is_kept_across_starts(fake: Good, procs: Procs) -> None:
     start(fake, procs)
     first = serve.files(fake.layout).password.read_text()

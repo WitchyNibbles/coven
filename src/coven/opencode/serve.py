@@ -33,6 +33,8 @@ type Kill = Callable[[int, int], None]
 
 HOST: Final = "127.0.0.1"
 PASSWORD_MODE: Final = 0o600
+# The port is no secret; the server guard reads it, and a half-written file would refuse loopback.
+PORT_MODE: Final = 0o644
 POLL: Final = 0.05
 # After SIGKILL the process is gone within a moment; this only bounds a stuck wait.
 KILL_WAIT: Final = 5.0
@@ -210,7 +212,7 @@ def start(
             bound = _wait_for(lambda: _listening_port(log), process, "listened", wait_s, log)
             _wait_for(lambda: _answers(bound, password), process, "answered", wait_s, log)
             paths.pid.write_text(f"{process.pid}\n")
-            paths.port.write_text(f"{bound}\n")
+            write_atomic(paths.port, f"{bound}\n".encode(), mode=PORT_MODE, backup=False)
         except BaseException:
             stop_server(process, GRACE)
             raise
