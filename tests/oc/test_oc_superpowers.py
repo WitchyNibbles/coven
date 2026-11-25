@@ -5,6 +5,7 @@ import pytest
 from fakes import SUPERPOWERS_KEY, install_superpowers
 
 from coven.opencode import superpowers
+from coven.opencode.profile import Layout
 
 
 def test_the_skills_are_the_eight_the_routing_and_the_sdd_skill_name():
@@ -109,3 +110,36 @@ def test_copy_with_no_install_returns_every_name_and_writes_nothing(tmp_path: Pa
     target.mkdir()
     assert superpowers.copy(None, target) == list(superpowers.SKILLS)
     assert list(target.iterdir()) == []
+
+
+def make_clone(layout: Layout) -> Path:
+    """A clone of the pinned tag inside the profile; returns its `skills/`."""
+    skills = layout.superpowers_dir(superpowers.PINNED_TAG) / "skills"
+    (skills / "brainstorming").mkdir(parents=True)
+    (skills / "brainstorming" / "SKILL.md").write_text("from the clone")
+    return skills
+
+
+def test_the_clone_is_preferred_over_the_claude_code_plugin(tmp_path: Path, claude_plugins: Path):
+    plugin = install_superpowers(claude_plugins)
+    clone = make_clone(Layout(tmp_path / "profile"))
+    chosen = superpowers.source(Layout(tmp_path / "profile"))
+    assert chosen == superpowers.Source(clone, "v7.0.2 clone")
+    assert chosen != superpowers.Source(plugin, "Claude Code plugin")
+
+
+def test_the_plugin_is_used_when_there_is_no_clone(tmp_path: Path, claude_plugins: Path):
+    plugin = install_superpowers(claude_plugins)
+    chosen = superpowers.source(Layout(tmp_path / "profile"))
+    assert chosen == superpowers.Source(plugin, "Claude Code plugin")
+
+
+def test_a_clone_folder_without_skills_does_not_count(tmp_path: Path, claude_plugins: Path):
+    plugin = install_superpowers(claude_plugins)
+    layout = Layout(tmp_path / "profile")
+    layout.superpowers_dir(superpowers.PINNED_TAG).mkdir(parents=True)
+    assert superpowers.source(layout) == superpowers.Source(plugin, "Claude Code plugin")
+
+
+def test_there_is_no_source_without_a_clone_or_a_plugin(tmp_path: Path):
+    assert superpowers.source(Layout(tmp_path / "profile")) is None

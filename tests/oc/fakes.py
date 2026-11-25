@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import stat
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -195,3 +197,42 @@ def install_superpowers(
     data = {"version": 2, "plugins": {SUPERPOWERS_KEY: [entry] if as_list else entry}}
     (plugins / "installed_plugins.json").write_text(json.dumps(data))
     return install / "skills"
+
+
+REAL_GIT: Final = shutil.which("git")
+
+
+def git_on_path(folder: Path) -> Path:
+    """Make the real `git` reachable from `folder`, for a test whose PATH is only that folder."""
+    assert REAL_GIT is not None, "the tests need git"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "git").symlink_to(REAL_GIT)
+    return folder
+
+
+def superpowers_repo(folder: Path, names: tuple[str, ...] = superpowers.SKILLS) -> tuple[Path, str]:
+    """A local git repo standing in for upstream superpowers, tagged with the pinned tag.
+
+    Its skills say they come from the clone. Returns the repo and the commit the tag points at.
+    """
+    for name in names:
+        skill = folder / "skills" / name
+        skill.mkdir(parents=True)
+        body = f"---\nname: {name}\n---\nFrom the clone: use superpowers:writing-plans.\n"
+        (skill / "SKILL.md").write_text(body)
+    steps = [
+        ["init", "--quiet"],
+        ["add", "."],
+        ["commit", "--quiet", "-m", "superpowers"],
+        ["tag", "-a", superpowers.PINNED_TAG, "-m", superpowers.PINNED_TAG],
+    ]
+    assert REAL_GIT is not None, "the tests need git"
+    for step in steps:
+        subprocess.run([REAL_GIT, "-C", str(folder), *step], check=True, capture_output=True)
+    head = subprocess.run(
+        [REAL_GIT, "-C", str(folder), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return folder, head.stdout.strip()

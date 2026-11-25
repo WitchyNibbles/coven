@@ -20,12 +20,13 @@ from coven.opencode.profile import (
     Profile,
 )
 from coven.opencode.runtime import BINARY_OVERRIDE, binary_version, probe
-from coven.opencode.superpowers import SKILLS, folder_id
+from coven.opencode.superpowers import PINNED_TAG, SKILLS, folder_id
 
 PROJECT_CONFIG: Final = (".opencode", "opencode.json", "opencode.jsonc")
 GUARD_HOOK: Final = "hooks/deny_secrets.py"
 SUPERPOWERS_FIX: Final = (
-    "install the superpowers plugin in Claude Code, then re-run `coven opencode setup`"
+    f"run `coven opencode install` (fetches superpowers {PINNED_TAG}) or install the superpowers "
+    "plugin in Claude Code, then re-run `coven opencode setup`"
 )
 
 type Fields = list[tuple[str, tuple[str, ...]]]

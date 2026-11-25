@@ -81,6 +81,9 @@ class Layout:
     def runtime_dir(self, version: str) -> Path:
         return self.root / "runtime" / version
 
+    def superpowers_dir(self, tag: str) -> Path:
+        return self.root / "superpowers" / tag
+
     def runtime_binary(self, version: str) -> Path:
         return self.runtime_dir(version) / "node_modules" / ".bin" / "opencode"
 

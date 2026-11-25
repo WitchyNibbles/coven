@@ -1,10 +1,14 @@
+import os
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from doctor_kit import KEY_NAME, KEY_VALUE, LITELLM_FLAGS, Good
 from fakes import fake_opencode, install_superpowers
 
 from coven import cli
+from coven.opencode import superpowers
 from coven.opencode.profile import layout
 
 
@@ -15,6 +19,26 @@ def claude_plugins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     folder.mkdir()
     monkeypatch.setenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", str(folder))
     return folder
+
+
+@pytest.fixture(autouse=True)
+def no_superpowers_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`coven opencode install` clones from a path that does not exist, never from github.com.
+
+    A test that wants a clone points `superpowers.REPO_URL` at a local repo. As a second guard,
+    any process a test starts with a network URL among its arguments fails the test.
+    """
+    monkeypatch.setattr(superpowers, "REPO_URL", str(tmp_path / "no-such-superpowers-repo"))
+    start = subprocess.Popen.__init__
+
+    def guarded(self: subprocess.Popen[Any], args: Any, *rest: Any, **named: Any) -> None:
+        parts = [args] if isinstance(args, str | os.PathLike) else list(args)
+        for part in map(os.fsdecode, parts):
+            if "://" in part and not part.startswith("file://"):
+                pytest.fail(f"a test tried to reach the network: {part}")
+        start(self, args, *rest, **named)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", guarded)
 
 
 @pytest.fixture

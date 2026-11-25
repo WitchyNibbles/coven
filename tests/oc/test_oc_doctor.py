@@ -200,7 +200,8 @@ def test_a_missing_superpowers_folder_warns_with_the_fix_and_exits_zero(good: Go
     assert found.status == "warn"
     assert found.detail == "missing superpowers-brainstorming, superpowers-writing-plans"
     assert found.fix == (
-        "install the superpowers plugin in Claude Code, then re-run `coven opencode setup`"
+        "run `coven opencode install` (fetches superpowers v7.0.2) or install the superpowers "
+        "plugin in Claude Code, then re-run `coven opencode setup`"
     )
     assert exit_code(done) == 0
 

@@ -363,8 +363,9 @@ What `coven opencode` does not do, or does not know. The install steps are in
 - The production guard and aquelarre are not on OpenCode. Only the deny-secrets guard runs: the
   plugin layer and the `.env` rules.
 - The copied superpowers skills keep Claude Code's tool names in their text.
-- Superpowers skills come only from Claude Code's superpowers plugin. Without it, a step that loads
-  one is skipped.
+- Superpowers skills come from the v7.0.2 clone that `coven opencode install` fetches with `git`,
+  or from Claude Code's superpowers plugin. With neither, a step that loads one is skipped. Only
+  v7.0.2 is supported; a newer superpowers needs a coven release that moves the pin.
 - Coven runs from a full copy of the repo (a git clone), not an installed wheel: `opencode/` and
   `hooks/` must sit beside `src/`, and `coven opencode` refuses to start without them. Moving the
   clone breaks `covenRoot` and the deny-secrets guard until `coven opencode setup` runs again, and

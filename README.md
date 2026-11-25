@@ -52,7 +52,7 @@ It is built for Claude Code, and part of it also runs on OpenCode 2.3.2 (see
   remote is private.
 - `uv`: only to run the code standard's checks in a Python repo. A TypeScript repo needs `node` and
   its package manager instead.
-- For OpenCode: `node` and `npm` (see [opencode/README.md](opencode/README.md#install)).
+- For OpenCode: `node` and `npm`, and `git` for the superpowers fetch (see [opencode/README.md](opencode/README.md#install)).
 - Linux, macOS or WSL 2. Native Windows is untested.
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
@@ -309,9 +309,9 @@ tool (a lead agent waits in it for its subagents' reports).
 
 Not on OpenCode yet: the GM/PM hierarchy (planned), the production guard and aquelarre.
 
-You do not need Claude Code for this. The one thing that comes from it is the superpowers skills,
-which setup copies from Claude Code's superpowers plugin. The install steps, and what happens
-without that plugin, are in [opencode/README.md](opencode/README.md#install).
+You do not need Claude Code for this. The superpowers skills come from a v7.0.2 clone that
+`coven opencode install` fetches with git, or else from Claude Code's superpowers plugin. The
+install steps, and what happens with neither, are in [opencode/README.md](opencode/README.md#install).
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/section-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/assets/section-light.svg"><img src="docs/assets/section-light.svg" alt="" width="120"></picture></p>
 
