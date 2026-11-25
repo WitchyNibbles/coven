@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from coven import paths
 from coven.opencode import checks, generate, install, runtime, serve, superpowers
+from coven.opencode.canary import AUTH_VAR, USERNAME_ENV, http_json, loaded_plugins
 from coven.opencode.checkout import needs_checkout
+from coven.opencode.checks_server import plugin_outcome
 from coven.opencode.profile import (
     ASSUMED_CONTEXT,
     PINNED_VERSION,
@@ -20,6 +23,8 @@ from coven.opencode.profile import (
     load_profile,
     make_profile,
 )
+
+type ExecFn = Callable[[str, list[str], dict[str, str]], object]
 
 FLAGS_NEED_PRESET = "pass --preset with the other flags, or no flags to regenerate"
 
@@ -97,6 +102,41 @@ def run_run(args: argparse.Namespace) -> int:
         raise OpencodeError(RUN_REFUSED)
     passed = args.opencode_args
     return runtime.run(passed[1:] if passed[:1] == ["--"] else passed, exec_fn=os.execve)
+
+
+PLUGIN_INACTIVE = "coven's plugin is not active on the server"
+
+
+def _attach_target() -> tuple[str, str]:
+    """The URL and password of the coven server, started first when none runs."""
+    home = layout()
+    profile = load_profile(home)
+    if profile is None:
+        raise OpencodeError(runtime.NO_PROFILE)
+    info = serve.running(home) or serve.start(home, profile)
+    try:
+        password = serve.files(home).password.read_text().strip()
+    except OSError as error:
+        raise OpencodeError(f"cannot read the server password: {error}") from error
+    return f"http://{serve.HOST}:{info.port}", password
+
+
+def _with_login(password: str, exec_fn: ExecFn) -> ExecFn:
+    """`exec_fn` with the server password added to the env it execs, and nowhere else."""
+
+    def attach(path: str, argv: list[str], env: dict[str, str]) -> object:
+        login = {k: v for k, v in env.items() if k != USERNAME_ENV} | {AUTH_VAR: password}
+        return exec_fn(path, argv, login)
+
+    return attach
+
+
+def run_gm(_args: argparse.Namespace) -> int:
+    url, password = _attach_target()
+    plugins = loaded_plugins(url, password, http_json)
+    if (active := plugin_outcome(plugins)).status != "ok":
+        raise OpencodeError(f"{PLUGIN_INACTIVE} ({active.detail}); run `coven opencode doctor`")
+    return runtime.run(["--server", url], exec_fn=_with_login(password, os.execve))
 
 
 def run_install(args: argparse.Namespace) -> int:
@@ -182,6 +222,10 @@ def register(subparsers: Any) -> None:
     )
     run.add_argument("opencode_args", nargs=argparse.REMAINDER, metavar="-- ARGS")
     run.set_defaults(handler=needs_checkout(run_run))
+    gm = commands.add_parser(
+        "gm", help="open the TUI on coven's server as the GM (starts the server if needed)"
+    )
+    gm.set_defaults(handler=needs_checkout(run_gm))
     install_parser = commands.add_parser(
         "install",
         help="install the pinned OpenCode (npm) and superpowers v7.0.2 (git) into the profile",

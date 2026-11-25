@@ -150,7 +150,7 @@ def data_items(payload: object, path: str) -> list[dict[str, object]]:
     return [item for item in data if isinstance(item, dict)]
 
 
-def _loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, object]]:
+def loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, object]]:
     """The plugin list once coven is in it; 2.3.2 lists none until they have loaded (~0.5 s)."""
     deadline = time.monotonic() + SETTLE
     while True:
@@ -165,7 +165,7 @@ def _loaded_plugins(url: str, password: str, fetch: Fetch) -> list[dict[str, obj
 def _read_view(url: str, password: str, fetch: Fetch) -> ServerView:
     # Skills planted before boot only show after a reload (probe 2).
     fetch("POST", f"{url}/api/location/reload", password)
-    plugins = _loaded_plugins(url, password, fetch)
+    plugins = loaded_plugins(url, password, fetch)
     skills = data_items(fetch("GET", f"{url}/api/skill", password), "/api/skill")
     return ServerView(plugins, skills)
 

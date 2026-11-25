@@ -1,9 +1,16 @@
+import os
+import stat
+from pathlib import Path
+
 import pytest
 from doctor_kit import KEY_VALUE, NAMES, Good, Reader, results_by_name
+from serve_kit import Procs, healthy_routes, install_fake, start
 
 from coven import cli
+from coven.opencode import checks_server, serve
 from coven.opencode.canary import ServerView
 from coven.opencode.checks import exit_code, render, run_doctor
+from coven.opencode.checks_server import REQUIRED_OPERATIONS
 from coven.opencode.profile import OpencodeError
 
 SKILL = {"id": "opencode", "path": "skill://opencode/SKILL.md"}
@@ -70,7 +77,9 @@ def test_a_server_that_does_not_start_fails_plugin_and_skills_alone(good: Good):
         assert found[name].status == "fail"
         assert "did not start" in found[name].detail
     assert len(reader.calls) == 1
-    assert [found[name].status for name in NAMES if name not in ("plugin", "skills")] == ["ok"] * 8
+    assert [found[name].status for name in NAMES if name not in ("plugin", "skills")] == ["ok"] * (
+        len(NAMES) - 2
+    )
 
 
 def test_a_reader_that_crashes_fails_both_server_checks_with_one_line(good: Good):
@@ -107,7 +116,7 @@ def test_a_broken_profile_is_a_config_failure_and_the_others_still_print(good: G
 def test_no_output_line_holds_the_key_value_or_the_server_password(good: Good):
     reader = Reader(error=OpencodeError("the server did not start within 30 s"))
     lines = render(run_doctor(good.layout, good.cwd, read=reader))
-    assert len(lines) == 10
+    assert len(lines) == len(NAMES)
     assert KEY_VALUE not in "\n".join(lines)
     assert "OPENCODE_SERVER_PASSWORD" not in "\n".join(lines)
 
@@ -122,3 +131,203 @@ def test_the_doctor_command_prints_a_line_per_check_and_exits_one_on_a_failure(
     assert [line.split(":")[0].split(" ", 1)[1] for line in lines] == NAMES
     assert lines[0].startswith("ok runtime: ")
     assert f"fail key: {NO_PROFILE}" in lines
+
+
+@pytest.fixture
+def running(
+    good: Good,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    procs: Procs,
+    interpreter_is_the_server: None,
+) -> serve.ServerInfo:
+    """A coven server (the fake) that runs, healthy, with every operation in its OpenAPI."""
+    install_fake(tmp_path, monkeypatch, routes=healthy_routes(REQUIRED_OPERATIONS))
+    return start(good, procs)
+
+
+def test_the_required_operations_are_the_2_3_2_ids() -> None:
+    assert REQUIRED_OPERATIONS == (
+        "session.create",
+        "session.list",
+        "session.get",
+        "session.prompt",
+        "session.interrupt",
+        "session.update",
+        "session.permission.list",
+        "session.permission.reply",
+        "event.subscribe",
+    )
+
+
+def test_doctor_uses_the_running_server_and_starts_no_canary(
+    good: Good, running: serve.ServerInfo
+) -> None:
+    reader = Reader()
+
+    found = results_by_name(good, reader)
+
+    assert reader.calls == []
+    assert found["server"].status == "ok"
+    assert f"port {running.port}" in found["server"].detail
+    assert found["plugin"].status == "ok"
+    assert found["skills"].status == "ok"
+    assert found["operations"].status == "ok"
+
+
+def test_doctor_reads_the_plugin_of_the_running_server_not_the_reader_s(
+    good: Good,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    procs: Procs,
+    interpreter_is_the_server: None,
+) -> None:
+    other = {"data": [{"id": "other", "state": {"status": "active"}}]}
+    routes = healthy_routes(REQUIRED_OPERATIONS) | {"/api/plugin": other}
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    found = results_by_name(good, Reader())
+
+    assert found["plugin"].status == "fail"
+    assert "other" in found["plugin"].detail
+
+
+def test_doctor_starts_the_canary_when_no_server_runs(good: Good) -> None:
+    reader = Reader()
+
+    found = results_by_name(good, reader)
+
+    assert len(reader.calls) == 1
+    assert found["server"].status == "ok"
+    assert "no server running" in found["server"].detail
+    assert found["operations"].status == "ok"
+    assert "no server running" in found["operations"].detail
+
+
+def test_doctor_fails_server_when_the_running_one_does_not_answer(
+    good: Good, interpreter_is_the_server: None
+) -> None:
+    files = serve.files(good.layout)
+    files.pid.parent.mkdir(parents=True)
+    files.pid.write_text(f"{os.getpid()}\n")
+    files.port.write_text("1\n")
+    files.password.write_text("pw\n")
+    files.password.chmod(0o600)
+
+    found = results_by_name(good, Reader())
+
+    assert found["server"].status == "fail"
+    assert "port 1" in found["server"].detail
+    assert "serve stop" in found["server"].fix
+
+
+def make_password(good: Good, mode: int) -> Path:
+    path = serve.files(good.layout).password
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("pw\n")
+    path.chmod(mode)
+    return path
+
+
+def test_doctor_server_password_mode(good: Good) -> None:
+    path = make_password(good, 0o600)
+    assert results_by_name(good)["password"].status == "ok"
+
+    path.chmod(0o644)
+    loose = results_by_name(good)["password"]
+
+    assert loose.status == "fail"
+    assert "0644" in loose.detail
+    assert "0600" in loose.detail
+    assert str(path) in loose.fix
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_doctor_password_is_ok_before_the_first_start(good: Good) -> None:
+    found = results_by_name(good)["password"]
+
+    assert found.status == "ok"
+    assert "no password file yet" in found.detail
+
+
+def test_doctor_openapi_has_required_operations(
+    good: Good,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    procs: Procs,
+    interpreter_is_the_server: None,
+) -> None:
+    kept = tuple(op for op in REQUIRED_OPERATIONS if op != "session.interrupt")
+    install_fake(tmp_path, monkeypatch, routes=healthy_routes(kept))
+    start(good, procs)
+
+    found = results_by_name(good, Reader())["operations"]
+
+    assert found.status == "fail"
+    assert "session.interrupt" in found.detail
+    assert "session.create" not in found.detail
+
+
+def test_doctor_names_every_missing_operation(
+    good: Good,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    procs: Procs,
+    interpreter_is_the_server: None,
+) -> None:
+    install_fake(tmp_path, monkeypatch, routes=healthy_routes(("session.create",)))
+    start(good, procs)
+
+    found = results_by_name(good, Reader())["operations"]
+
+    assert found.status == "fail"
+    for operation in REQUIRED_OPERATIONS[1:]:
+        assert operation in found.detail
+
+
+@pytest.mark.parametrize(
+    ("version", "detail"),
+    [
+        ((3, 11, 9), "python3 3.11.9 is too old; coven's plugin needs 3.12 or newer"),
+        (None, "python3 was not found; coven's plugin needs 3.12 or newer"),
+    ],
+    ids=["too-old", "missing"],
+)
+def test_doctor_names_a_too_old_python3(
+    good: Good,
+    monkeypatch: pytest.MonkeyPatch,
+    version: tuple[int, int, int] | None,
+    detail: str,
+) -> None:
+    monkeypatch.setattr(checks_server, "python3_version", lambda _env: version)
+
+    found = results_by_name(good)["python3"]
+
+    assert found.status == "fail"
+    assert found.detail == detail
+
+
+def test_doctor_accepts_python3_12(good: Good, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(checks_server, "python3_version", lambda _env: (3, 12, 0))
+
+    found = results_by_name(good)["python3"]
+
+    assert found.status == "ok"
+    assert "3.12.0" in found.detail
+
+
+@pytest.mark.parametrize(
+    ("line", "version"),
+    [("Python 3.12.3", (3, 12, 3)), ("Python 3.14.0rc1", (3, 14, 0)), ("nonsense", None)],
+)
+def test_python3_version_reads_the_probe_output(
+    good: Good, monkeypatch: pytest.MonkeyPatch, line: str, version: tuple[int, int, int] | None
+) -> None:
+    class Done:
+        returncode = 0
+        stdout = f"{line}\n"
+
+    monkeypatch.setattr(checks_server, "probe", lambda _binary, _args, _env: Done())
+
+    assert checks_server.python3_version({}) == version

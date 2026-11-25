@@ -97,7 +97,7 @@ def _field(data: object, *path: str) -> object:
 
 def _watched(profile: Profile) -> Fields:
     fields: Fields = [("model", ("model",))]
-    for role in (*AGENT_ROLES, "title"):
+    for role in (*AGENT_ROLES, "project-manager", "title"):
         fields.append((f"agents.{role}.model", ("agents", role, "model")))
     fields.append(("plugins.0.options.keyEnv", ("plugins", "0", "options", "keyEnv")))
     if profile.preset == "litellm":

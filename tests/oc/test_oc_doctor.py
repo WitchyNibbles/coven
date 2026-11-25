@@ -30,7 +30,7 @@ def test_a_good_profile_passes_every_check_in_order(good: Good):
     reader = Reader()
     done = run_doctor(good.layout, good.cwd, read=reader)
     assert [name for name, _ in done] == NAMES
-    assert [outcome.status for _, outcome in done] == ["ok"] * 10
+    assert [outcome.status for _, outcome in done] == ["ok"] * len(NAMES)
     assert exit_code(done) == 0
     assert len(reader.calls) == 1
 
@@ -96,15 +96,23 @@ def test_an_edited_model_fails_config(good: Good):
     assert found["config"].fix == "re-run coven opencode setup"
 
 
+def test_an_edited_project_manager_model_fails_config_naming_it(good: Good):
+    edit_config(good, lambda data: data["agents"]["project-manager"].update(model="litellm/other"))
+    found = results_by_name(good)["config"]
+    assert found.status == "fail"
+    assert "agents.project-manager.model" in found.detail
+
+
 @pytest.mark.parametrize(
     "change",
     [
         lambda data: data["agents"]["reviewer"].update(model="litellm/other"),
+        lambda data: data["agents"]["project-manager"].update(model="litellm/other"),
         lambda data: data["providers"]["litellm"]["settings"].update(baseURL="http://x/v1"),
         lambda data: data["providers"]["litellm"].update(env=["OTHER"]),
         lambda data: data.update(model="litellm/"),
     ],
-    ids=["agent-model", "base-url", "key-env", "empty-id"],
+    ids=["agent-model", "project-manager-model", "base-url", "key-env", "empty-id"],
 )
 def test_other_edits_fail_config(good: Good, change: Change):
     edit_config(good, change)
@@ -240,7 +248,7 @@ def test_a_check_that_raises_fails_alone(good: Good, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("coven.opencode.checks_runtime.read_paths", boom)
     done = dict(run_doctor(good.layout, good.cwd, read=Reader()))
     assert done["paths"] == Outcome("fail", "RuntimeError: kaboom")
-    assert [done[name].status for name in NAMES if name != "paths"] == ["ok"] * 9
+    assert [done[name].status for name in NAMES if name != "paths"] == ["ok"] * (len(NAMES) - 1)
 
 
 def test_render_prints_one_line_per_check_with_the_fix_when_not_ok():
