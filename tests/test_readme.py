@@ -309,9 +309,9 @@ def test_known_gaps_lists_what_adopt_does_not_cover() -> None:
         assert needle in body, needle
 
 
-def test_the_changelog_lists_the_guard_work_as_unreleased() -> None:
+def test_the_changelog_lists_the_guard_work_in_0_2_0() -> None:
     text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    entry = text.split("## Unreleased")[1].split("\n## ")[0]
+    entry = text.split("## 0.2.0 ")[1].split("\n## ")[0]
     for needle in (
         "production guard",
         "coven guard check",
@@ -372,7 +372,7 @@ def test_the_readme_requirements_name_node_npm_and_git_for_opencode() -> None:
 
 def test_the_changelog_counts_the_superpowers_skills_setup_copies() -> None:
     text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    entry = flat(text.split("## Unreleased")[1].split("\n## ")[0])
+    entry = flat(text.split("## 0.2.0 ")[1].split("\n## ")[0])
     assert "eight superpowers skills" in entry
 
 
