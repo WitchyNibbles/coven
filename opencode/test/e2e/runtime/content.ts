@@ -1,18 +1,23 @@
 /** The content checks: deny-secrets through the plugin and through the config, and the SDD smoke. */
 import { cp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { startFakeModel } from "../../harness/fake-model.ts";
+import type { RecordedRequest } from "../../harness/fake-model.ts";
+import { withServer } from "../../harness/server.ts";
+import type { Api } from "../../harness/server.ts";
 import {
   awaitResults,
   exportedMessages,
   SESSION_ID,
 } from "../../harness/history.ts";
 import type { ToolRun } from "../../harness/history.ts";
-import { configPath, pointProviderAt } from "./profile.ts";
+import { allowShell, configPath, pointProviderAt } from "./profile.ts";
 import type { RuntimeWorld } from "./profile.ts";
 import {
   decideRuntime,
+  KEY_VALUE,
   reportOf,
   ROLES,
   SECRET_VALUE,
@@ -198,4 +203,110 @@ export async function sddProblem(
   return ROLES.map((role) => reportProblem(texts, role, awaitAt)).find(
     (problem) => problem !== undefined,
   );
+}
+
+interface Seen {
+  line: string;
+  requests: readonly RecordedRequest[];
+}
+
+const PRESENCE_LINE = /KEY=\[(set)?\] PW=\[(set)?\]/;
+
+/** The presence line a shell call printed, or the reason there is none. */
+function presenceOf(session: Session): string {
+  const run = session.history.tools.find((tool) => tool.name === "shell");
+  if (run === undefined) {
+    return `no shell call ran; the reply was: ${session.history.finalText.slice(0, 120)}`;
+  }
+  return (
+    PRESENCE_LINE.exec(run.output)?.[0] ??
+    `no presence line in ${run.status} ${run.output.slice(0, 120)}`
+  );
+}
+
+/** What is wrong with the provider's authentication in `requests`, or undefined when each had the key. */
+function authProblem(requests: readonly RecordedRequest[]): string | undefined {
+  const expected = `Bearer ${KEY_VALUE}`;
+  const wrong = requests.filter(
+    (request) => request.authorization !== expected,
+  );
+  // Two requests at least: one before the shell call and one after it.
+  if (requests.length < 2 || wrong.length > 0) {
+    return `${wrong.length} of ${requests.length} model requests lacked the provider key`;
+  }
+  return undefined;
+}
+
+const SERVED_TIMEOUT_MS = 60_000;
+const SERVED_POLL_MS = 250;
+const SERVED_DONE = "SHELLENV DONE";
+
+/** Reads the session's messages until the script's last words are in them, or the time is up. */
+async function servedMessages(api: Api, id: string): Promise<string> {
+  const limit = Date.now() + SERVED_TIMEOUT_MS;
+  for (;;) {
+    const text = JSON.stringify(await api.get(`/api/session/${id}/message`));
+    if (text.includes(SERVED_DONE) || Date.now() > limit) {
+      return text;
+    }
+    await delay(SERVED_POLL_MS);
+  }
+}
+
+/** The shell's presence line and the model requests of a session run in a served OpenCode. */
+async function servedSession(world: RuntimeWorld): Promise<Seen> {
+  const before = world.model.requests().length;
+  const options = { cwd: world.work, env: world.env };
+  const messages = await withServer(options, async (api) => {
+    const created = await api.post("/api/session", {
+      location: { directory: world.work },
+      title: "shell-env",
+    });
+    const id = SESSION_ID.exec(JSON.stringify(created))?.[0];
+    if (id === undefined) {
+      throw new Error("the server returned no session id");
+    }
+    await api.post(`/api/session/${id}/prompt`, { text: "SHELLENV" });
+    return servedMessages(api, id);
+  });
+  return {
+    line: PRESENCE_LINE.exec(messages)?.[0] ?? "(no presence line)",
+    requests: world.model.requests().slice(before),
+  };
+}
+
+/** The shell's presence line and the model requests of a `run --standalone` session. */
+async function standaloneSession(world: RuntimeWorld): Promise<Seen> {
+  const session = await runPrompt(world, "SHELLENV");
+  return { line: presenceOf(session), requests: session.requests };
+}
+
+/**
+ * A shell command the model runs must see neither the provider key nor the server password,
+ * in a standalone run and in a served session, while the provider still gets the key.
+ */
+export async function shellEnvProblem(
+  world: RuntimeWorld,
+): Promise<string | undefined> {
+  const config = await readFile(configPath(world.profile), "utf8");
+  try {
+    await allowShell(world.profile);
+    const problems: string[] = [];
+    for (const [name, run] of [
+      ["standalone", standaloneSession],
+      ["served", servedSession],
+    ] as const) {
+      const seen = await run(world);
+      const problem =
+        seen.line === "KEY=[] PW=[]"
+          ? authProblem(seen.requests)
+          : `the shell saw: ${seen.line}`;
+      if (problem !== undefined) {
+        problems.push(`${name}: ${problem}`);
+      }
+    }
+    return problems.length === 0 ? undefined : problems.join("; ");
+  } finally {
+    await writeFile(configPath(world.profile), config);
+  }
 }

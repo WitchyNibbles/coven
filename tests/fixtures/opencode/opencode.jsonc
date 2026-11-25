@@ -23,6 +23,7 @@
       "package": "<P>/plugin/coven",
       "options": {
         "covenRoot": "<COVEN_ROOT>",
+        "keyEnv": "OPENCODE_API_KEY",
         "toolChoiceAuto": [],
         "guardTimeoutMs": 5000
       }

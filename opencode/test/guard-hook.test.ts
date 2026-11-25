@@ -7,7 +7,7 @@ import { exits, never } from "./guard-fake.ts";
 import type { Behaviour } from "./guard-fake.ts";
 import { DIRECTORY, LEAD, bootCoven } from "./plugin-fixture.ts";
 
-const COVEN = { covenRoot: "/c", toolChoiceAuto: ["litellm"] };
+const COVEN = { covenRoot: "/c", keyEnv: "K", toolChoiceAuto: ["litellm"] };
 
 function executeBefore(tool: string, input: unknown): ExecuteBeforeEvent {
   return {

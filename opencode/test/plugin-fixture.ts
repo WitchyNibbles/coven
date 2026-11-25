@@ -1,7 +1,11 @@
 import { setImmediate as tick } from "node:timers/promises";
 
 import { covenSetup } from "../src/coven.ts";
-import type { CovenContext, ExecuteBeforeEvent } from "../src/context.ts";
+import type {
+  CovenContext,
+  ExecuteBeforeEvent,
+  ShellCreateEvent,
+} from "../src/context.ts";
 import type {
   ContextHookEvent,
   ContextMessage,
@@ -95,6 +99,11 @@ export interface ToolHook {
   disposed: number;
 }
 
+export interface ShellHook {
+  name: string;
+  callback: (event: ShellCreateEvent) => Promise<void> | void;
+}
+
 interface Setup {
   clock?: { now: number };
   options?: Readonly<Record<string, unknown>>;
@@ -121,6 +130,7 @@ function makeWorld({
   const tools: ToolDefinition[] = [];
   const registered: Registered[] = [];
   const toolHooks: ToolHook[] = [];
+  const shellHooks: ShellHook[] = [];
   const fake = fakeSpawn(guard);
   const ctx: CovenContext = {
     ...(options === undefined ? {} : { options }),
@@ -158,6 +168,12 @@ function makeWorld({
         return Promise.resolve({});
       }) as CovenContext["session"]["hook"],
     },
+    shell: {
+      hook: (name, callback) => {
+        shellHooks.push({ name, callback });
+        return Promise.resolve({});
+      },
+    },
     tool: {
       transform: (callback) => {
         callback({ add: (tool) => tools.push(tool) });
@@ -192,6 +208,7 @@ function makeWorld({
     tools,
     registered,
     toolHooks,
+    shellHooks,
     spawn: fake.spawn,
     spawned: fake.calls,
   };

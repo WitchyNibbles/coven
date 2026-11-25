@@ -16,6 +16,6 @@ export default {
     covenSetup(
       ctx,
       { now: () => Date.now(), log: (line) => console.error(line) },
-      { covenRoot: COVEN_ROOT },
+      { covenRoot: COVEN_ROOT, keyEnv: "COVEN_E2E_KEY" },
     ),
 };

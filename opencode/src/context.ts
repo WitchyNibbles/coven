@@ -24,6 +24,15 @@ export interface ExecuteBeforeEvent {
   readonly input: unknown;
 }
 
+/**
+ * 2.3.2 `shell.hook("create.before")`: runs before each shell command starts and carries no
+ * session id (the event also has `command`, `cwd`, `timeout` and `shell`; the plugin reads none
+ * of them). Edits to `env` reach the command.
+ */
+export interface ShellCreateEvent {
+  env: Record<string, string>;
+}
+
 /** What `tool.hook` hands back: `dispose` removes the hook. */
 export interface Registration {
   dispose(): void;
@@ -31,7 +40,7 @@ export interface Registration {
 
 /**
  * The join's context plus what the coven plugin adds: its options, the session directory,
- * `http.request`, `execute.before` and `tool.list`.
+ * `http.request`, `execute.before`, `shell.create.before` and `tool.list`.
  */
 export interface CovenContext extends PluginContext {
   readonly options?: Readonly<Record<string, unknown>>;
@@ -42,6 +51,12 @@ export interface CovenContext extends PluginContext {
       name: "http.request",
       callback: (event: HttpRequestEvent) => Promise<void> | void,
       options?: { providerID?: string },
+    ): Promise<unknown>;
+  };
+  shell: {
+    hook(
+      name: "create.before",
+      callback: (event: ShellCreateEvent) => Promise<void> | void,
     ): Promise<unknown>;
   };
   tool: PluginContext["tool"] & {

@@ -7,7 +7,14 @@ import { startFakeModel } from "../../harness/fake-model.ts";
 import type { FakeModel } from "../../harness/fake-model.ts";
 import { parseConfig, profileProblem } from "../../harness/guards.ts";
 import { cleanEnv } from "../../harness/process.ts";
-import { decideRuntime, SECRET_VALUE, SECRETS_FILE } from "./content-script.ts";
+import {
+  decideRuntime,
+  KEY_ENV,
+  KEY_VALUE,
+  PASSWORD_ENV,
+  SECRET_VALUE,
+  SECRETS_FILE,
+} from "./content-script.ts";
 
 export interface RuntimeWorld {
   home: string;
@@ -72,6 +79,24 @@ export async function setToolChoiceAuto(
   );
 }
 
+/**
+ * Appends an allow for every shell command, after the profile's own ask, so a non-interactive
+ * run executes the command instead of refusing it. Only the check that needs a real shell run
+ * uses it, and it puts the config back.
+ */
+export async function allowShell(profile: string): Promise<void> {
+  await editConfig<{ permissions: Record<string, string>[] }>(
+    profile,
+    (config) => {
+      config.permissions.push({
+        action: "shell",
+        resource: "*",
+        effect: "allow",
+      });
+    },
+  );
+}
+
 /** Points the generated config's provider at a fake model on loopback port `port`. */
 export async function pointProviderAt(
   profile: string,
@@ -99,7 +124,9 @@ export async function makeWorld(
     ...cleanEnv(home),
     COVEN_OPENCODE_HOME: profile,
     COVEN_OPENCODE_BIN: binary,
-    COVEN_E2E_KEY: "offline",
+    [KEY_ENV]: KEY_VALUE,
+    // A dummy value: coven passes it through, and the shell check must find it scrubbed.
+    [PASSWORD_ENV]: "password-for-the-e2e",
     OPENCODE_DISABLE_MODELS_FETCH: "1",
   };
   const model = await startFakeModel({
@@ -117,7 +144,7 @@ export async function makeWorld(
         "--base-url",
         `http://127.0.0.1:${model.port}/v1`,
         "--key-env",
-        "COVEN_E2E_KEY",
+        KEY_ENV,
         "--model",
         "lead=fake",
       ],

@@ -9,7 +9,10 @@ OpenCode, its config and coven's plugin, apart from any OpenCode you already use
   `<subagent>` messages; the tool returns states;
 - the tool `coven_ping`, which reports the plugin's name, version and root. `coven opencode doctor`
   and the end-to-end run use it to prove the plugin loaded;
-- a `tool_choice` hook for gateways (see below).
+- a `tool_choice` hook for gateways (see below);
+- a `shell` hook that removes the profile's key variable (the plugin option `keyEnv`) and
+  `OPENCODE_SERVER_PASSWORD` from the environment of every shell command the model runs; OpenCode
+  itself keeps both.
 
 Setup also copies coven's skills, role agents, commands and routing (`opencode/content/`, generated
 from the Claude Code content by `python -m coven.opencode.content`) and the deny-secrets guard,
