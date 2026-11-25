@@ -12,9 +12,10 @@ export interface SessionLike {
   id: string;
   /** Missing or null for a session with no parent. */
   parentID?: string | null;
-  directory?: string;
-  /** `{coven: {role, code?}}` once coven has marked the session; null or missing before that. */
-  metadata?: Record<string, unknown> | null;
+  /** Where the session works (2.3.2 has no top-level `directory`). */
+  location?: { directory: string; workspaceID?: string };
+  /** `{coven: {role, code?}}` once coven has marked the session; missing before that. */
+  metadata?: Record<string, unknown>;
 }
 
 /** What `ctx.session.create` takes (checked live in Task 0, step 6). */
@@ -27,12 +28,32 @@ export interface SessionCreateInput {
   permissions?: readonly PermissionRule[];
 }
 
-/** What `ctx.session.update` changes (`PATCH /api/session/{id}`). */
+/** The body of `ctx.session.prompt` (2.3.2, read from the compiled binary). */
+export interface SessionPromptInput {
+  sessionID: string;
+  id?: string;
+  text: string;
+  files?: readonly unknown[];
+  agents?: readonly unknown[];
+  skills?: readonly unknown[];
+  metadata?: Record<string, unknown>;
+  delivery?: "queue" | "steer";
+  resume?: boolean;
+}
+
+/** What `ctx.session.update` changes (`PATCH /api/session/{id}`); it resolves to nothing (204). */
 export interface SessionUpdateInput {
   sessionID: string;
+  title?: string;
   metadata?: Record<string, unknown>;
   permissions?: readonly PermissionRule[];
   archived?: boolean;
+}
+
+/** One page of `ctx.session.list`: follow `cursor.next` until there is none. */
+export interface SessionPage {
+  data: SessionLike[];
+  cursor: { previous?: string; next?: string };
 }
 
 /**
@@ -48,25 +69,23 @@ export interface SessionApi {
     directory?: string;
     search?: string;
     cursor?: string;
-  }): Promise<{ items: readonly SessionLike[]; cursor?: string }>;
-  prompt(input: {
-    sessionID: string;
-    text: string;
-    delivery?: "queue" | "steer";
-    resume?: boolean;
-  }): Promise<unknown>;
+  }): Promise<SessionPage>;
+  prompt(input: SessionPromptInput): Promise<unknown>;
   interrupt(input: { sessionID: string }): Promise<unknown>;
-  update(input: SessionUpdateInput): Promise<unknown>;
+  update(input: SessionUpdateInput): Promise<void>;
 }
 
 /**
- * 2.3.2 `permission.hook("evaluate")`: the plugin may change `effect` and `reason` before the
+ * 2.3.2 `permission.hook("evaluate")`: the plugin may change `effect` and `message` before the
  * session's tool call goes on.
  */
 export interface EvaluateEvent {
+  /** Unconfirmed: Task 10 checks it in the e2e. */
   readonly sessionID: string;
+  readonly action: string;
+  readonly resources: string[];
   effect: PermissionRule["effect"];
-  reason?: string;
+  message?: string;
 }
 
 /** 2.3.2 `promise/session.ts` `http.request`, with `Model.Ref` from `schema/src/model.ts`. */

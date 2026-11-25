@@ -7,17 +7,19 @@ import type { RoleResolver } from "../src/pm/asks.ts";
 import { resolveRole } from "../src/pm/role.ts";
 import type { RoleInfo } from "../src/pm/role.ts";
 
-const REASON =
+const MESSAGE =
   "a PM may not wait on a prompt: send it to the GM as a QUESTION or PROD-STEP";
 
 function event(
   effect: EvaluateEvent["effect"],
-  reason?: string,
+  message?: string,
 ): EvaluateEvent {
   return {
     sessionID: "ses_1",
+    action: "bash",
+    resources: ["*"],
     effect,
-    ...(reason === undefined ? {} : { reason }),
+    ...(message === undefined ? {} : { message }),
   };
 }
 
@@ -36,14 +38,14 @@ await test("ask becomes deny for a pm child", async () => {
   const seen = event("ask");
   await askToDeny((id) => resolveRole(id, get))(seen);
   assert.equal(seen.effect, "deny");
-  assert.equal(seen.reason, REASON);
+  assert.equal(seen.message, MESSAGE);
 });
 
 await test("ask becomes deny for a pm session itself", async () => {
   const seen = event("ask");
   await askToDeny(asks({ role: "pm", code: "proj" }))(seen);
   assert.equal(seen.effect, "deny");
-  assert.equal(seen.reason, REASON);
+  assert.equal(seen.message, MESSAGE);
 });
 
 await test("ask becomes deny when the lookup fails", async () => {
@@ -52,21 +54,21 @@ await test("ask becomes deny when the lookup fails", async () => {
   const seen = event("ask");
   await askToDeny((id) => resolveRole(id, failing))(seen);
   assert.equal(seen.effect, "deny");
-  assert.equal(seen.reason, REASON);
+  assert.equal(seen.message, MESSAGE);
 });
 
 await test("ask becomes deny when the resolver itself throws", async () => {
   const seen = event("ask");
   await askToDeny(() => Promise.reject(new Error("boom")))(seen);
   assert.equal(seen.effect, "deny");
-  assert.equal(seen.reason, REASON);
+  assert.equal(seen.message, MESSAGE);
 });
 
 await test("ask stays ask for the gm", async () => {
   const seen = event("ask");
   await askToDeny(asks({ role: "gm" }))(seen);
   assert.equal(seen.effect, "ask");
-  assert.equal(seen.reason, undefined);
+  assert.equal(seen.message, undefined);
 });
 
 await test("ask stays ask for a former gm and for a session with no role", async () => {
@@ -81,14 +83,14 @@ await test("allow stays allow", async () => {
   const seen = event("allow");
   await askToDeny(asks({ role: "pm" }))(seen);
   assert.equal(seen.effect, "allow");
-  assert.equal(seen.reason, undefined);
+  assert.equal(seen.message, undefined);
 });
 
 await test("deny stays deny with its own reason", async () => {
   const seen = event("deny", "secrets file");
   await askToDeny(asks({ role: "pm" }))(seen);
   assert.equal(seen.effect, "deny");
-  assert.equal(seen.reason, "secrets file");
+  assert.equal(seen.message, "secrets file");
 });
 
 await test("an allow or deny does not look the role up", async () => {

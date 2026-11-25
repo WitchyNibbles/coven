@@ -206,15 +206,18 @@ function world(sessions: Record<string, SessionLike | Error> = {}) {
 
 const PM_SESSION: SessionLike = {
   id: "ses_pm",
-  directory: "/w",
+  location: { directory: "/w" },
   metadata: { coven: { role: "pm", code: "proj" } },
 };
 const GM_SESSION: SessionLike = {
   id: "ses_gm",
-  directory: "/w",
+  location: { directory: "/w" },
   metadata: { coven: { role: "gm" } },
 };
-const PLAIN_SESSION: SessionLike = { id: "ses_plain", directory: "/w" };
+const PLAIN_SESSION: SessionLike = {
+  id: "ses_plain",
+  location: { directory: "/w" },
+};
 
 await test("createBefore sets ROLE_ENV for a pm shell and scrubs first", async () => {
   const w = world({ ses_pm: PM_SESSION });

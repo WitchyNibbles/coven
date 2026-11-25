@@ -4,7 +4,7 @@ import type { RoleInfo } from "./role.ts";
 /** The role of a session, as `resolveRole` gives it with the plugin's `get` bound in. */
 export type RoleResolver = (sessionID: string) => Promise<RoleInfo | undefined>;
 
-const REASON =
+const MESSAGE =
   "a PM may not wait on a prompt: send it to the GM as a QUESTION or PROD-STEP";
 
 /**
@@ -32,7 +32,7 @@ export function askToDeny(
   return async (event) => {
     if (event.effect === "ask" && (await inPmTree(resolve, event.sessionID))) {
       event.effect = "deny";
-      event.reason = REASON;
+      event.message = MESSAGE;
     }
   };
 }

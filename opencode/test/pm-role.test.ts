@@ -8,7 +8,7 @@ import { ROLE_ENV, isRoot, resolveRole } from "../src/pm/role.ts";
 type Sessions = Record<string, SessionLike | Error | undefined>;
 
 function session(id: string, extra: Partial<SessionLike> = {}): SessionLike {
-  return { id, directory: "/work", ...extra };
+  return { id, location: { directory: "/work" }, ...extra };
 }
 
 function coven(role: string, code?: string): Record<string, unknown> {
@@ -150,7 +150,9 @@ await test("null or non-object metadata is no role of its own", async () => {
     });
   }
   const { get } = lookup({
-    a: session("a", { metadata: null }),
+    a: session("a", {
+      metadata: null as unknown as Record<string, unknown>,
+    }),
   });
   assert.equal(await resolveRole("a", get), undefined);
 });
