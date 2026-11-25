@@ -383,6 +383,22 @@ def test_manager_reads_the_turn_end_notice() -> None:
     assert "`status unavailable: <reason>`" in flat
 
 
+def test_manager_counts_the_pm_cap_by_the_lines_the_list_shows() -> None:
+    flat = " ".join(MANAGER.read_text().split())
+    assert "`pm_cap` counts the lines `coven_pm_list` shows" in flat
+    assert "`archive: true` is not shown and does not count" in flat
+
+
+def test_manager_says_a_stop_with_archive_hides_and_does_not_archive_in_opencode() -> None:
+    flat = " ".join(MANAGER.read_text().split())
+    assert "hides the PM from `coven_pm_list`" in flat
+    assert "does not archive the session in OpenCode" in flat
+    assert "`coven_pm_list` with `archived: true` also shows the hidden PMs" in flat
+    assert "`archived in OpenCode`" in flat
+    assert "must be unarchived in OpenCode before a resume" in flat
+    assert "unarchives the PM" not in flat
+
+
 def test_project_manager_agent_is_primary_with_its_own_description() -> None:
     assert frontmatter(PM_AGENT)[1:] == ["mode: primary"]
     (written,) = frontmatter(PM_AGENT)[:1]

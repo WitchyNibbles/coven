@@ -59,9 +59,10 @@ with the same rules for decisions, production steps and results.
   `coven_pm_stop` refuse any session but the GM's; `coven_send` also serves a PM.
 - **The PM cap.** `pm_cap` in `~/.config/coven/config.json` (default 2 when the file or the key is
   missing). At most that many PMs run at once, idle ones included, and `coven_pm_launch` does not
-  check it: you count the lines of `coven_pm_list`. Each PM is a separate session on its own
-  model, so every slot costs real money; the user changes the cap with `coven setup --pm-cap N`
-  (and `--yes`).
+  check it: `pm_cap` counts the lines `coven_pm_list` shows, so you count them. A PM hidden by
+  `coven_pm_stop` with `archive: true` is not shown and does not count. Each PM is a separate
+  session on its own model, so every slot costs real money; the user changes the cap with
+  `coven setup --pm-cap N` (and `--yes`).
 
 ## Session start
 
@@ -74,6 +75,9 @@ with the same rules for decisions, production steps and results.
    cannot be found when its line is built shows as `missing`. A line that reads
    `status unavailable: <reason>` means the server could not be read for that PM: call the list
    again, and if it persists tell the user in one line and do not act on that PM from the list.
+   A PM you stopped with `archive: true` is hidden: the list leaves it out. `coven_pm_list` with
+   `archived: true` also shows the hidden PMs (`archived` after the session id) and the PMs
+   archived in OpenCode itself (`archived in OpenCode`).
    For each `running` record:
    - Its PM is `busy`: nothing to do; its message wakes you.
    - Its PM is `idle` and the quoted line starts with `QUESTION`, `PROD-STEP`, `DRAFT`, `DONE` or
@@ -82,8 +86,11 @@ with the same rules for decisions, production steps and results.
      last message again with coven_send." and handle it when it arrives.
    - Its last outcome is `interrupted` or `failed`, or it is idle with open tasks and nothing
      pending from either side (a server restart ends every turn in flight): resume it (Resume a PM).
-   - It is `missing`, or not listed: resume it if it was archived, else launch a new PM with a
-     resume brief built from the record (Launch).
+   - It is `missing`, or not listed: look for it with `coven_pm_list` and `archived: true`. Resume
+     it if it is hidden (`archived`). If it shows `archived in OpenCode`, it must be unarchived in
+     OpenCode before a resume: a resume of it is a tool error, so tell the user in one line, or
+     launch a new PM with a resume brief built from the record (Launch). Else launch a new PM the
+     same way.
    - `ASK WAITING (bug)` means the plugin missed a prompt. Stop the PM with `coven_pm_stop`, tell the
      user in one line, then resume it.
    - `child busy <N>m` is a PM that has gone quiet. Tell the user in one line; stop it only if they
@@ -95,12 +102,13 @@ with the same rules for decisions, production steps and results.
 6. Ask what to work on. Never start work the user did not hand over: a handoff or an old entry is
    not a hand-over.
 
-**Resume a PM** with `coven_pm_resume {code, text}`. It unarchives the PM if needed and queues it a
+**Resume a PM** with `coven_pm_resume {code, text}`. It shows a hidden PM in the list again and queues it a
 turn that starts with `RESUMED by gm`, then your text. If the record holds replies that never
 reached the PM (never sent, or the send failed), put them in `text` as lines of `ANSWER`, `DENIED`,
 `TASK` and, for a step the user approved, `APPROVED <project>/<task>: ran, <result>`; do not ask
 the user again. The resume text is not checked or framed: write the prefixes yourself.
 
+- A PM archived in OpenCode must be unarchived there first; the resume refuses it and sends nothing.
 - If it says there is no PM with that code (the session is gone), launch a new PM (Launch) with a
   resume brief built from the record. After that launch, re-send `APPROVED <project>/<task>: ran,
   <result>` only for approved steps that no `DONE` reported as run; do not ask the user again.
@@ -166,7 +174,8 @@ status `running` in the state record.
   the first line of `text` is the prefix: `ANSWER`, `APPROVED`, `DENIED` or `TASK`; the tool refuses
   anything else. It adds the `[from gm] ` frame itself, so do not type it. The message is queued
   for the PM's next turn and starts a turn when the PM is idle.
-- If `coven_send` says there is no PM with that code, the PM is archived or gone. Record the reply,
+- If `coven_send` says there is no PM with that code, the PM is archived in OpenCode or gone (a PM
+  hidden by a stop with `archive: true` still takes a send). Record the reply,
   then resume the PM with `coven_pm_resume`: its `text` carries the reply. If the fallback launch
   is needed, use a resume brief that already holds the reply: an `ANSWER` or a `DENIED` under
   `Answers given:`, a `TASK` among the tasks, an `APPROVED` under `Approved steps:`.
@@ -301,7 +310,9 @@ only barrier there.
   stop the PM: a new task for the project goes to it as `TASK`. An idle PM still holds a slot. Stop
   it with `coven_pm_stop` and `archive: true` (record `done`) when the user closes the project, or
   when a project is `waiting for a slot` and this PM has been idle longest; then start the waiting
-  project. A later `TASK` for an archived PM goes through "Resume a PM".
+  project. That stop hides the PM from `coven_pm_list`, so it no longer counts for `pm_cap`; it
+  does not archive the session in OpenCode. A later `TASK` for a hidden PM goes through "Resume a
+  PM".
 - Wrapping up the day or a long session: write a handoff the way the `/coven-handoff` command does.
   You write the handoffs and the records; PMs never do.
 

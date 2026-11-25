@@ -12,15 +12,24 @@ import { gmCall, pmId, record } from "./run.ts";
 import type { Run } from "./run.ts";
 import { createSession, infoOf, sleep } from "./sessions.ts";
 
+/** The names and tags `manage.ts` reads as a session's own not-found (copied, not imported). */
+const SESSION_NOT_FOUND = new Set([
+  "NotFoundError",
+  "Session.NotFoundError",
+  "SessionNotFoundError",
+]);
+
 /** Whether a `session.get` error with this shape counts as "gone" by the rule in `manage.ts` (copied, not imported). */
 function looksMissing(shape: Record<string, unknown>): boolean {
   const status = shape["status"] ?? shape["statusCode"];
   if (typeof status === "number") {
     return status === 404;
   }
+  const labels = [shape["name"], shape["tag"]];
   return (
-    shape["name"] === "NotFoundError" ||
-    /^session not found$/i.test(String(shape["message"]))
+    labels.some(
+      (label) => typeof label === "string" && SESSION_NOT_FOUND.has(label),
+    ) || /^session not found$/i.test(String(shape["message"]))
   );
 }
 

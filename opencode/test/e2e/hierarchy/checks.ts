@@ -16,6 +16,7 @@ import {
 } from "./copies.ts";
 import * as flow from "./flow.ts";
 import * as guards from "./guards.ts";
+import * as hidden from "./hidden.ts";
 import * as manage from "./manage.ts";
 import * as records from "./records.ts";
 import * as restart from "./restart.ts";
@@ -129,12 +130,12 @@ function steps(): Step[] {
       manage.stopResumeProblem,
     ],
     [
-      "archive: coven_pm_stop with archive true leaves the session archived on the server",
-      manage.archiveStopProblem,
+      "archive: coven_pm_stop with archive true hides the PM by the coven.archived flag, archived true lists it, and the session is not archived in OpenCode",
+      hidden.archiveStopProblem,
     ],
     [
-      "archive: an archived PM is not listed, and coven_pm_resume unarchives it and sends RESUMED by gm",
-      manage.archiveResumeProblem,
+      "archive: coven_pm_resume of a hidden PM clears the flag, lists it again and sends RESUMED by gm",
+      hidden.archiveResumeProblem,
     ],
     ["record: session update merges or replaces metadata", records.mergeRecord],
     [
@@ -180,7 +181,7 @@ const NOT_DRIVEN: [string, string][] = [
   ],
   [
     "list: coven_pm_list says missing for a PM whose session is gone",
-    "a deleted session leaves the list, so the get that fails with not-found can only happen between the list and the get",
+    "a deleted session leaves the list, so the get that fails with not-found can only happen between the list and the get; the pm-api suite runs the plugin's list code over a deleted PM instead",
   ],
 ];
 
