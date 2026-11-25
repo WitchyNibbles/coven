@@ -52,11 +52,29 @@ function head(message: string): string {
 
 const NOT_FOUND_TEXT = /^session not found$/i;
 
+const NOT_FOUND_SUFFIX = "NotFoundError";
+
+/**
+ * Whether the error's `name` or `_tag` is a session's not-found: exactly `NotFoundError`, or one
+ * ending in it that is a session's, by the `Session.` prefix (2.3.2's plugin side throws
+ * `Session.NotFoundError`) or by the `sessionID` the error carries (its HTTP tag is
+ * `SessionNotFoundError`). `Permission.NotFoundError` and the like are another outage.
+ */
+function namesNotFound(error: Record<string, unknown>): boolean {
+  return [error["name"], error["_tag"]].some(
+    (label) =>
+      label === NOT_FOUND_SUFFIX ||
+      (typeof label === "string" &&
+        label.endsWith(NOT_FOUND_SUFFIX) &&
+        (label.startsWith("Session.") || "sessionID" in error)),
+  );
+}
+
 /**
  * Whether a `get` error says the session is gone. A numeric `status` or `statusCode` decides
- * alone (404 only). With none, only the error name `NotFoundError` or the exact text "session
- * not found" count; any other error, a failed lookup of a model or host included, is an outage
- * the GM must see.
+ * alone (404 only). With none, only a session's not-found name or tag (`namesNotFound`) or the
+ * exact text "session not found" count; any other error, a failed lookup of a model or host
+ * included, is an outage the GM must see.
  */
 function isNotFound(error: unknown): boolean {
   if (!isPlainObject(error)) {
@@ -66,10 +84,7 @@ function isNotFound(error: unknown): boolean {
   if (typeof status === "number") {
     return status === 404;
   }
-  return (
-    error["name"] === "NotFoundError" ||
-    NOT_FOUND_TEXT.test(String(error["message"]))
-  );
+  return namesNotFound(error) || NOT_FOUND_TEXT.test(String(error["message"]));
 }
 
 /** What `get` says about the session, or the line to show when it cannot say. */

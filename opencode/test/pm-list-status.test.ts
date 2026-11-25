@@ -6,6 +6,7 @@ import { resolveRole } from "../src/pm/role.ts";
 import { coven } from "./pm-fake-session.ts";
 import { GM, call, gmWorld, quietStatus } from "./pm-gm-world.ts";
 import type { World } from "./pm-gm-world.ts";
+import { notFound } from "./plugin-events.ts";
 
 function list(world: World): Promise<string> {
   const tool = pmListTool({
@@ -73,6 +74,25 @@ await test("only a real not-found is missing: a status decides alone, else the e
     ],
     ["dns", new Error("getaddrinfo ENOTFOUND example.test")],
     ["other text", new Error("model not found upstream")],
+    // what 2.3.2 throws for a deleted session: name and tag, no status, no message
+    ["real", notFound("real")],
+    [
+      "http tag",
+      Object.assign(new Error("Session not found: x"), {
+        _tag: "SessionNotFoundError",
+        sessionID: "x",
+      }),
+    ],
+    [
+      "other tag",
+      Object.assign(new Error(""), { _tag: "Permission.NotFoundError" }),
+    ],
+    [
+      "other name",
+      Object.assign(new Error(""), { name: "Model.NotFoundError" }),
+    ],
+    ["not a name", Object.assign(new Error(""), { _tag: "Session.NotFound" })],
+    ["real 500", Object.assign(notFound("real 500"), { status: 500 })],
   ];
   const world = gmWorld([
     GM,
@@ -89,10 +109,19 @@ await test("only a real not-found is missing: a status decides alone, else the e
   const lines = (await list(world)).split("\n");
   const verdict = (id: string) =>
     lines.find((line) => line.includes(`  ${id}  `))?.split(`  ${id}  `)[1];
-  for (const id of ["404", "404 code", "name", "text"]) {
+  for (const id of ["404", "404 code", "name", "text", "real", "http tag"]) {
     assert.equal(verdict(id), "missing", id);
   }
-  for (const id of ["500", "500 name", "dns", "other text"]) {
+  for (const id of [
+    "500",
+    "500 name",
+    "dns",
+    "other text",
+    "other tag",
+    "other name",
+    "not a name",
+    "real 500",
+  ]) {
     assert.match(verdict(id) ?? "", /^status unavailable: /, id);
   }
 });
