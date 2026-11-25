@@ -10,12 +10,10 @@ export interface SharedState {
   messaged: Set<string>;
   /** PM sessions the GM stopped, so no notice follows. */
   stopped: Set<string>;
-  /** Project codes a `coven_pm_launch` is running for, so two calls cannot both create one. */
-  launching: Set<string>;
+  /** Keys of the tool calls running (`withInFlight`), so two calls of one kind cannot overlap. */
+  inFlight: Set<string>;
   /** Shell events a `createBefore` already took an entry for, so a second plugin copy takes none. */
   taken: WeakSet<object>;
-  /** True while a `coven_gm_claim` is running, so two claims cannot both write `gm`. */
-  claiming: boolean;
 }
 
 const KEY = Symbol.for("coven.opencode.shared");
@@ -29,9 +27,29 @@ export function sharedState(): SharedState {
     queue: new ShellQueue(),
     messaged: new Set(),
     stopped: new Set(),
-    launching: new Set(),
+    inFlight: new Set(),
     taken: new WeakSet(),
-    claiming: false,
   };
   return holder[KEY];
+}
+
+/**
+ * Runs `body` while holding `key`. A call that finds the key held throws `refusal()` and holds
+ * nothing. There is no `await` between the check and the hold, so two calls cannot both pass.
+ */
+export async function withInFlight<T>(
+  key: string,
+  refusal: () => Error,
+  body: () => Promise<T>,
+): Promise<T> {
+  const { inFlight } = sharedState();
+  if (inFlight.has(key)) {
+    throw refusal();
+  }
+  inFlight.add(key);
+  try {
+    return await body();
+  } finally {
+    inFlight.delete(key);
+  }
 }

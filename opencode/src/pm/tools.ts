@@ -1,11 +1,16 @@
 import type { SessionApi, SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
-import { isPlainObject, messageOf, show } from "../join/fields.ts";
+import {
+  isPlainObject,
+  messageOf,
+  nonEmptyString,
+  show,
+} from "../join/fields.ts";
 import { covenOf, findGm, findOtherGms, findPm } from "./find.ts";
 import { GM_PREFIXES, PM_PREFIXES, headPrefix } from "./prefixes.ts";
 import { isRoot } from "./role.ts";
 import type { Role, RoleInfo, resolveRole } from "./role.ts";
-import { sharedState } from "./state.ts";
+import { sharedState, withInFlight } from "./state.ts";
 
 export interface ToolDeps {
   session: SessionApi;
@@ -75,18 +80,12 @@ export function gmClaimTool(deps: ToolDeps): ToolDefinition {
       if (role?.role === "pm") {
         throw new ToolError("a PM cannot claim the GM role");
       }
-      // refused callers never hold the flag; no await between the check and the flag, so two
-      // simultaneous claims cannot both pass
-      const state = sharedState();
-      if (state.claiming) {
-        throw new ToolError("a claim is already running");
-      }
-      state.claiming = true;
-      try {
-        return await takeOver(deps, me, role);
-      } finally {
-        state.claiming = false;
-      }
+      // refused callers never hold the key
+      return withInFlight(
+        "claim",
+        () => new ToolError("a claim is already running"),
+        () => takeOver(deps, me, role),
+      );
     },
   };
 }
@@ -129,10 +128,8 @@ function parseSend(raw: unknown): SendInput {
   if (!isPlainObject(raw)) {
     throw new ToolError(`input must be an object, got ${show(raw)}`);
   }
-  const { to, text } = raw;
-  if (typeof text !== "string" || text.trim() === "") {
-    throw new ToolError(`text must be a non-empty string, got ${show(text)}`);
-  }
+  const text = nonEmptyString(raw, "text", ToolError);
+  const { to } = raw;
   if (to !== undefined && typeof to !== "string") {
     throw new ToolError(`to must be a project code string, got ${show(to)}`);
   }
@@ -149,28 +146,44 @@ function checkPrefix(text: string, allowed: readonly string[], who: string) {
   }
 }
 
-interface Route {
-  target: SessionLike;
-  text: string;
+/** Queues `text` into the target's next turn. */
+async function queueInto(
+  deps: ToolDeps,
+  target: SessionLike,
+  text: string,
+): Promise<void> {
+  await deps.session.prompt({
+    sessionID: target.id,
+    text,
+    delivery: "queue",
+  });
 }
 
-async function routeFromGm(deps: ToolDeps, input: SendInput): Promise<Route> {
+/** The GM's send: to the PM named by `to`. Returns what the tool says. */
+async function sendFromGm(deps: ToolDeps, input: SendInput): Promise<string> {
   checkPrefix(input.text, GM_PREFIXES, "GM");
-  if (input.to === undefined) {
+  const { to } = input;
+  if (to === undefined) {
     throw new ToolError("to is required: the code of the PM to send to");
   }
-  const target = await findPm(deps.session, input.to);
+  const target = await findPm(deps.session, to);
   if (target === undefined) {
-    throw new ToolError(`no PM with code "${input.to}"`);
+    throw new ToolError(`no PM with code "${to}"`);
   }
-  return { target, text: `[from gm] ${input.text}` };
+  await queueInto(deps, target, `[from gm] ${input.text}`);
+  return `sent to pm-${to}`;
 }
 
-async function routeFromPm(
+/**
+ * A PM's send: to the GM. The PM is marked as having messaged only once the message is queued,
+ * so a failed send leaves no mark to mute the turn-end notice.
+ */
+async function sendFromPm(
   deps: ToolDeps,
   input: SendInput,
+  sessionID: string,
   code: string | undefined,
-): Promise<Route> {
+): Promise<string> {
   checkPrefix(input.text, PM_PREFIXES, "PM");
   if (code === undefined) {
     throw new ToolError("this PM session has no code in its metadata");
@@ -179,7 +192,9 @@ async function routeFromPm(
   if (target === undefined) {
     throw new ToolError(NO_GM);
   }
-  return { target, text: `[from pm-${code}] ${input.text}` };
+  await queueInto(deps, target, `[from pm-${code}] ${input.text}`);
+  sharedState().messaged.add(sessionID);
+  return "sent to the GM";
 }
 
 export function sendTool(deps: ToolDeps): ToolDefinition {
@@ -214,23 +229,11 @@ export function sendTool(deps: ToolDeps): ToolDefinition {
       if (!isRoot(me)) {
         throw new ToolError("only a root session can send, not a child of one");
       }
-      const route =
-        role.role === "gm"
-          ? await routeFromGm(deps, input)
-          : await routeFromPm(deps, input, role.code);
-      await deps.session.prompt({
-        sessionID: route.target.id,
-        text: route.text,
-        delivery: "queue",
-      });
-      if (role.role === "pm") {
-        sharedState().messaged.add(context.sessionID);
-      }
       return {
         content:
           role.role === "gm"
-            ? `sent to pm-${input.to ?? ""}`
-            : "sent to the GM",
+            ? await sendFromGm(deps, input)
+            : await sendFromPm(deps, input, context.sessionID, role.code),
       };
     },
   };

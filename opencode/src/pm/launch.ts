@@ -5,11 +5,16 @@ import { promisify } from "node:util";
 
 import type { PermissionRule } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
-import { isPlainObject, messageOf, show } from "../join/fields.ts";
+import {
+  isPlainObject,
+  messageOf,
+  nonEmptyString,
+  show,
+} from "../join/fields.ts";
 import { LINE_LIMIT, isValidCode } from "./code.ts";
 import { findPm } from "./find.ts";
 import { pmRules } from "./rules.ts";
-import { sharedState } from "./state.ts";
+import { withInFlight } from "./state.ts";
 import { ToolError, asToolError, requireGm } from "./tools.ts";
 import type { ToolDeps } from "./tools.ts";
 
@@ -30,16 +35,6 @@ interface LaunchInput {
   brief: string;
   extraRepos: string[];
   title?: string;
-}
-
-function text(raw: Record<string, unknown>, key: string): string {
-  const value = raw[key];
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new ToolError(
-      `${key} must be a non-empty string, got ${show(value)}`,
-    );
-  }
-  return value;
 }
 
 function extraRepos(raw: unknown): string[] {
@@ -68,13 +63,13 @@ function parseLaunch(raw: unknown): LaunchInput {
     throw new ToolError(`input must be an object, got ${show(raw)}`);
   }
   const input: LaunchInput = {
-    code: text(raw, "code"),
-    repo: text(raw, "repo"),
-    brief: text(raw, "brief"),
+    code: nonEmptyString(raw, "code", ToolError),
+    repo: nonEmptyString(raw, "repo", ToolError),
+    brief: nonEmptyString(raw, "brief", ToolError),
     extraRepos: extraRepos(raw["extraRepos"]),
   };
   if (raw["title"] !== undefined) {
-    input.title = text(raw, "title");
+    input.title = nonEmptyString(raw, "title", ToolError);
   }
   return input;
 }
@@ -224,18 +219,14 @@ export function pmLaunchTool(deps: LaunchDeps): ToolDefinition {
         // the GM check comes first: a refused caller never parses, never holds a lock
         await requireGm(deps, context.sessionID, "coven_pm_launch");
         const input = parseLaunch(raw);
-        // no await between the check and the add: two launches of one code cannot both pass
-        const { launching } = sharedState();
-        if (launching.has(input.code)) {
-          throw new ToolError(`already launching ${input.code}`);
-        }
-        launching.add(input.code);
-        try {
-          const top = await check(deps, input);
-          return { content: await launch(deps, input, top) };
-        } finally {
-          launching.delete(input.code);
-        }
+        return withInFlight(
+          `launch:${input.code}`,
+          () => new ToolError(`already launching ${input.code}`),
+          async () => {
+            const top = await check(deps, input);
+            return { content: await launch(deps, input, top) };
+          },
+        );
       }),
   };
 }

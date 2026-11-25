@@ -1,6 +1,11 @@
 import type { SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
-import { isPlainObject, messageOf, show } from "../join/fields.ts";
+import {
+  isPlainObject,
+  messageOf,
+  nonEmptyString,
+  show,
+} from "../join/fields.ts";
 import { busyIds, listAll } from "./busy.ts";
 import { findPm, pmRootsIn } from "./find.ts";
 import type { PmRoot } from "./find.ts";
@@ -149,16 +154,6 @@ function object(raw: unknown): Record<string, unknown> {
   return raw;
 }
 
-function nonEmpty(raw: Record<string, unknown>, key: string): string {
-  const value = raw[key];
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new ToolError(
-      `${key} must be a non-empty string, got ${show(value)}`,
-    );
-  }
-  return value;
-}
-
 async function livePm(deps: ToolDeps, code: string): Promise<SessionLike> {
   const found = await findPm(deps.session, code);
   if (found === undefined) {
@@ -187,8 +182,8 @@ export function pmResumeTool(deps: ToolDeps): ToolDefinition {
       asToolError(async () => {
         await requireGm(deps, context.sessionID, "coven_pm_resume");
         const input = object(raw);
-        const code = nonEmpty(input, "code");
-        const text = nonEmpty(input, "text");
+        const code = nonEmptyString(input, "code", ToolError);
+        const text = nonEmptyString(input, "text", ToolError);
         const live = await findPm(deps.session, code);
         const target = live ?? (await findPm(deps.session, code, true));
         if (target === undefined) {
@@ -236,7 +231,7 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
       asToolError(async () => {
         await requireGm(deps, context.sessionID, "coven_pm_stop");
         const input = object(raw);
-        const code = nonEmpty(input, "code");
+        const code = nonEmptyString(input, "code", ToolError);
         const archive = archiveFlag(input);
         const target = await livePm(deps, code);
         const { stopped } = sharedState();
