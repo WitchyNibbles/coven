@@ -25,6 +25,8 @@ ROLES: Final = (
     "project-manager",
 )
 AGENT_ROLES: Final = ("explorer", "implementer", "reviewer", "final-reviewer")
+# The roles whose model the generated config names under `agents`.
+MODEL_ROLES: Final = (*AGENT_ROLES, "project-manager", "title")
 OPENCODE_KEY_ENV: Final = "OPENCODE_API_KEY"
 PRESETS: Final = ("litellm", "opencode")
 FORMAT: Final = 1

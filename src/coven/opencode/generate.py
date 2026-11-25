@@ -12,7 +12,7 @@ from typing import Final
 from coven import paths
 from coven.opencode import memory, superpowers
 from coven.opencode.content import CONTENT
-from coven.opencode.profile import AGENT_ROLES, Layout, OpencodeError, Profile, save_profile
+from coven.opencode.profile import MODEL_ROLES, Layout, OpencodeError, Profile, save_profile
 
 GUARD_TIMEOUT_MS: Final = 5000
 # The provider package OpenCode loads for an OpenAI-compatible gateway.
@@ -76,8 +76,12 @@ def _secret_rules() -> list[dict[str, str]]:
     return [_rule(*rule) for rule in SECRET_RULES]
 
 
+def _skills_dir(layout: Layout) -> Path:
+    return layout.config_dir / "skills"
+
+
 def _skills_deny(layout: Layout) -> list[dict[str, str]]:
-    return [_rule("edit", f"{layout.config_dir / 'skills'}/*", "deny")]
+    return [_rule("edit", f"{_skills_dir(layout)}/*", "deny")]
 
 
 def secret_rules(layout: Layout) -> list[dict[str, str]]:
@@ -90,8 +94,7 @@ def permissions(layout: Layout, store: Path | None) -> list[dict[str, str]]:
     """The secret rules, the allows for the files the prompts and the routing point at, a deny of
     edits to the installed skills (the allow on that folder covers writes too), then the asks for
     shell and webfetch, last so no agent's own rule re-allows them."""
-    skills = layout.config_dir / "skills"
-    outside = [skills, *([store] if store else [])]
+    outside = [_skills_dir(layout), *([store] if store else [])]
     allows = [_rule("external_directory", f"{folder}/*", "allow") for folder in outside]
     asks = [_rule(*rule) for rule in ASK_RULES]
     return _secret_rules() + allows + _skills_deny(layout) + asks
@@ -108,9 +111,7 @@ def config_data(
     data: dict[str, object] = {
         "update": "disable",
         "model": model_ref("lead"),
-        "agents": {
-            role: {"model": model_ref(role)} for role in (*AGENT_ROLES, "project-manager", "title")
-        },
+        "agents": {role: {"model": model_ref(role)} for role in MODEL_ROLES},
     }
     if profile.preset == "litellm":
         data["providers"] = {"litellm": _provider(profile)}
