@@ -1497,6 +1497,15 @@ def test_the_working_folder_refusal_says_to_cd_into_a_project(
     text = call_in(world, "grep -r password", home_with_a_project)
     assert text
     assert "the working folder holds coven's profile; cd into a project folder first" in text
+    assert "`cd <dir> && ...`" in text
+    assert "a `;` or a new line does not count" in text
+
+
+def test_the_checkout_refusal_says_how_to_enter_a_worktree(world: World) -> None:
+    text = call_in(world, "touch x", world.coven)
+    assert text
+    assert "`cd .claude/worktrees/<name> && ...`" in text
+    assert "a `;` or a new line does not count" in text
 
 
 # PR A fix wave, 5: `opencode.exe` and `opencode serve` as one word name opencode.
@@ -1600,6 +1609,7 @@ def test_the_unknown_cd_refusal_says_to_write_the_folder_literally(
 # .claude/worktrees/ is judged from that worktree.
 INTO_A_WORKTREE_ALLOWED = [
     "cd .claude/worktrees/t1 && git commit -am x",
+    "cd .claude/worktrees/t1 && git add -A && git commit -am x",
     "cd .claude/worktrees/t1 && uv run pytest",
     "git -C .claude/worktrees/t1 status",
     "git -C .claude/worktrees/t1 commit -am x",
@@ -1612,6 +1622,8 @@ INTO_A_WORKTREE_ALLOWED = [
     "cd .claude/worktrees/t1 && echo ~-",
 ]
 INTO_A_WORKTREE_REFUSED = [
+    "cd .claude/worktrees/t1\ngit commit -am x",
+    "cd .claude/worktrees/t1 && :; git commit -am x",
     "cd .claude/worktrees/t1/../.. && touch x",
     "cd .claude/worktrees && rm -rf ../..",
     "touch x",
@@ -1663,12 +1675,15 @@ def test_a_line_that_does_not_stay_in_a_worktree_follows_the_checkout_rule(
     assert call_in(world, world.fill(command), world.coven)
 
 
-# Task 7b, 2-4: the first move counts only when `&&` or a newline follows it (not `;`: a `cd` that
-# fails at run time leaves the rest of the line in the working folder) and it writes no
-# file; `pushd +N`/`-N` and `$OLDPWD`, `~-`, `~N` as words are folders the guard cannot know.
+# Task 7b, 2-4: the first move counts only when every later command is joined to it by `&&` (a
+# pipe inside the `&&` list is fine); a `;` or a new line runs on when the `cd` fails at run
+# time, in the working folder. It also writes no file; `pushd +N`/`-N` and `$OLDPWD`, `~-`,
+# `~N` as words are folders the guard cannot know.
 FIRST_MOVE_ALLOWED = [
     "cd proj && grep -r x .",
-    "cd proj\ngrep -r x .",
+    "cd proj && grep -r x . && git log",
+    "cd proj && grep -r x . | head",
+    "cd proj &&\ngrep -r x .",
     "cd proj 2>/dev/null && grep -r x .",
     "pushd proj && pushd +1 && ls",
     "cd proj && echo $OLDPWD",
@@ -1676,6 +1691,12 @@ FIRST_MOVE_ALLOWED = [
     "cd proj && ls ~- ~1",
 ]
 FIRST_MOVE_REFUSED = [
+    "cd proj\ngrep -r x .",
+    "cd proj && :; grep -r x .",
+    "cd proj && :\ngrep -r x .",
+    "cd proj && grep -r x .; git log",
+    "cd proj && git log || grep -r x .",
+    "cd proj && ls & grep -r x .",
     "cd proj; grep -r x .",
     "cd proj; git log",
     "pushd proj; grep -r x .",

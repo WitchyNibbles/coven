@@ -29,9 +29,9 @@ What it refuses:
   diff|show|grep|blame`...) and nothing is redirected to a file. That covers the words of the
   line, the working folder and every folder a `cd` moves to (a bare `cd`, also with a redirection,
   is home), so `rg password` run in the folder that holds the profile is refused, unless the line
-  first moves to a literal folder that holds no closed place (`cd proj && ...`, a newline after
-  the `cd` but not `;`, which runs on when the `cd` fails, a lone `git -C proj ...`, and no file
-  written by that first command); a `cd` whose folder cannot be known (`cd -`, `cd ~-`,
+  first moves to a literal folder that holds no closed place (`cd proj && ...` with the rest of
+  the line joined by `&&`: a `;` or a new line runs on when the `cd` fails; a lone
+  `git -C proj ...`; and no file written by that first command); a `cd` whose folder cannot be known (`cd -`, `cd ~-`,
   `cd $UNSET`, which bash runs as a bare `cd`, `pushd +1`) and a word that names a folder
   only the shell remembers (`$OLDPWD`, `~-`, `~1`) are refused on a line with a program that
   reads;
@@ -772,8 +772,12 @@ WORKTREE_ADD_VALUED = frozenset({"-b", "-B", "--reason"})
 COVEN_CHECKOUT_RULE = (
     "coven's own checkout is read-only to OpenCode sessions: run reading programs here, or add a worktree"
     " with `git worktree add .claude/worktrees/<name>` and work under .claude/worktrees/"
+    " (`cd .claude/worktrees/<name> && ...`; a `;` or a new line does not count)"
 )
-WORKING_FOLDER_RULE = "the working folder holds coven's {}; cd into a project folder first"
+WORKING_FOLDER_RULE = (
+    "the working folder holds coven's {}; cd into a project folder first"
+    " (`cd <dir> && ...`; a `;` or a new line does not count)"
+)
 UNREAD_LINE_RULE = (
     "the working folder holds coven's {} and the guard could not read this line{}, so its first"
     " `cd` cannot be followed; write the line plainly"
@@ -1414,8 +1418,8 @@ def _coven_checkout_allows(command: str, commands: Sequence[Argv], cwd: Path, sc
 
 def _first_folder(command: str, cwd: Path) -> Path | None:
     """The folder a line moves to before any other program runs: the literal, existing folder of
-    a first `cd <dir>` or `pushd <dir>` followed by `&&` or a newline (the rest of the line
-    runs there), or of `git -C <dir>` or `env -C <dir>` when that is the only command. None for
+    a first `cd <dir>` or `pushd <dir>` when the rest of the line is joined to it by `&&` only
+    (a `;` or a new line would run on in the working folder if the `cd` failed), or of `git -C <dir>` or `env -C <dir>` when that is the only command. None for
     any other line: one the scanner cannot follow, one whose first command writes a file or is a
     bare redirection (`> x; cd proj`: it is read from the working folder), and one with a subshell
     or a `popd`, which go back to the working folder."""
@@ -1428,7 +1432,9 @@ def _first_folder(command: str, cwd: Path) -> Path | None:
     words = [word.value if word.value is not None else word.raw for word in top[0].words]
     name = _base(words[0])
     target: str | None = None
-    if name in ("cd", "pushd") and _then_follows(command[top[0].end :]):
+    if name in ("cd", "pushd") and _only_after_success(
+        command, [(each.start, each.end) for each in top]
+    ):
         target = next((each for each in words[1:] if not CD_OPTION.fullmatch(each)), None)
     elif name in ("git", "env") and len(top) == 1:
         target = _chdir_value(words[1:])
@@ -1440,12 +1446,16 @@ def _first_folder(command: str, cwd: Path) -> Path | None:
     return folder if folder is not None and folder.is_dir() else None
 
 
-def _then_follows(rest: str) -> bool:
-    """Whether the text after a first command runs the next one only when it succeeded (`&&`,
-    a newline) or holds nothing. Not `;`: a `cd` that fails at run time leaves the rest of the
-    line in the working folder. Not beside it (`&`), into it (`|`) or in its place (`||`)."""
-    rest = rest.lstrip(" \t")
-    return not rest or rest.startswith(("&&", "\n"))
+def _only_after_success(command: str, spans: Sequence[tuple[int, int]]) -> bool:
+    """Whether every command after the first runs only when the first one succeeded: the first
+    is joined to the next by `&&`, and each later one by `&&` or a pipe (a pipeline stays inside
+    its `&&` list). A `;` or a new line runs on when a `cd` fails at run time, in the working
+    folder, and so do `||` and `&`; so does anything after them."""
+    for index, ((_, end), (start, _)) in enumerate(itertools.pairwise(spans)):
+        joint = re.sub(r"\\\n", " ", command[end:start]).strip()
+        if joint not in (("&&",) if index == 0 else ("&&", "|", "|&")):
+            return False
+    return True
 
 
 def _chdir_value(arguments: Sequence[str]) -> str | None:
