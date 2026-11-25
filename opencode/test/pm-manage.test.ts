@@ -55,7 +55,7 @@ await test("list shows code, id, busy/idle, outcome, ASK WAITING (bug) with requ
   const get = world.get.bind(world);
   world.get = (input) =>
     input.sessionID === "pm3"
-      ? Promise.reject(new Error("not found"))
+      ? Promise.reject(new Error("Session not found"))
       : get(input);
   const out = await list(
     world,

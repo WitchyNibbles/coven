@@ -41,17 +41,25 @@ function head(message: string): string {
     : first;
 }
 
-const NOT_FOUND = /not.?found|no session/i;
+const NOT_FOUND_TEXT = /^session not found$/i;
 
-/** A `get` error that says the session is gone: a 404 or a not-found name or message. */
+/**
+ * Whether a `get` error says the session is gone. A numeric `status` or `statusCode` decides
+ * alone (404 only). With none, only the error name `NotFoundError` or the exact text "session
+ * not found" count; any other error, a failed lookup of a model or host included, is an outage
+ * the GM must see.
+ */
 function isNotFound(error: unknown): boolean {
   if (!isPlainObject(error)) {
     return false;
   }
-  const code = error["status"] ?? error["statusCode"];
+  const status = error["status"] ?? error["statusCode"];
+  if (typeof status === "number") {
+    return status === 404;
+  }
   return (
-    code === 404 ||
-    NOT_FOUND.test(`${String(error["name"])} ${String(error["message"])}`)
+    error["name"] === "NotFoundError" ||
+    NOT_FOUND_TEXT.test(String(error["message"]))
   );
 }
 

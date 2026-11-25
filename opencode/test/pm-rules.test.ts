@@ -150,5 +150,6 @@ await test("the denied commands are the DENY list of src/coven/pm/profile.py", (
     (match) => `${match[1] ?? ""}*`,
   );
   assert.notEqual(python.length, 0);
+  assert.equal([...body.matchAll(/"[^"]*"/g)].length, python.length);
   assert.deepEqual([...new Set(python)].sort(), [...DENIED_COMMANDS].sort());
 });

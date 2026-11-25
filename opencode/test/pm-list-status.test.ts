@@ -59,3 +59,40 @@ await test("list takes the outcome from get over the listed one", async () => {
   };
   assert.match(await list(bare), /last interrupted/);
 });
+
+await test("only a real not-found is missing: a status decides alone, else the error name or exact text", async () => {
+  const failures: [string, Error][] = [
+    ["404", Object.assign(new Error("gone"), { status: 404 })],
+    ["404 code", Object.assign(new Error("gone"), { statusCode: 404 })],
+    ["name", Object.assign(new Error("x"), { name: "NotFoundError" })],
+    ["text", new Error("Session not found")],
+    ["500", Object.assign(new Error("Model not found"), { status: 500 })],
+    [
+      "500 name",
+      Object.assign(new Error("x"), { name: "NotFoundError", status: 500 }),
+    ],
+    ["dns", new Error("getaddrinfo ENOTFOUND example.test")],
+    ["other text", new Error("model not found upstream")],
+  ];
+  const world = gmWorld([
+    GM,
+    ...failures.map(([id]) => ({
+      id,
+      metadata: coven("pm", id.replace(" ", "-")),
+    })),
+  ]);
+  const get = world.get.bind(world);
+  world.get = (input) => {
+    const found = failures.find(([id]) => id === input.sessionID);
+    return found === undefined ? get(input) : Promise.reject(found[1]);
+  };
+  const lines = (await list(world)).split("\n");
+  const verdict = (id: string) =>
+    lines.find((line) => line.includes(`  ${id}  `))?.split(`  ${id}  `)[1];
+  for (const id of ["404", "404 code", "name", "text"]) {
+    assert.equal(verdict(id), "missing", id);
+  }
+  for (const id of ["500", "500 name", "dns", "other text"]) {
+    assert.match(verdict(id) ?? "", /^status unavailable: /, id);
+  }
+});

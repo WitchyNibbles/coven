@@ -79,11 +79,16 @@ function parseLaunch(raw: unknown): LaunchInput {
   return input;
 }
 
-/** git's own variables (`GIT_DIR` and the like) must not decide which repository we ask about. */
-function cleanEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+/**
+ * The environment of the git run. git's own variables (`GIT_DIR` and the like) must not decide
+ * which repository we ask about, and the C locale keeps its messages in the English the
+ * "not a git repository" match reads.
+ */
+export function gitEnv(): NodeJS.ProcessEnv {
+  const kept = Object.entries(process.env).filter(
+    ([key]) => !key.startsWith("GIT_"),
   );
+  return { ...Object.fromEntries(kept), LC_ALL: "C", LANG: "C" };
 }
 
 const NOT_A_CHECKOUT = /not a git repository|must be run in a work tree/;
@@ -97,7 +102,7 @@ async function gitTop(dir: string): Promise<string | undefined> {
     const { stdout } = await run(
       "git",
       ["-C", dir, "rev-parse", "--show-toplevel"],
-      { env: cleanEnv(), timeout: GIT_TIMEOUT_MS },
+      { env: gitEnv(), timeout: GIT_TIMEOUT_MS },
     );
     return stdout.trim();
   } catch (error) {

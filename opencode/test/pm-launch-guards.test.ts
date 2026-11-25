@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { isValidCode } from "../src/pm/code.ts";
-import { pmLaunchTool } from "../src/pm/launch.ts";
+import { gitEnv, pmLaunchTool } from "../src/pm/launch.ts";
 import { resolveRole } from "../src/pm/role.ts";
 import { ToolError } from "../src/pm/tools.ts";
 import { coven } from "./pm-fake-session.ts";
@@ -127,4 +127,21 @@ await test("a pm launch running with a GM launch of the same code does not make 
   assert.equal(refused.status, "rejected");
   assert.equal(made.status, "fulfilled");
   assert.equal(world.created.length, 1);
+});
+
+await test("git runs in the C locale with none of git's own variables", () => {
+  const before = process.env["GIT_DIR"];
+  process.env["GIT_DIR"] = "/placeholder/elsewhere";
+  try {
+    const env = gitEnv();
+    assert.equal(env["LC_ALL"], "C");
+    assert.equal(env["LANG"], "C");
+    assert.equal("GIT_DIR" in env, false);
+  } finally {
+    if (before === undefined) {
+      delete process.env["GIT_DIR"];
+    } else {
+      process.env["GIT_DIR"] = before;
+    }
+  }
 });
