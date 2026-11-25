@@ -6981,3 +6981,97 @@ def test_the_log_holds_the_role_class_and_never_the_raw_role(
     path = Path(os.environ["XDG_CACHE_HOME"]) / "coven" / "logs" / "prod-guard.jsonl"
     if role not in (None, "", "pm", "x"):
         assert role not in path.read_text()
+
+
+# --- deny-only mode: a PM on OpenCode never uses an approval ---
+
+NO_APPROVALS = ("--no-approvals",)
+OPENCODE_REFUSAL = "a PM on OpenCode never runs a production step: send it to the GM as a PROD-STEP"
+EXAMPLE_COMMAND = "psql -h db.example.invalid -c 'x'"
+EXAMPLE_GUARD = {
+    "targets": [
+        {
+            "system": "example-db",
+            "kind": "production",
+            "match": ["psql\\s+.*-h\\s*db\\.example\\.invalid"],
+        }
+    ]
+}
+
+
+@pytest.fixture
+def example_store() -> Path:
+    """A committed store whose one target is the made-up host db.example.invalid, with a live
+    approval for the exact command EXAMPLE_COMMAND."""
+    path = make_store(home() / "coven-memory", guard=EXAMPLE_GUARD)
+    configure(path)
+    approve(path, system="example-db", commands=[EXAMPLE_COMMAND])
+    return path
+
+
+def test_no_approvals_refuses_a_command_a_live_approval_covers(
+    run: Run, example_store: Path
+) -> None:
+    proc = run(bash(EXAMPLE_COMMAND), args=NO_APPROVALS)
+    assert proc.returncode == 2
+    assert "'example-db' is production" in proc.stderr
+    assert OPENCODE_REFUSAL in proc.stderr
+
+
+def test_without_the_option_the_live_approval_still_allows(run: Run, example_store: Path) -> None:
+    proc = run(bash(EXAMPLE_COMMAND))
+    assert (proc.returncode, proc.stderr) == (0, "")
+
+
+def test_the_refusal_sentence_is_only_added_by_the_option(run: Run, example_store: Path) -> None:
+    (example_store / "approvals" / "a.json").unlink()
+    commit(example_store)
+    proc = run(bash(EXAMPLE_COMMAND))
+    assert proc.returncode == 2
+    assert OPENCODE_REFUSAL not in proc.stderr
+
+
+def test_no_approvals_still_allows_a_command_no_target_matches(
+    run: Run, example_store: Path
+) -> None:
+    proc = run(bash("ls -la"), args=NO_APPROVALS)
+    assert (proc.returncode, proc.stderr) == (0, "")
+
+
+def test_no_approvals_with_no_store_allows(run: Run, no_git: dict[str, str]) -> None:
+    proc = run(bash(EXAMPLE_COMMAND), args=NO_APPROVALS, env=no_git)
+    assert (proc.returncode, proc.stderr) == (0, "")
+
+
+def test_no_approvals_unreadable_guard_json_blocks(run: Run, fresh: Path) -> None:
+    guard = fresh / "systems/guard.json"
+    guard.unlink()
+    guard.mkdir()
+    (guard / "x").write_text("{}")
+    commit(fresh)
+    proc = run(bash("ls"), args=NO_APPROVALS)
+    assert proc.returncode == 2
+    assert "cannot read" in proc.stderr
+
+
+def test_no_approvals_with_role_pm_refuses_a_shell_write_to_guard_json(
+    run: Run, example_store: Path
+) -> None:
+    proc = run(bash(f"rm {example_store}/systems/guard.json"), role="pm", args=NO_APPROVALS)
+    assert proc.returncode == 2
+    assert STORE_REFUSAL in proc.stderr
+
+
+def test_no_approvals_with_role_pm_refuses_a_shell_write_to_coven_config(
+    run: Run, example_store: Path
+) -> None:
+    proc = run(bash(f"echo {{}} > {config_file()}"), role="pm", args=NO_APPROVALS)
+    assert proc.returncode == 2
+    assert CONFIG_REFUSAL in proc.stderr
+
+
+def test_unknown_argument_is_still_a_usage_error(run: Run) -> None:
+    for args in [("--approvals",), ("--no-approvals", "x"), ("--no-approvals", "--check")]:
+        proc = run("", args=args)
+        assert proc.returncode == 2, args
+        assert "usage:" in proc.stderr
