@@ -51,6 +51,20 @@ export async function findGm(
   return undefined;
 }
 
+/** Every live root session other than `exceptID` that holds `role: gm`: the caller's rivals. */
+export async function findOtherGms(
+  session: SessionApi,
+  exceptID: string,
+): Promise<SessionLike[]> {
+  const others: SessionLike[] = [];
+  for await (const found of roots(session)) {
+    if (found.id !== exceptID && covenOf(found)["role"] === "gm") {
+      others.push(found);
+    }
+  }
+  return others;
+}
+
 /** The PM with this code: a live root session whose own metadata holds `role: pm` and the code. */
 export async function findPm(
   session: SessionApi,

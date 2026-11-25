@@ -75,6 +75,31 @@ await test("a claim by the current GM writes nothing", async () => {
   );
 });
 
+await test("a claim demotes every other GM, then sets the caller", async () => {
+  const fake = fakeSession([
+    root("s1", coven("gm")),
+    root("s2", coven("gm")),
+    root("s3"),
+  ]);
+  await claim(fake, "s3");
+  assert.deepEqual(
+    fake.calls.filter((call) => call.startsWith("update")),
+    ["update:s1:former-gm", "update:s2:former-gm", "update:s3:gm"],
+  );
+  assert.equal((await findGm(fake))?.id, "s3");
+});
+
+await test("a claim by a GM demotes any other GM and leaves itself alone", async () => {
+  const fake = fakeSession([root("s1", coven("gm")), root("s2", coven("gm"))]);
+  const content = await claim(fake, "s2");
+  assert.deepEqual(
+    fake.calls.filter((call) => call.startsWith("update")),
+    ["update:s1:former-gm"],
+  );
+  assert.match(content, /already the GM/);
+  assert.deepEqual(fake.sessions.get("s2")?.metadata, coven("gm"));
+});
+
 await test("a claim whose second write fails leaves no GM and is a tool error", async () => {
   const fake = fakeSession([
     root("s1", coven("gm")),

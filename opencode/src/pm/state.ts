@@ -6,7 +6,7 @@ import { ShellQueue } from "./shell-env.ts";
  */
 export interface SharedState {
   queue: ShellQueue;
-  /** Sessions the GM has sent a message to. */
+  /** PM sessions that sent a message to the GM this turn (set by coven_send, cleared at session.execution.started). */
   messaged: Set<string>;
   /** PM sessions the GM stopped, so no notice follows. */
   stopped: Set<string>;

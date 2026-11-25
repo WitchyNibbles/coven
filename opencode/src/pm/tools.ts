@@ -1,7 +1,7 @@
 import type { SessionApi, SessionLike } from "../context.ts";
 import type { ToolDefinition } from "../join/context.ts";
 import { isPlainObject, show } from "../join/fields.ts";
-import { findGm, findPm } from "./find.ts";
+import { findGm, findOtherGms, findPm } from "./find.ts";
 import { GM_PREFIXES, PM_PREFIXES, headPrefix } from "./prefixes.ts";
 import { isRoot } from "./role.ts";
 import type { Role, RoleInfo, resolveRole } from "./role.ts";
@@ -55,26 +55,27 @@ export function gmClaimTool(deps: ToolDeps): ToolDefinition {
       if (role?.role === "pm") {
         throw new ToolError("a PM cannot claim the GM role");
       }
-      if (role?.role === "gm") {
-        return { content: "this session is already the GM" };
-      }
-      const previous = await findGm(deps.session);
-      if (previous !== undefined) {
-        // the old GM steps down first: a claim that fails after this leaves no GM, never two
+      const others = await findOtherGms(deps.session, me.id);
+      // every other GM steps down first: a claim that fails after this leaves no GM, never two
+      for (const other of others) {
         await deps.session.update({
-          sessionID: previous.id,
-          metadata: withRole(previous, "former-gm"),
+          sessionID: other.id,
+          metadata: withRole(other, "former-gm"),
         });
       }
-      await deps.session.update({
-        sessionID: me.id,
-        metadata: withRole(me, "gm"),
-      });
+      const already = role?.role === "gm";
+      if (!already) {
+        await deps.session.update({
+          sessionID: me.id,
+          metadata: withRole(me, "gm"),
+        });
+      }
+      const demoted =
+        others.length === 0
+          ? ""
+          : `; ${others.map((other) => other.id).join(", ")} demoted to former GM`;
       return {
-        content:
-          previous === undefined
-            ? "this session is now the GM"
-            : `this session is now the GM; ${previous.id} is a former GM`,
+        content: `${already ? "this session is already the GM" : "this session is now the GM"}${demoted}`,
       };
     },
   };
