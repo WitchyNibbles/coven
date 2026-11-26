@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from support import REPO
 from coven import cli, paths
 from coven.opencode.checks import Outcome, exit_code, render, run_doctor
 from coven.opencode.checks_isolation import HOOK, probe_isolation
+from coven.opencode.profile import Layout
 
 PREFIX = "coven: PM shells run isolated and isolation is not available here: "
 SUFFIX = "; ask the user"
@@ -86,6 +88,42 @@ def test_the_command_prints_the_line_and_fails_on_a_refusal(
     monkeypatch.setattr("coven.opencode.checks_isolation.probe_isolation", probe)
     assert cli.main(["opencode", "doctor"]) == 1
     assert f"fail {NAME}: not available: user namespaces are off" in capsys.readouterr().out
+
+
+@dataclass(frozen=True)
+class ColonData(Layout):
+    """A profile whose data folder alone has a ':' in its path."""
+
+    @property
+    def data(self) -> Path:
+        return self.root / "da:ta"
+
+
+def test_a_colon_in_the_serve_path_is_reported_without_running_the_wrapper(
+    good: Good, tmp_path: Path
+):
+    # the plugin refuses such a path (the hide list is colon-joined): the doctor says so up front
+    layout = Layout(tmp_path / "pro:file")
+    probe = Probe(Outcome("ok", "ok"))
+    done = dict(run_doctor(layout, good.cwd, read=Reader(), isolation=probe))
+    assert done[NAME] == Outcome("fail", f"not available: {layout.serve_dir} contains ':'")
+    assert probe.calls == []
+    assert not layout.serve_dir.exists()  # nothing is checked on disk: serve makes the folder
+
+
+def test_a_colon_in_the_data_path_alone_names_the_data_path(good: Good, tmp_path: Path):
+    layout = ColonData(tmp_path / "profile")
+    probe = Probe(Outcome("ok", "ok"))
+    done = dict(run_doctor(layout, good.cwd, read=Reader(), isolation=probe))
+    assert done[NAME] == Outcome("fail", f"not available: {layout.data} contains ':'")
+    assert probe.calls == []
+
+
+def test_paths_without_a_colon_go_on_to_the_probe(good: Good):
+    probe = Probe(Outcome("ok", "ok"))
+    done = dict(run_doctor(good.layout, good.cwd, read=Reader(), isolation=probe))
+    assert done[NAME] == Outcome("ok", "ok")
+    assert len(probe.calls) == 1
 
 
 # The probe

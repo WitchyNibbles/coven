@@ -88,4 +88,10 @@ def _run(wrapper: Path, env: Mapping[str, str], timeout: float) -> tuple[int, st
 
 
 def isolation_check(ctx: Context) -> Outcome:
+    # The plugin joins the serve and data paths into one `:`-separated list, so it refuses a path
+    # that holds a `:`; the probe hides temp folders and would not see it. (Whether the serve
+    # folder exists is not checked: serve makes it.)
+    for folder in (ctx.layout.serve_dir, ctx.layout.data):
+        if ":" in str(folder):
+            return _not_available(f"{folder} contains ':'")
     return ctx.isolation(paths.root() / HOOK, ctx.base)
