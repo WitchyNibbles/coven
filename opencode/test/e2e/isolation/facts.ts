@@ -47,8 +47,8 @@ function body(places: Places, withUmount: boolean): string[] {
   }
   return [
     ...lines,
-    `if umount /proc > /dev/null 2>&1; then echo "UMOUNT_PROC=[done]"; else echo "UMOUNT_PROC=[failed]"; fi`,
-    `if umount "$serve" > /dev/null 2>&1; then echo "UMOUNT_SERVE=[done]"; else echo "UMOUNT_SERVE=[failed]"; fi`,
+    `if out=$(umount /proc 2>&1); then echo "UMOUNT_PROC=[done]"; else echo "UMOUNT_PROC=[failed: $(printf %s "$out" | tr '\\n' ' ')]"; fi`,
+    `if out=$(umount "$serve" 2>&1); then echo "UMOUNT_SERVE=[done]"; else echo "UMOUNT_SERVE=[failed: $(printf %s "$out" | tr '\\n' ' ')]"; fi`,
     `echo "SERVE_AFTER=[$(ls -A "$serve" 2>&1 | tr '\\n' ' ')]"`,
     `echo "SERVER_AFTER=[$([ -e /proc/${pid} ] && echo yes || echo no)]"`,
   ];

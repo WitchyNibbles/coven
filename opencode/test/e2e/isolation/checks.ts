@@ -127,6 +127,18 @@ function expect(facts: Facts, key: string, want: string): string | undefined {
   return got === want ? undefined : `${key} is [${got}], expected [${want}]`;
 }
 
+/** What `umount` says when the kernel refuses it: a permission error, not a missing program. */
+const PERMISSION =
+  /must be superuser|operation not permitted|permission denied/i;
+
+/** `undefined` when `key` is a failed umount that says why in permission terms. */
+function refusedUmount(facts: Facts, key: string): string | undefined {
+  const got = fact(facts, key);
+  return got.startsWith("failed: ") && PERMISSION.test(got)
+    ? undefined
+    : `${key} is [${got}], expected a failure with a permission error`;
+}
+
 /** The first of the problems that is not undefined. */
 function firstOf(...problems: (string | undefined)[]): string | undefined {
   return problems.find((problem) => problem !== undefined);
@@ -229,8 +241,8 @@ function steps(): Step[] {
       "pm: umount of /proc and of the serve folder fail, and the serve folder still lists empty",
       onFacts(({ pm }) =>
         firstOf(
-          expect(pm, "UMOUNT_PROC", "failed"),
-          expect(pm, "UMOUNT_SERVE", "failed"),
+          refusedUmount(pm, "UMOUNT_PROC"),
+          refusedUmount(pm, "UMOUNT_SERVE"),
           expect(pm, "SERVE_AFTER", ""),
           expect(pm, "SERVER_AFTER", "no"),
         ),
@@ -252,7 +264,7 @@ function steps(): Step[] {
     ],
     [
       "timeout: a PM shell call past its timeout leaves no process behind, or (2.3.2) is moved to the background with nothing killed",
-      (run, seen) => timeoutProblem(run, seen.workdir),
+      (run) => timeoutProblem(run, run.world.beta),
     ],
     [
       "interrupt: a PM shell call killed by OpenCode (coven_pm_stop of a busy PM) leaves no process behind",
