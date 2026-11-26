@@ -84,6 +84,8 @@ class World:
     hide: Path
     other: Path
     shell: Path
+    caller_bin: Path
+    pwned: Path
     last_pid: int = 0
 
     def write_sys(self, relative: str, value: str) -> None:
@@ -107,7 +109,7 @@ class World:
 
     def outer_runs(self) -> list[list[str]]:
         """The outer unshare that runs the inner stage (`sh -c <stage> ...`)."""
-        return [a for a in self.unshare_runs() if a[7:8] == ["sh"]]
+        return [a for a in self.unshare_runs() if a[8:9] == ["-c"] and len(a) > 9]
 
     def nested_runs(self) -> list[list[str]]:
         """The nested unshare that restores the user, asked first to run `true`, then the shell."""
@@ -125,7 +127,9 @@ class World:
         **extra: str,
     ) -> subprocess.CompletedProcess[str]:
         env = {
-            "PATH": str(path or self.bin),
+            # The caller's PATH has fakes that mark an attack; the trusted list is the seam's.
+            "PATH": str(self.caller_bin),
+            "COVEN_ISOLATE_PATH": str(path or self.bin),
             "COVEN_ISOLATE_SYS": str(self.sys_root),
             "COVEN_PM_REAL_SHELL": str(self.shell),
             "COVEN_PM_HIDE": f"{self.hide}:{self.root / 'absent'}:{self.other}"
@@ -177,7 +181,15 @@ def world(tmp_path: Path) -> World:
         hide,
         other,
         bin_dir / "shell",
+        tmp_path / "caller-bin",
+        tmp_path / "pwned",
     )
+    # What a PM can plant ahead of /usr/bin: a tool of each name that marks the attack and fails.
+    made.caller_bin.mkdir()
+    for name in (*TOOLS, "unshare", "mount"):
+        evil = made.caller_bin / name
+        evil.write_text(f"#!/bin/sh\necho {name} >> '{made.pwned}'\nexit 99\n")
+        evil.chmod(0o755)
     made.write_sys("user/max_user_namespaces", "79976")
     made.write_sys("kernel/unprivileged_userns_clone", "1")
     made.write_sys("kernel/apparmor_restrict_unprivileged_userns", "0")
@@ -202,14 +214,16 @@ def test_the_outer_unshare_has_exactly_the_documented_flags(world: World) -> Non
     assert done.returncode == 0, done.stderr
     (outer,) = world.outer_runs()
     assert tuple(["unshare", *outer[:7]]) == OUTER
-    assert outer[7:9] == ["sh", "-c"]
+    assert outer[7:9] == [str(world.bin / "sh"), "-c"]
     # The inner stage is a fixed script: the caller's values arrive as arguments after it.
     assert outer[10] == "sh"
     assert outer[11] == str(world.shell)
     assert outer[12] == str(os.getuid())
     assert outer[13] == str(os.getgid())
     assert outer[14] == f"{world.hide}:{world.root / 'absent'}:{world.other}"
-    assert outer[15:] == ["-c", "echo hi"]
+    assert outer[15] == str(world.bin / "unshare")
+    assert outer[16] == str(world.caller_bin)
+    assert outer[17:] == ["-c", "echo hi"]
 
 
 def test_the_outer_unshare_replaces_the_wrapper_so_a_kill_reaches_the_namespace(
@@ -219,7 +233,7 @@ def test_the_outer_unshare_replaces_the_wrapper_so_a_kill_reaches_the_namespace(
     assert done.returncode == 0, done.stderr
     # The same process: the wrapper exec'd it, so a signal for the wrapper is a signal for unshare,
     # and `--kill-child` takes the namespace's processes down with it.
-    outer_calls = [c for c in world.calls("unshare") if c["argv"][7:8] == ["sh"]]
+    outer_calls = [c for c in world.calls("unshare") if c["argv"][8:9] == ["-c"]]
     assert [c["pid"] for c in outer_calls] == [world.last_pid]
     assert "--kill-child" in outer_calls[0]["argv"]
 
@@ -296,7 +310,7 @@ def test_the_namespaces_first_process_takes_term_and_kills_the_rest(world: World
     assert world.run().returncode == 0
     (outer,) = world.outer_runs()
     script = outer[9]
-    assert "trap 'kill -s KILL -- -1' TERM INT HUP" in script
+    assert "trap 'kill -s KILL -- -1; exit 143' TERM INT HUP" in script
     assert script.index("trap ") < script.index("mount -t tmpfs")
 
 
@@ -343,12 +357,61 @@ def test_a_real_shell_that_is_not_an_absolute_path_refuses(world: World) -> None
     assert not world.log.exists()
 
 
+def test_a_real_shell_that_is_missing_or_not_executable_refuses_before_any_unshare(
+    world: World,
+) -> None:
+    plain = world.root / "plain-file"
+    plain.write_text("#!/bin/sh\n")
+    plain.chmod(0o644)
+    for bad in (world.root / "no-such-shell", plain, world.root):
+        done = world.run(COVEN_PM_REAL_SHELL=str(bad))
+        assert done.returncode == 126, bad
+        assert done.stderr == refusal("COVEN_PM_REAL_SHELL is not an executable file")
+    assert not world.log.exists()
+
+
 def test_unshare_missing_refuses(world: World) -> None:
     (world.bin / "unshare").unlink()
     done = world.run()
     assert done.returncode == 126
     assert done.stderr == refusal("unshare not found")
     assert world.calls("shell") == []
+    assert not world.pwned.exists()  # the caller's own unshare is never a fallback
+
+
+@pytest.mark.parametrize("tool", ["sh", "id", "mktemp", "rm", "tr", "mount"])
+def test_a_tool_the_wrapper_needs_that_is_missing_refuses(world: World, tool: str) -> None:
+    (world.bin / tool).unlink()
+    done = world.run()
+    assert done.returncode == 126
+    assert done.stderr == refusal(f"{tool} not found")
+    assert world.calls("shell") == []
+    assert not world.pwned.exists()
+
+
+def test_the_tools_come_from_the_trusted_path_never_from_the_callers(world: World) -> None:
+    # A PM can put an `unshare` that answers --help and drops the flags first on its own PATH.
+    done = world.run("echo hi")
+    assert done.returncode == 0, done.stderr
+    assert not world.pwned.exists()
+    # Every outer, nested and mount run was the trusted one, and the command sees the caller's PATH.
+    assert len(world.outer_runs()) == 1
+    assert len(world.nested_runs()) == 2
+    assert len(world.calls("mount")) == 2
+    assert world.calls("shell")[0]["env"]["PATH"] == str(world.caller_bin)
+
+
+def test_the_stage_runs_on_the_trusted_path_until_the_real_shell(world: World) -> None:
+    assert world.run().returncode == 0
+    for call in world.calls("mount"):
+        assert call["env"]["PATH"] == str(world.bin)
+    probe, real = (
+        c
+        for c in world.calls("unshare")
+        if c["argv"][1:2] and c["argv"][1].startswith("--map-user=")
+    )
+    assert probe["env"]["PATH"] == str(world.bin)
+    assert real["env"]["PATH"] == str(world.caller_bin)
 
 
 def test_util_linux_older_than_2_38_refuses(world: World) -> None:

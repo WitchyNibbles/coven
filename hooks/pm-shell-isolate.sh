@@ -9,6 +9,15 @@
 #   COVEN_ISOLATE_SYS    test seam: where the /proc/sys files used for the diagnosis are read
 #                        (default /proc/sys). It moves those reads and nothing else: no value of it
 #                        skips or weakens the unshare.
+#   COVEN_ISOLATE_PATH   test seam: the trusted PATH the wrapper itself runs on (default
+#                        /usr/sbin:/usr/bin:/sbin:/bin). Like COVEN_ISOLATE_SYS it is read from the
+#                        environment only, and the plugin deletes both names from a PM shell's env,
+#                        so a PM cannot set them.
+#
+# The wrapper never trusts the caller's PATH: a PM can put an `unshare` of its own ahead of /usr/bin
+# (in ~/.local/bin, say) that drops the flags, and every later call would run unisolated. So the
+# caller's PATH is kept aside, every tool is resolved on the trusted PATH, the outer and nested
+# unshare run by absolute path, and the caller's PATH comes back only for the real shell.
 #
 # The command runs inside `unshare --user --map-root-user --pid --fork --kill-child --mount
 # --mount-proc` (`--kill-child`: a kill of the process OpenCode spawned also kills the namespace), so its
@@ -20,6 +29,10 @@
 #
 # Fail closed: where isolation is not available the script exits 126 with one line on stderr naming
 # the first missing piece and never runs the command. There is no off switch.
+
+caller_path=${PATH-}
+PATH=${COVEN_ISOLATE_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
+[ -n "$caller_path" ] || caller_path=$PATH
 
 refuse() {
     printf 'coven: PM shells run isolated and isolation is not available here: %s; ask the user\n' "$1" >&2
@@ -45,10 +58,16 @@ case $real_shell in
 /*) ;;
 *) refuse "COVEN_PM_REAL_SHELL is not an absolute path" ;;
 esac
+{ [ -f "$real_shell" ] && [ -x "$real_shell" ]; } ||
+    refuse "COVEN_PM_REAL_SHELL is not an executable file"
 
-command -v unshare > /dev/null 2>&1 || refuse "unshare not found"
+unshare_bin=$(command -v unshare) || refuse "unshare not found"
+sh_bin=$(command -v sh) || refuse "sh not found"
+for tool in id mktemp rm tr mount; do
+    command -v "$tool" > /dev/null 2>&1 || refuse "$tool not found"
+done
 # `--map-user` came with util-linux 2.38; the help text says whether it is there.
-case $(unshare --help 2>&1) in
+case $("$unshare_bin" --help 2>&1) in
 *--map-user*) ;;
 *) refuse "util-linux is older than 2.38 (unshare has no --map-user)" ;;
 esac
@@ -63,14 +82,16 @@ uid=$(id -u)
 gid=$(id -g)
 
 # The stage that runs inside the outer namespaces. It is a fixed text: the real shell, the ids, the
-# folders and the command arrive as arguments ($1 .. $4, then `-c <command>`), never inside it.
+# folders, the unshare to run, the caller's PATH and the command arrive as arguments ($1 .. $6, then
+# `-c <command>`), never inside it. It runs on the trusted PATH and gives the caller's back only to
+# the real shell.
 # shellcheck disable=SC2016
 inner='
 # This stage is the first process of the namespace, which ignores a TERM it has no handler for:
-# trap the signals OpenCode may send and kill every process of the namespace.
-trap '"'"'kill -s KILL -- -1'"'"' TERM INT HUP
-real=$1 uid=$2 gid=$3 hide=$4
-shift 4
+# trap the signals OpenCode may send, kill every process of the namespace and never go on.
+trap '"'"'kill -s KILL -- -1; exit 143'"'"' TERM INT HUP
+real=$1 uid=$2 gid=$3 hide=$4 unshare_bin=$5 caller_path=$6
+shift 6
 set -f
 IFS=:
 for dir in $hide; do
@@ -83,13 +104,13 @@ for dir in $hide; do
 done
 unset IFS
 # Try the nested unshare on `true` first: a failure of it is told from a failing command.
-if ! out=$(unshare --user --map-user="$uid" --map-group="$gid" true 2>&1); then
+if ! out=$("$unshare_bin" --user --map-user="$uid" --map-group="$gid" true 2>&1); then
     out=$(printf %s "$out" | tr "\n" " ")
     printf "coven: PM shells run isolated and isolation is not available here: cannot restore the user inside the namespaces (%s); ask the user\n" "$out" >&2
     exit 126
 fi
 exec 3<&0
-unshare --user --map-user="$uid" --map-group="$gid" "$real" "$@" <&3 3<&- &
+PATH=$caller_path "$unshare_bin" --user --map-user="$uid" --map-group="$gid" "$real" "$@" <&3 3<&- &
 wait "$!"
 exit "$?"
 '
@@ -99,12 +120,12 @@ exit "$?"
 # when OpenCode kills it (a timeout), `--kill-child` takes every process of the namespace with it.
 errors=$(mktemp "${TMPDIR:-/tmp}/coven-pm-isolate.XXXXXX") || refuse "cannot create a temporary file"
 trap 'rm -f "$errors"' EXIT
-if ! unshare --user --map-root-user --pid --fork --kill-child --mount --mount-proc true 2> "$errors"; then
+if ! "$unshare_bin" --user --map-root-user --pid --fork --kill-child --mount --mount-proc true 2> "$errors"; then
     message=$(tr '\n' ' ' < "$errors")
     refuse "unshare failed: ${message%"${message##*[! ]}"}"
 fi
 trap - EXIT
 rm -f "$errors"
 
-exec unshare --user --map-root-user --pid --fork --kill-child --mount --mount-proc \
-    sh -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$@"
+exec "$unshare_bin" --user --map-root-user --pid --fork --kill-child --mount --mount-proc \
+    "$sh_bin" -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$unshare_bin" "$caller_path" "$@"
