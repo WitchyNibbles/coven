@@ -399,6 +399,15 @@ def test_manager_says_a_stop_with_archive_hides_and_does_not_archive_in_opencode
     assert "unarchives the PM" not in flat
 
 
+def test_manager_sends_a_new_hand_over_for_a_hidden_pm_to_a_resume_not_a_launch() -> None:
+    flat = " ".join(MANAGER.read_text().split())
+    assert (
+        "A project whose PM a stop with `archive: true` hid is still a live session: "
+        "`coven_pm_launch` refuses its code, so a new hand-over or task for it goes to "
+        "`coven_pm_resume` with the `TASK` lines as `text`" in flat
+    )
+
+
 def test_project_manager_agent_is_primary_with_its_own_description() -> None:
     assert frontmatter(PM_AGENT)[1:] == ["mode: primary"]
     (written,) = frontmatter(PM_AGENT)[:1]

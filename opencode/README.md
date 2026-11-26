@@ -243,8 +243,10 @@ PM can claim.
   `RESUMED by gm`.
 - `coven_pm_stop {code, archive?}`: interrupts the PM's turn, which also ends a waiting ask.
 
-Every tool but `coven_send` refuses any session but the GM, and `coven_send` also serves a PM, to
-the GM only. A role agent under a PM has none of them. A PM's message arrives in the GM's session
+`coven_pm_launch`, `coven_pm_list`, `coven_pm_resume` and `coven_pm_stop` refuse any session but
+the GM. `coven_gm_claim` refuses a child session and a PM, so a session that is not the GM yet can
+call it. `coven_send` serves the GM and a PM, which sends to the GM only. A role agent under a PM
+has none of them. A PM's message arrives in the GM's session
 as a turn; the GM never polls. When a PM's turn ends without a message to the GM, a line
 `[coven notice] pm-<code> ended a turn (<outcome>) without a message` arrives instead. There is no
 notice while the PM still has a role agent working, and none after a stop the GM made; a turn
@@ -275,10 +277,18 @@ role, and none is a sandbox.
   `tmp/`, and `coven opencode setup`, `install`, `serve` and `gm`: you run those in a terminal.
   Coven's own checkout is read-only to every session: only programs that read run there, and a
   worktree under `.claude/worktrees/` is where work on coven happens.
-- The deny-only production guard reads `systems/guard.json` from the memory store and refuses
-  every call of a PM tree that reaches a target in it. It has no approvals. With no `guard.json`
-  in the store, or one with no targets, it has no targets and refuses nothing, and "a PM never
-  runs a production step" rests on the PM's text alone. Name your live systems first (see
+- The deny-only production guard reads `systems/guard.json` as committed at the memory store's
+  git HEAD and refuses every call of a PM tree that reaches a target in it. It has no approvals.
+  With no `guard.json` in the store (and no `"guard": "required"` in coven's config) the
+  production guard is off, and "a PM never runs a production step" rests on the PM's text alone.
+  A `guard.json` with no targets counts nothing as a production target, so the guard has no
+  targets to refuse; a PM tree still meets the restricted rules of the guard, which no approval
+  lifts. They refuse a PM's writes to the memory store, coven's config and Claude Code's user
+  folder, a change of the session role variable, `coven setup`, `coven approve` and
+  `coven memory`, and a remote command (ssh, psql, curl and the like whose host is not written
+  out).
+  A `guard.json` that is in the store's working tree but not committed makes the guard refuse
+  every Bash and MCP call of a PM until it is committed. Name your live systems first (see
   [Production guard](../README.md#production-guard)).
 
 **Production steps.** The manager on OpenCode follows only the No guard flow of its skill. Every

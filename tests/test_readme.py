@@ -403,6 +403,9 @@ def test_known_gaps_says_what_opencode_does_not_have() -> None:
     assert "aquelarre" in guard.lower()
     for needle in ("server guard", "pm-permissions", "deny-only", "guard.json", "no targets"):
         assert needle in guard, needle
+    assert "only barrier." not in guard  # too wide: the restricted rules apply to a PM tree
+    for needle in ("production step", "restricted rules", "not committed"):
+        assert needle in guard, needle
 
 
 def test_known_gaps_says_what_archive_does_on_opencode_2_3_2() -> None:
@@ -458,6 +461,35 @@ def test_the_hierarchy_section_says_what_archive_does_and_what_the_guards_keep()
         "own checkout is read-only to every session",
         "`.claude/worktrees/`",
         "refuses while a server runs",
+    ):
+        assert needle in body, needle
+
+
+def test_the_hierarchy_section_says_what_the_production_guard_does_without_targets() -> None:
+    body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Hierarchy"))
+    assert "refuses nothing" not in body  # false: the restricted rules still apply
+    for needle in (
+        'With no `guard.json` in the store (and no `"guard": "required"` in coven\'s config) '
+        "the production guard is off",
+        "`guard.json` with no targets counts nothing as a production target",
+        "a PM tree still meets the restricted rules",
+        "a change of the session role variable",
+        "`coven setup`, `coven approve` and `coven memory`",
+        "ssh, psql, curl and the like whose host is not written out",
+        "`guard.json` that is in the store's working tree but not committed",
+        "refuse every Bash and MCP call of a PM",
+    ):
+        assert needle in body, needle
+
+
+def test_the_hierarchy_section_lists_the_gm_only_tools() -> None:
+    body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Hierarchy"))
+    assert "Every tool but `coven_send` refuses" not in body
+    for needle in (
+        "`coven_pm_launch`, `coven_pm_list`, `coven_pm_resume` and `coven_pm_stop` refuse any "
+        "session but the GM",
+        "`coven_gm_claim` refuses a child session and a PM",
+        "`coven_send` serves the GM and a PM",
     ):
         assert needle in body, needle
 

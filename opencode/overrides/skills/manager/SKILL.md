@@ -131,6 +131,10 @@ More tasks for a running or idle project go to its PM: `TASK <project>/<task>: <
 verbatim>`. `<project>/<task>` in every reply is the code and task number, as the PM's message
 names them.
 
+A project whose PM a stop with `archive: true` hid is still a live session: `coven_pm_launch`
+refuses its code, so a new hand-over or task for it goes to `coven_pm_resume` with the `TASK`
+lines as `text` (Resume a PM), not to a launch.
+
 At most `pm_cap` PMs run at once, idle ones included. A project beyond that gets its record with
 status `waiting for a slot`, and you tell the user it waits. Start it when a slot frees (Results).
 Never start more PMs than the cap.
