@@ -16,7 +16,7 @@ import { pmListTool, pmResumeTool, pmStopTool } from "./manage.ts";
 import { NoticeTracker } from "./notices.ts";
 import { resolveRole } from "./role.ts";
 import type { RoleInfo, RoleLookup } from "./role.ts";
-import { shellEnvHooks } from "./shell-env.ts";
+import { pmIsolation, shellEnvHooks } from "./shell-env.ts";
 import { sharedState } from "./state.ts";
 import { serverStatus } from "./status.ts";
 import { gmClaimTool, sendTool } from "./tools.ts";
@@ -81,6 +81,7 @@ export async function pmSetup(
   const shell = shellEnvHooks({
     keyEnv: options.keyEnv,
     directory: ctx.location.directory,
+    isolation: pmIsolation(options),
     queue: state.queue,
     taken: state.taken,
     now: deps.now,

@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 
 import type { Role } from "../src/pm/role.ts";
-import { ShellQueue, scrubEnv } from "../src/pm/shell-env.ts";
+import { ShellQueue, pmIsolation, scrubEnv } from "../src/pm/shell-env.ts";
 import { sharedState } from "../src/pm/state.ts";
 
 const KEY = "GATEWAY_KEY";
@@ -133,6 +142,70 @@ await test("scrub removes password and key, keeps PATH and HOME", () => {
   };
   scrubEnv(env, KEY);
   assert.deepEqual(env, { PATH: "/bin", HOME: "/h" });
+});
+
+await test("scrub removes the wrapper's two test seams", () => {
+  const env: Record<string, string | undefined> = {
+    COVEN_ISOLATE_SYS: "/fake/sys",
+    COVEN_ISOLATE_PATH: "/fake/bin",
+    PATH: "/bin",
+  };
+  scrubEnv(env, KEY);
+  assert.deepEqual(env, { PATH: "/bin" });
+});
+
+const PROFILE = {
+  profileDir: "/tmp/coven-test/profile",
+  serveDir: "/tmp/coven-test/profile/state/serve",
+};
+
+await test("the folders to hide are the profile's serve folder and its data folder, pinned", () => {
+  const found = pmIsolation({ covenRoot: "/c", ...PROFILE });
+  assert.equal(
+    found.hide,
+    "/tmp/coven-test/profile/state/serve:/tmp/coven-test/profile/data",
+  );
+});
+
+await test("the data folder follows the profile folder, as the Python layout puts it", () => {
+  const found = pmIsolation({
+    covenRoot: "/c",
+    profileDir: "/other/prof",
+    serveDir: "/other/prof/state/serve",
+  });
+  assert.equal(found.hide, "/other/prof/state/serve:/other/prof/data");
+});
+
+await test("the wrapper is hooks/pm-shell-isolate.sh under the coven root", () => {
+  assert.equal(
+    pmIsolation({ covenRoot: "/c", ...PROFILE }).wrapper,
+    "/c/hooks/pm-shell-isolate.sh",
+  );
+});
+
+await test("the wrapper is found when it is an executable file and not otherwise", () => {
+  const root = mkdtempSync(join(tmpdir(), "coven-wrapper-"));
+  try {
+    const options = { covenRoot: root, ...PROFILE };
+    assert.equal(pmIsolation(options).found, false);
+    const wrapper = pmIsolation(options).wrapper;
+    mkdirSync(dirname(wrapper), { recursive: true });
+    writeFileSync(wrapper, "#!/bin/sh\n", { mode: 0o644 });
+    assert.equal(pmIsolation(options).found, false);
+    chmodSync(wrapper, 0o755);
+    assert.equal(pmIsolation(options).found, true);
+    rmSync(wrapper);
+    mkdirSync(wrapper);
+    chmodSync(wrapper, 0o755);
+    assert.equal(pmIsolation(options).found, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test("the coven checkout's own wrapper is found", () => {
+  const root = resolve(import.meta.dirname, "../..");
+  assert.equal(pmIsolation({ covenRoot: root, ...PROFILE }).found, true);
 });
 
 await test("scrub leaves near misses alone", () => {

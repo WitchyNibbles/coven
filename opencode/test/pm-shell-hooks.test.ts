@@ -8,6 +8,8 @@ import type {
 } from "../src/context.ts";
 import { ROLE_ENV, resolveRole } from "../src/pm/role.ts";
 import { ShellQueue, shellEnvHooks } from "../src/pm/shell-env.ts";
+import type { PmIsolation } from "../src/pm/shell-env.ts";
+import { ISOLATION, pmEnv } from "./pm-isolation-fixture.ts";
 
 const KEY = "GATEWAY_KEY";
 const PASSWORD = "OPENCODE_SERVER_PASSWORD";
@@ -34,12 +36,16 @@ function execEvent(
   return { tool, sessionID, agent: "build", messageID: "m", id: "c", input };
 }
 
-function world(sessions: Record<string, SessionLike | Error> = {}) {
+function world(
+  sessions: Record<string, SessionLike | Error> = {},
+  isolation: PmIsolation = ISOLATION,
+) {
   const clock = { now: 1_000_000 };
   const queue = new ShellQueue();
   const hooks = shellEnvHooks({
     keyEnv: KEY,
     directory: "/loc",
+    isolation,
     queue,
     taken: new WeakSet(),
     now: () => clock.now,
@@ -84,7 +90,107 @@ await test("createBefore sets ROLE_ENV for a pm shell and scrubs first", async (
     "/w",
   );
   w.createBefore(event);
-  assert.deepEqual(event.env, { PATH: "/bin", [ROLE_ENV]: "pm" });
+  assert.deepEqual(event.env, pmEnv({ PATH: "/bin" }));
+});
+
+/** The refusal's text for a missing piece, as the spec words it. */
+function refusal(piece: string): { message: string } {
+  return {
+    message: `coven: PM shells run isolated and isolation is not available here: ${piece}; ask the user`,
+  };
+}
+
+await test("a pm's shell runs through the wrapper and keeps its real shell in the env", async () => {
+  const w = world({ ses_pm: PM_SESSION });
+  await w.executeBefore(execEvent("ses_pm", { command: "ls", workdir: "/w" }));
+  const event = shellEvent({ PATH: "/bin" }, "ls", "/w");
+  w.createBefore(event);
+  assert.equal(event.shell, ISOLATION.wrapper);
+  assert.equal(event.env["COVEN_PM_REAL_SHELL"], "/bin/sh");
+  assert.equal(event.env["COVEN_PM_HIDE"], ISOLATION.hide);
+  assert.equal(event.env[ROLE_ENV], "pm");
+  assert.equal(event.env["PATH"], "/bin");
+});
+
+await test("a gm's shell and a shell with no queue entry keep their shell and get no isolation values", async () => {
+  const w = world({ ses_gm: GM_SESSION });
+  await w.executeBefore(execEvent("ses_gm", { command: "ls" }));
+  const gm = shellEvent({ PATH: "/bin" }, "ls", "/loc");
+  w.createBefore(gm);
+  const none = shellEvent({ PATH: "/bin" }, "pwd", "/loc");
+  w.createBefore(none);
+  for (const event of [gm, none]) {
+    assert.equal(event.shell, "/bin/sh");
+    assert.deepEqual(event.env, { PATH: "/bin" });
+  }
+});
+
+await test("the two test seams are deleted from a pm's shell and from a gm's", async () => {
+  const w = world({ ses_pm: PM_SESSION, ses_gm: GM_SESSION });
+  await w.executeBefore(execEvent("ses_pm", { command: "ls" }));
+  await w.executeBefore(execEvent("ses_gm", { command: "pwd" }));
+  const seams = { COVEN_ISOLATE_SYS: "/x", COVEN_ISOLATE_PATH: "/y" };
+  const pm = shellEvent({ ...seams }, "ls", "/loc");
+  w.createBefore(pm);
+  const gm = shellEvent({ ...seams }, "pwd", "/loc");
+  w.createBefore(gm);
+  assert.deepEqual(pm.env, pmEnv());
+  assert.deepEqual(gm.env, {});
+});
+
+await test("a pm's own values for the isolation names are replaced", async () => {
+  const w = world({ ses_pm: PM_SESSION });
+  await w.executeBefore(execEvent("ses_pm", { command: "ls" }));
+  const event = shellEvent(
+    { COVEN_PM_REAL_SHELL: "/tmp/evil", COVEN_PM_HIDE: "/nowhere" },
+    "ls",
+    "/loc",
+  );
+  w.createBefore(event);
+  assert.deepEqual(event.env, pmEnv());
+});
+
+await test("a pm's shell is refused when the wrapper was not found, a gm's is not", async () => {
+  const w = world(
+    { ses_pm: PM_SESSION, ses_gm: GM_SESSION },
+    {
+      ...ISOLATION,
+      found: false,
+    },
+  );
+  await w.executeBefore(execEvent("ses_pm", { command: "ls" }));
+  await w.executeBefore(execEvent("ses_gm", { command: "pwd" }));
+  const event = shellEvent({}, "ls", "/loc");
+  assert.throws(
+    () => w.createBefore(event),
+    refusal(`wrapper not found: ${ISOLATION.wrapper}`),
+  );
+  assert.equal(event.shell, "/bin/sh");
+  const gm = shellEvent({ PATH: "/bin" }, "pwd", "/loc");
+  w.createBefore(gm);
+  assert.equal(gm.shell, "/bin/sh");
+  assert.deepEqual(gm.env, { PATH: "/bin" });
+});
+
+await test("a pm's shell with no shell or a relative one is refused", async () => {
+  const w = world({ ses_pm: PM_SESSION });
+  for (const shell of [undefined, "", "bash", "./sh"]) {
+    await w.executeBefore(execEvent("ses_pm", { command: "ls" }));
+    const event: ShellCreateEvent = {
+      command: "ls",
+      cwd: "/loc",
+      env: { PATH: "/bin" },
+      ...(shell === undefined ? {} : { shell }),
+    };
+    assert.throws(
+      () => w.createBefore(event),
+      refusal(
+        `the shell is not an absolute path (${shell === undefined || shell === "" ? "none" : shell})`,
+      ),
+    );
+    assert.equal(event.shell, shell);
+    assert.equal(event.env["COVEN_PM_REAL_SHELL"], undefined);
+  }
 });
 
 await test("a scrub that throws makes createBefore throw", async () => {
@@ -120,7 +226,7 @@ await test("a shell whose role lookup fails gets ROLE_ENV", async () => {
   await w.executeBefore(execEvent("ses_x", { command: "ls" }));
   const event = shellEvent({}, "ls", "/loc");
   w.createBefore(event);
-  assert.deepEqual(event.env, { [ROLE_ENV]: "pm" });
+  assert.deepEqual(event.env, pmEnv());
 });
 
 await test("a shell with no workdir pairs on the location directory", async () => {

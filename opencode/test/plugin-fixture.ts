@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
 
 import { covenSetup } from "../src/coven.ts";
@@ -21,6 +22,9 @@ import { Stream } from "./plugin-stream.ts";
 import { exits, fakeSpawn } from "./guard-fake.ts";
 import { realPage } from "./pm-fake-session.ts";
 import type { Behaviour } from "./guard-fake.ts";
+
+/** This checkout: the `covenRoot` whose `hooks/pm-shell-isolate.sh` exists, as a PM's shell needs. */
+export const COVEN_ROOT = resolve(import.meta.dirname, "../..");
 
 /** The options setup always writes besides `covenRoot` and `keyEnv`; placeholder paths. */
 export const PROFILE_OPTIONS = {
