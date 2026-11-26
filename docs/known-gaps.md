@@ -363,9 +363,26 @@ What `coven opencode` does not do, or does not know. The install steps are in
   (see opencode/README.md); setup and doctor warn about a litellm model with no `--limit`.
 - Every `shell` and `webfetch` call asks. A headless `opencode run` rejects the ask, so it cannot
   use shell.
-- The GM/PM hierarchy does not run on OpenCode yet; it is planned.
-- The production guard and aquelarre are not on OpenCode. Only the deny-secrets guard runs: the
-  plugin layer and the `.env` rules.
+- Only part of the production guard runs on OpenCode, and aquelarre does not. Every session runs
+  deny-secrets and the server guard; a PM and its role agents also run pm-permissions and a
+  deny-only production guard, which refuses every call that reaches a target in the store's
+  `systems/guard.json`. The GM session has no production guard. With no `guard.json` in the store
+  the guard is off, and with one that has no targets it has no targets, so either way a PM's own
+  text is the only barrier to a production step. A PM tree still meets the guard's restricted
+  rules (no writes to the store or coven's config, no `coven setup` or `coven approve`, no remote
+  command whose host is not written out), and a `guard.json` that is not committed makes the guard
+  refuse every Bash and MCP call of a PM.
+- Approvals and the guard-on flow are not on OpenCode; they are planned for M3. Until then the
+  manager follows the No guard flow: every `PROD-STEP` goes to the user, and the GM runs it after
+  the user's yes.
+- OpenCode 2.3.2 has no plugin-side archive. `coven_pm_stop` with `archive: true` hides a PM from
+  `coven_pm_list` by a `coven.archived` metadata flag and does not archive the session in
+  OpenCode. `coven_pm_list` with `archived: true` shows hidden PMs and PMs archived in OpenCode,
+  and a resume clears the flag. A PM archived in OpenCode itself is not resumed: unarchive it there
+  before a resume.
+- OS isolation of PM shells (their own PID and mount namespaces) is a planned follow-up, not
+  built. Until then the guards and the shell scrub are best effort: a script that builds the path
+  of `/proc/<pid>/environ` at run time can still read the server's environment.
 - The copied superpowers skills keep Claude Code's tool names in their text.
 - Superpowers skills come from the v7.0.2 clone that `coven opencode install` fetches with `git`,
   or from Claude Code's superpowers plugin. With neither, a step that loads one is skipped. Only

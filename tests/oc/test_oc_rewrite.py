@@ -10,6 +10,7 @@ AGENTS = ("implementer", "reviewer", "final-reviewer", "explorer")
     ("source", "expected"),
     [
         ("coven:clean-code", "coven-clean-code"),
+        ("coven:manager", "coven-manager"),
         ("`coven:subagent-driven-development`", "`coven-subagent-driven-development`"),
         ("superpowers:writing-plans", "superpowers-writing-plans"),
         ("that is superpowers:brainstorming).", "that is superpowers-brainstorming)."),
@@ -72,7 +73,6 @@ def test_lines_without_a_match_come_back_unchanged(text: str) -> None:
         "subagent_type",
         "ToolSearch",
         "TaskList",
-        "coven:manager",
         "coven:setup",
         "coven:systems-map",
         "coven:project-manager",

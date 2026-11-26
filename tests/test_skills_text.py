@@ -9,6 +9,7 @@ import pytest
 from support import REPO, SHIPPED_SKILLS
 
 from coven import cli, settings
+from coven.pm.text import GM_PREFIXES, PM_PREFIXES
 
 SKILLS = REPO / "skills"
 SDD = SKILLS / "subagent-driven-development"
@@ -625,6 +626,24 @@ def test_no_board_or_pane_is_named_in_the_manager_reporting_rule() -> None:
     results = manager_results().lower()
     for name in ("pane", "tmux", "statusline", "artifact"):
         assert name not in results, name
+
+
+# --- the OpenCode overrides speak the same message language as the Claude Code sources ---------
+
+OVERRIDES = REPO / "opencode" / "overrides"
+HIERARCHY_TEXTS = (
+    "skills/manager/SKILL.md",
+    "agents/project-manager.md",
+)
+
+
+@pytest.mark.parametrize("rel", HIERARCHY_TEXTS)
+def test_the_opencode_override_and_its_source_use_the_same_prefixes(rel: str) -> None:
+    source = (REPO / rel).read_text(encoding="utf-8")
+    override = (OVERRIDES / rel).read_text(encoding="utf-8")
+    for prefix in (*PM_PREFIXES, *GM_PREFIXES):
+        assert prefix in source, f"{rel} source lacks {prefix}"
+        assert prefix in override, f"{rel} override lacks {prefix}"
 
 
 def opening(skill: str) -> str:

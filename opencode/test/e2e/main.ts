@@ -1,6 +1,6 @@
 /**
  * The end-to-end runs on OpenCode 2.3.2 with the scripted fake model.
- * Run it with `npm run e2e [-- runtime|join]`: `npm run e2e` enters a network namespace with only the
+ * Run it with `npm run e2e [-- runtime|join|evaluate|hierarchy|served]`: `npm run e2e` enters a network namespace with only the
  * loopback interface and starts this file there. It does nothing unless COVEN_E2E=1, and it
  * refuses to start outside that namespace.
  */
@@ -22,7 +22,9 @@ import type { Runs } from "./checks.ts";
 import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
 import { evaluateSuite } from "./evaluate/checks.ts";
+import { hierarchySuite } from "./hierarchy/checks.ts";
 import { pmApiSuite } from "./pm-api/checks.ts";
+import { servedSuite } from "./served/checks.ts";
 import { runtimeSuite } from "./runtime/checks.ts";
 import type { Outcome } from "./runtime/checks.ts";
 import { decideIn } from "./script.ts";
@@ -78,6 +80,8 @@ const SUITES: Record<string, Suite> = {
   join: joinSuite,
   evaluate: evaluateSuite,
   "pm-api": pmApiSuite,
+  hierarchy: hierarchySuite,
+  served: servedSuite,
 };
 
 /** The suites to run, or the refusal when one is not known. */

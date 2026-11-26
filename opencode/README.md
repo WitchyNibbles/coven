@@ -10,9 +10,13 @@ OpenCode, its config and coven's plugin, apart from any OpenCode you already use
 - the tool `coven_ping`, which reports the plugin's name, version and root. `coven opencode doctor`
   and the end-to-end run use it to prove the plugin loaded;
 - a `tool_choice` hook for gateways (see below);
-- a `shell` hook that removes the profile's key variable (the plugin option `keyEnv`) and
-  `OPENCODE_SERVER_PASSWORD` from the environment of every shell command the model runs; OpenCode
-  itself keeps both.
+- a `shell` hook that removes the profile's key variable (the plugin option `keyEnv`),
+  `OPENCODE_SERVER_PASSWORD`, `OPENCODE_PASSWORD` and any `OPENCODE_` variable ending in
+  `_PASSWORD`, `_TOKEN` or `_KEY` from the environment of every shell command the model runs;
+  OpenCode itself keeps them;
+- the GM/PM tools `coven_gm_claim`, `coven_pm_launch`, `coven_pm_list`, `coven_send`,
+  `coven_pm_resume` and `coven_pm_stop`, and the guards that go with them (see
+  [Hierarchy](#hierarchy)).
 
 Setup also copies coven's skills, role agents, commands and routing (`opencode/content/`, generated
 from the Claude Code content by `python -m coven.opencode.content`) and the deny-secrets guard,
@@ -118,7 +122,11 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
     coven opencode install
     coven opencode setup --preset litellm --base-url URL --key-env NAME --model lead=ID [--model ROLE=ID ...] [--limit ID=CONTEXT[:OUTPUT] ...]
     coven opencode run -- ARGS
+    coven opencode serve start [--port N] | stop | status
+    coven opencode gm
     coven opencode doctor
+
+`serve` and `gm` are described under [Hierarchy](#hierarchy).
 
 - `install` runs npm to put the pinned OpenCode into `P/runtime`, then runs `git clone` to put
   superpowers v7.0.2 into `P/superpowers/v7.0.2` (skipped when it is already there). These are the
@@ -183,12 +191,116 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   `fail`, with the fix after a failure. It exits 1 when a check failed. The checks are:
   `runtime` (the binary reports the pinned version), `paths` (`opencode debug paths` stays under
   `P`), `config` (the config, limits included, matches `profile.json`), `key` (the variable is
-  set), `plugin` (a server started for the check lists `coven` as active; it polls up to 10 s,
-  because 2.3.2 lists no plugin until they have loaded), `skills` (the same server lists only
-  built-in skills and the profile's), `coven root` (the plugin's root still holds
-  `hooks/deny_secrets.py`) and `project config` (a warning for a repo config that is ignored here),
-  `superpowers` (check 9, a warning when a `superpowers-<x>` skill is missing from the profile) and
-  `limits` (check 10, a warning naming the litellm models that have no `--limit`).
+  set), `python3` (3.12 or later, which the plugin's hooks need), `server` (the coven server
+  answers, when one runs), `password` (the password file is mode 0600), `plugin` (the server lists
+  `coven` as active; with no coven server running, `doctor` starts a server for the check and
+  polls up to 10 s, because 2.3.2 lists no plugin until they have loaded), `skills` (the same
+  server lists only built-in skills and the profile's), `operations` (the server's API document
+  has every operation coven calls, so a runtime bump that drops one fails here and not in a PM),
+  `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and `project config` (a
+  warning for a repo config that is ignored here), `superpowers` (a warning when a
+  `superpowers-<x>` skill is missing from the profile) and `limits` (a warning naming the litellm
+  models that have no `--limit`).
+
+## Hierarchy
+
+The manager's way of working runs on OpenCode 2.3.2 too. You talk to one general manager (GM)
+session. It runs one project manager (PM) session per project, each in its own repo, and a PM
+runs the role agents. You hear only real questions, production steps and results.
+
+    coven opencode setup ...          # once; --model project-manager=ID picks the PM's model
+    coven opencode serve start
+    coven opencode gm
+
+`coven opencode serve start` runs one `opencode serve` on 127.0.0.1 for the profile. Its password
+is generated into `P/state/serve/password` (mode 0600) and kept; a second server is refused.
+`coven opencode serve stop` ends it and keeps the password. `coven opencode serve status` is
+read-only: `running pid P port N` or `stopped`, then one line per PM session (code, busy or idle,
+last outcome, any ask that waits). `coven opencode gm` starts the server when none runs, stops if
+coven's plugin is not active on it, and opens the OpenCode TUI attached to it, with the password
+in that process only. `coven opencode run` refuses while a server runs, because both would write
+the profile's database; use `gm`. After a server restart sessions and their rules survive, but
+turns in flight do not: the GM resumes the PMs it finds idle or interrupted.
+
+**The GM and its tools.** The GM is the lead session in that TUI. The manager skill has it call
+`coven_gm_claim` first, which marks the session as the GM. A later claim takes over: the earlier
+GM session becomes a former GM and stops receiving PM messages. Only a root session that is not a
+PM can claim.
+
+- `coven_gm_claim`: marks this session as the GM.
+- `coven_pm_launch {code, repo, brief, extraRepos?, title?}`: starts a session of the
+  `project-manager` agent in the repo's git checkout with the brief. The PM makes its own
+  worktrees under `<repo>/.claude/worktrees/`, one per task. It refuses a code that already has a
+  live PM, an invalid code and a repo that is not a git checkout.
+- `coven_pm_list {archived?}`: one line per PM: code, session id, busy or idle, last outcome, any
+  waiting ask (`ASK WAITING (bug)`), a child busy for 30 minutes or more, and the head of its
+  last message.
+- `coven_send {to, text}`: a message between the GM and a PM, queued for the receiver's next turn.
+  The first word is the prefix. The GM sends `ANSWER`, `APPROVED`, `DENIED` or `TASK` to the PM
+  whose code is `to`; a PM sends `QUESTION`, `PROD-STEP`, `DRAFT`, `DONE` or `BLOCKED` to the GM.
+  The tool adds the `[from gm]` or `[from pm-<code>]` frame.
+- `coven_pm_resume {code, text}`: shows a hidden PM again and queues it a turn that starts with
+  `RESUMED by gm`.
+- `coven_pm_stop {code, archive?}`: interrupts the PM's turn, which also ends a waiting ask.
+
+`coven_pm_launch`, `coven_pm_list`, `coven_pm_resume` and `coven_pm_stop` refuse any session but
+the GM. `coven_gm_claim` refuses a child session and a PM, so a session that is not the GM yet can
+call it. `coven_send` serves the GM and a PM, which sends to the GM only. A role agent under a PM
+has none of them. A PM's message arrives in the GM's session
+as a turn; the GM never polls. When a PM's turn ends without a message to the GM, a line
+`[coven notice] pm-<code> ended a turn (<outcome>) without a message` arrives instead. There is no
+notice while the PM still has a role agent working, and none after a stop the GM made; a turn
+that failed always gets one.
+
+**Archive on 2.3.2.** OpenCode 2.3.2 gives a plugin no way to archive a session. `coven_pm_stop`
+with `archive: true` hides the PM from `coven_pm_list` by a `coven.archived` metadata flag; it
+does not archive the session in OpenCode. `coven_pm_list` with `archived: true` shows the hidden
+PMs, marked `archived`, and the PMs archived in OpenCode itself. A resume clears the flag. A PM
+archived in OpenCode is not resumed: unarchive it there before a resume.
+
+**A PM never waits on a prompt.** A PM session carries the PM rules, and its role agents inherit
+them. Shell, edit and read are allowed; force pushes, pushes to `main` or `master`,
+`gh pr merge`, edits of the memory store, `webfetch` and `question` are denied, and so are `.env`
+files. In a PM tree any other ask is refused on the spot, and the PM sends it to the GM as a
+`QUESTION` or `PROD-STEP`. A PM's shells carry the session role, so the memory store's pre-commit
+hook and the PM permissions work as on Claude Code; the GM's shells do not, because the GM writes
+the store.
+
+**The guards.** Every session, the GM's included, runs deny-secrets and the server guard. A PM
+tree also runs pm-permissions (the engine Claude Code's PMs use) and the production guard in a
+deny-only mode. All of them fail closed. They are best effort against a model that follows its
+role, and none is a sandbox.
+
+- The server guard keeps a model away from the server and the profile. From a shell or a file tool
+  it refuses any `opencode` command but `--version` and `--help`, the server's port, the serve
+  folder (the password file) and `/proc/<pid>/environ`, any write under the profile except
+  `tmp/`, and `coven opencode setup`, `install`, `serve` and `gm`: you run those in a terminal.
+  Coven's own checkout is read-only to every session: only programs that read run there, and a
+  worktree under `.claude/worktrees/` is where work on coven happens.
+- The deny-only production guard reads `systems/guard.json` as committed at the memory store's
+  git HEAD and refuses every call of a PM tree that reaches a target in it. It has no approvals.
+  With no `guard.json` in the store (and no `"guard": "required"` in coven's config) the
+  production guard is off, and "a PM never runs a production step" rests on the PM's text alone.
+  A `guard.json` with no targets counts nothing as a production target, so the guard has no
+  targets to refuse; a PM tree still meets the restricted rules of the guard, which no approval
+  lifts. They refuse a PM's writes to the memory store, coven's config and Claude Code's user
+  folder, a change of the session role variable, `coven setup`, `coven approve` and
+  `coven memory`, and a remote command (ssh, psql, curl and the like whose host is not written
+  out).
+  A `guard.json` that is in the store's working tree but not committed makes the guard refuse
+  every Bash and MCP call of a PM until it is committed. Name your live systems first (see
+  [Production guard](../README.md#production-guard)).
+
+**Production steps.** The manager on OpenCode follows only the No guard flow of its skill. Every
+`PROD-STEP` goes to the user with the exact commands. On a yes the GM runs them itself, in its own
+session, where the user sees each permission prompt, and replies `APPROVED`; on a no it replies
+`DENIED`. Approvals and the guard-on flow come with M3; until M3 a production step on OpenCode is
+always run by the GM, after the user's yes.
+
+Not in this version: the PM todo list in `serve status`, a Claude Code GM driving OpenCode PMs,
+and Claude Code's `coven pm status`, `health` and `resume` reading OpenCode PMs (switching tools
+in the middle of a project on one memory store is not supported). What else is missing is in
+[docs/known-gaps.md](../docs/known-gaps.md#opencode).
 
 ## The tool_choice hook
 
