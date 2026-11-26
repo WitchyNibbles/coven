@@ -82,48 +82,70 @@ ENTRIES = (
     Entry(
         "9b-nine-groups-far-oc",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-eight-groups-far-oc",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, A, A),
+        (A, N, A, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
-        "9b-seven-groups-far", "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", (A, N, A, A)
+        "9b-seven-groups-far",
+        "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
+        (A, N, A, R),
+        "3",
     ),
     Entry(
         "9b-claude-six-groups", "rm -rf <home>/.cl{a,b}ude/{a,b}{a,b}{a,b}{a,b}{a,b}", (A, N, R, A)
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-claude-seven-groups",
         "rm -rf <home>/.cl{a,b}ude/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, R, A),
+        (A, N, R, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-claude-nine-groups",
         "rm -rf <home>/.cl{a,b}ude/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, R, A),
+        (A, N, R, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-claude-many-braces",
         "rm -rf <home>/.cl{a,b}ude{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, R, A),
+        (A, N, R, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
-        "9b-far-seven-groups", "rm -rf <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", (A, N, R, A)
+        "9b-far-seven-groups",
+        "rm -rf <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
+        (A, N, R, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-far-nine-groups",
         "rm -rf <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, R, A),
+        (A, N, R, R),
+        "3",
     ),
-    Entry("9b-range-past-cap", "touch <project>/f{1..100}", (A, N, A, A)),
+    # flip 3: cap 256 to 64 (one cap)
+    Entry("9b-range-past-cap", "touch <project>/f{1..100}", (A, N, A, R), "3"),
     Entry("9b-range-at-cap", "touch <project>/f{1..64}", (A, N, A, A)),
-    Entry("9b-range-claude-past-cap", "rm -rf <home>/.cl{a,b}ude{1..100}", (A, N, R, A)),
-    Entry("9b-range-255-oc", "touch <project>/f{1..255}", (A, N, A, A)),
-    Entry("9b-range-300-oc", "touch <project>/f{1..300}", (A, N, A, A)),
+    # flip 3: cap 256 to 64 (one cap)
+    Entry("9b-range-claude-past-cap", "rm -rf <home>/.cl{a,b}ude{1..100}", (A, N, R, R), "3"),
+    # flip 3: cap 256 to 64 (one cap)
+    Entry("9b-range-255-oc", "touch <project>/f{1..255}", (A, N, A, R), "3"),
+    # flip 3: cap 256 to 64 (one cap)
+    Entry("9b-range-300-oc", "touch <project>/f{1..300}", (A, N, A, R), "3"),
     # --- 9c SHELL_READERS
     Entry("9c-printf-make-opencode", "printf 'opencode db\\n' | make -f -", (A, N, A, A), "4"),
     Entry("9c-printf-make-claude", "printf 'claude -p hi\\n' | make -f -", (A, N, A, A)),
@@ -537,36 +559,35 @@ ENTRIES = (
     Entry("h-two-lists", "cat <tmp>/{h,x}{o,x}me/profile/state/serve/password", (A, N, A, R)),
     Entry("h-list-in-write", "touch <tmp>/hom{e,x}/profile/config/x", (A, N, A, R)),
     Entry("h-list-in-coven-write", "touch <tmp>/projects/co{v,x}en/hooks/x.py", (A, N, A, R)),
-    Entry("h-range-letter", "cat <tmp>/ho{m..m}e/profile/state/serve/password", (A, N, A, A), "3"),
+    Entry("h-range-letter", "cat <tmp>/ho{m..m}e/profile/state/serve/password", (A, N, A, R), "3"),
     Entry(
-        "h-range-two-letters", "cat <tmp>/ho{l..m}e/profile/state/serve/password", (A, N, A, A), "3"
+        "h-range-two-letters", "cat <tmp>/ho{l..m}e/profile/state/serve/password", (A, N, A, R), "3"
     ),
-    Entry("h-range-in-write", "touch <tmp>/hom{e..e}/profile/config/x", (A, N, A, A), "3"),
+    Entry("h-range-in-write", "touch <tmp>/hom{e..e}/profile/config/x", (A, N, A, R), "3"),
     Entry(
-        "h-range-in-coven-write", "touch <tmp>/projects/co{v..v}en/hooks/x.py", (A, N, A, A), "3"
-    ),
-    Entry(
-        "h-range-first-component", "touch <tmp>/pro{j..j}ects/coven/hooks/x.py", (A, N, A, A), "3"
+        "h-range-in-coven-write", "touch <tmp>/projects/co{v..v}en/hooks/x.py", (A, N, A, R), "3"
     ),
     Entry(
-        "h-step-letter", "cat <tmp>/ho{k..m..2}e/profile/state/serve/password", (A, N, A, A), "3"
+        "h-range-first-component", "touch <tmp>/pro{j..j}ects/coven/hooks/x.py", (A, N, A, R), "3"
+    ),
+    Entry(
+        "h-step-letter", "cat <tmp>/ho{k..m..2}e/profile/state/serve/password", (A, N, A, R), "3"
     ),
     Entry(
         "h-step-letter-one",
         "cat <tmp>/ho{l..m..1}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
-        "h-range-descending", "cat <tmp>/ho{m..l}e/profile/state/serve/password", (A, N, A, A), "3"
+        "h-range-descending", "cat <tmp>/ho{m..l}e/profile/state/serve/password", (A, N, A, R), "3"
     ),
-    Entry(
-        "h-range-with-list", "cat <tmp>/ho{m..m,x}e/profile/state/serve/password", (A, N, A, A), "3"
-    ),
+    # flips none: bash reads `{m..m,x}` as a list, not a range
+    Entry("h-range-with-list", "cat <tmp>/ho{m..m,x}e/profile/state/serve/password", (A, N, A, A)),
     Entry(
         "h-nested-range-in-list",
         "cat <tmp>/ho{x,{m..m}}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
@@ -587,7 +608,7 @@ ENTRIES = (
     Entry(
         "h-nine-groups-miss",
         "cat <tmp>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}/x",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry("h-dollar-list", "cat <tmp>/ho${m,x}e/profile/state/serve/password", (A, N, A, R)),
@@ -608,7 +629,7 @@ ENTRIES = (
     Entry(
         "h-double-quoted-range",
         'cat "<tmp>/ho{m..m}e/profile/state/serve/password"',
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry("h-quoted-range-miss-far", 'touch "<project>/f{1..3}"', (A, N, A, A)),
@@ -620,28 +641,28 @@ ENTRIES = (
     Entry(
         "h-range-in-bash-c",
         "bash -c 'cat <tmp>/ho{m..m}e/profile/state/serve/password'",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-range-in-substitution",
         "echo $(cat <tmp>/ho{m..m}e/profile/state/serve/password)",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-range-in-heredoc-shell",
         "bash <<'EOF'\ncat <tmp>/ho{m..m}e/profile/state/serve/password\nEOF",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-range-after-cd",
         "cd <tmp>/ho{m..m}e/profile/state && cat serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
-    Entry("h-range-in-redirect", "echo x > <tmp>/hom{e..e}/profile/config/x", (A, N, A, A), "3"),
+    Entry("h-range-in-redirect", "echo x > <tmp>/hom{e..e}/profile/config/x", (A, N, A, R), "3"),
     Entry("h-list-in-redirect", "echo x > <tmp>/hom{e,x}/profile/config/x", (A, N, A, R)),
     # --- SHELL_READERS piped body
     Entry("readers-sh-opencode", "echo 'opencode db' | sh", (A, N, A, R)),
@@ -1092,21 +1113,31 @@ ENTRIES = (
     Entry("refusal-38", "ps eww", (A, N, A, R)),
     Entry("refusal-39", "curl http://127.0.0.1:43123/", (A, N, A, R)),
     # --- round 1: prod reads a ${a,b} word (bash does not brace-expand it; the plan makes the guards read it as $a and $b)
-    Entry("d-mail-first-word", "${mail-cli,x} send --to x", (A, N, A, R), "3"),
-    Entry("d-mail-second-member", "${x,mail-cli} send --to x", (A, N, A, R), "3"),
-    Entry("d-mail-bare", "${mail-cli,x} send", (A, N, A, R), "3"),
-    Entry("d-mail-after-and", "true && ${mail-cli,x} send --to x", (A, N, A, R), "3"),
-    Entry("d-mail-spaced", "${mail-cli,x}   send --to x", (A, N, A, R), "3"),
-    Entry("d-mail-under-env", "env ${mail-cli,x} send --to x", (A, N, A, R), "3"),
-    Entry("d-mail-in-sh-c", "sh -c '${mail-cli,x} send --to x'", (A, N, A, R), "3"),
-    Entry("d-mail-with-substitution", "${mail-cli,x} send $(echo x)", (A, N, A, R), "3"),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-first-word", "${mail-cli,x} send --to x", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-second-member", "${x,mail-cli} send --to x", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-bare", "${mail-cli,x} send", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-after-and", "true && ${mail-cli,x} send --to x", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-spaced", "${mail-cli,x}   send --to x", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-under-env", "env ${mail-cli,x} send --to x", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-in-sh-c", "sh -c '${mail-cli,x} send --to x'", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-mail-with-substitution", "${mail-cli,x} send $(echo x)", (A, N, A, R)),
     Entry("d-mail-echoed", "echo ${mail-cli,x} send", (A, N, A, A)),
     Entry("d-mail-single-quoted", "echo '${mail-cli,x} send --to x'", (A, N, A, A)),
     Entry("d-mail-glued-member", "mail-cli${x,y} send --to x", (A, N, A, R)),
     Entry("d-mail-argument-member", "mail-cli ${send,x} --to x", (A, N, A, A)),
     Entry("d-mail-plain", "mail-cli send --to x", (A, N, R, A)),
-    Entry("d-psql-first-word", "${psql,x} -h orders-db.example.internal -c 'x'", (A, N, A, R), "3"),
-    Entry("d-psql-short-host", "${psql,x} -h orders-db -c 'x'", (A, N, A, R), "3"),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-psql-first-word", "${psql,x} -h orders-db.example.internal -c 'x'", (A, N, A, R)),
+    # flips none: `${x,y}` is bash parameter expansion, and prod's head check reads it correctly
+    Entry("d-psql-short-host", "${psql,x} -h orders-db -c 'x'", (A, N, A, R)),
     Entry("d-psql-option-member", "psql ${-h,x} orders-db -c 'x'", (A, N, R, A)),
     Entry(
         "d-psql-option-member-fqdn", "psql ${-h,x} orders-db.example.internal -c 'x'", (A, N, R, A)
@@ -1144,112 +1175,112 @@ ENTRIES = (
     Entry(
         "h-only-letter-range-wide",
         "cat <tmp>/ho{a..z}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-letter-range-step-two",
         "cat <tmp>/ho{a..z..2}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-letter-range-step-twelve",
         "cat <tmp>/ho{a..m..12}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-letter-range-negative-step",
         "cat <tmp>/ho{m..a..-1}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-letter-range-around",
         "cat <tmp>/ho{k..o}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
-        "h-only-step-one", "cat <tmp>/ho{m..m..1}e/profile/state/serve/password", (A, N, A, A), "3"
+        "h-only-step-one", "cat <tmp>/ho{m..m..1}e/profile/state/serve/password", (A, N, A, R), "3"
     ),
     Entry(
         "h-only-step-past-the-end",
         "cat <tmp>/ho{m..m..5}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-with-range-member",
         "cat <tmp>/ho{x,{m..m}}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-beside-numeric-range",
         "cat <tmp>/ho{x,{1..2},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-beside-padded-range",
         "cat <tmp>/ho{x,{01..02},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-beside-numeric-step",
         "cat <tmp>/ho{x,{1..5..2},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-numeric-range-first",
         "cat <tmp>/ho{{1..2},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-padded-range-first",
         "cat <tmp>/ho{{01..02},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-numeric-range-last",
         "cat <tmp>/ho{m,{1..2}}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-letter-range-first",
         "cat <tmp>/ho{{a..b},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-letter-step-first",
         "cat <tmp>/ho{{a..c..2},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-with-step-member",
         "cat <tmp>/ho{x,{m..m..1}}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-three-beside-range",
         "cat <tmp>/ho{x,y,{1..2},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-list-nested-twice-beside-range",
         "cat <tmp>/ho{x,{y,{1..2}},m}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
@@ -1260,59 +1291,63 @@ ENTRIES = (
     Entry(
         "h-only-list-in-both-places",
         "cat <tmp>/ho{x,{1..2},m}e/profile/state/serve/{x,{1..2},password}",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-padding-in-both-places",
         "cat <tmp>/ho{x,{1..2},m}e/profile/state/serve/{x,{01..02},password}",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-range-in-tail-member",
         "cat <tmp>/ho{m..m}e/profile/state/serve/{password,x}",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-range-with-suffix-list",
         "cat <tmp>/ho{m..m}e/profile/state/serve/password{,.bak}",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-double-quoted-nested-range",
         'cat "<tmp>/ho{x,{1..2},m}e/profile/state/serve/password"',
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
+    # flip 3: single-quoted range, same as the double-quoted ones
     Entry(
         "h-only-single-quoted-nested-range",
         "cat '<tmp>/ho{x,{1..2},m}e/profile/state/serve/password'",
-        (A, N, A, A),
+        (A, N, A, R),
+        "3",
     ),
     Entry(
         "h-only-escaped-nested-range",
         "cat <tmp>/ho\\{x,{1..2},m\\}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-quoted-range-piece",
         'cat <tmp>/ho"{m..m}"e/profile/state/serve/password',
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
+    # flip 3: single-quoted range, same as the double-quoted ones
     Entry(
         "h-only-single-quoted-range-piece",
         "cat <tmp>/ho'{m..m}'e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
+        "3",
     ),
     Entry(
         "h-only-escaped-range",
         "cat <tmp>/ho\\{m..m\\}e/profile/state/serve/password",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
@@ -1364,36 +1399,36 @@ ENTRIES = (
     Entry(
         "h-only-copy-source",
         "cp <tmp>/ho{m..m}e/profile/state/serve/password <project>/x",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
-        "h-only-move-target", "mv <project>/x <tmp>/ho{m..m}e/profile/config/x", (A, N, A, A), "3"
+        "h-only-move-target", "mv <project>/x <tmp>/ho{m..m}e/profile/config/x", (A, N, A, R), "3"
     ),
-    Entry("h-only-tee", "tee <tmp>/hom{e..e}/profile/config/x", (A, N, A, A), "3"),
+    Entry("h-only-tee", "tee <tmp>/hom{e..e}/profile/config/x", (A, N, A, R), "3"),
     Entry(
-        "h-only-tee-after-pipe", "echo x | tee <tmp>/hom{e..e}/profile/config/x", (A, N, A, A), "3"
+        "h-only-tee-after-pipe", "echo x | tee <tmp>/hom{e..e}/profile/config/x", (A, N, A, R), "3"
     ),
     Entry(
-        "h-only-append-redirect", "echo x >> <tmp>/hom{e..e}/profile/config/x", (A, N, A, A), "3"
+        "h-only-append-redirect", "echo x >> <tmp>/hom{e..e}/profile/config/x", (A, N, A, R), "3"
     ),
-    Entry("h-only-cd-then-remove", "cd <tmp>/hom{e..e}/profile && rm -r config", (A, N, A, A), "3"),
-    Entry("h-only-remove-folder", "rm -rf <tmp>/hom{e..e}/profile/config", (A, N, A, A), "3"),
-    Entry("h-only-link", "ln -s x <tmp>/hom{e..e}/profile/config/y", (A, N, A, A), "3"),
-    Entry("h-only-mkdir", "mkdir <tmp>/hom{e..e}/profile/config/y", (A, N, A, A), "3"),
+    Entry("h-only-cd-then-remove", "cd <tmp>/hom{e..e}/profile && rm -r config", (A, N, A, R), "3"),
+    Entry("h-only-remove-folder", "rm -rf <tmp>/hom{e..e}/profile/config", (A, N, A, R), "3"),
+    Entry("h-only-link", "ln -s x <tmp>/hom{e..e}/profile/config/y", (A, N, A, R), "3"),
+    Entry("h-only-mkdir", "mkdir <tmp>/hom{e..e}/profile/config/y", (A, N, A, R), "3"),
     Entry(
         "h-only-coven-two-ranges",
         "touch <tmp>/pro{j..j}ects/co{v..v}en/hooks/x.py",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
     Entry(
         "h-only-coven-list-member-range",
         "touch <tmp>/pro{j,{1..2}}ects/coven/hooks/x.py",
-        (A, N, A, A),
+        (A, N, A, R),
         "3",
     ),
-    Entry("h-only-coven-step", "touch <tmp>/pro{j..j..1}ects/coven/hooks/x.py", (A, N, A, A), "3"),
+    Entry("h-only-coven-step", "touch <tmp>/pro{j..j..1}ects/coven/hooks/x.py", (A, N, A, R), "3"),
     Entry("h-only-coven-list", "touch <tmp>/pro{j,x}ects/coven/hooks/x.py", (A, N, A, R)),
     Entry("h-only-coven-root-range", "touch <coven>/ho{o..o}ks/x.py", (A, N, A, R)),
     # --- round 1: opencode, a protected path hidden only by braces, past the 256-word cap (it refuses these today: no literal protected prefix, no guard hole)
@@ -1519,23 +1554,31 @@ ENTRIES = (
     ),
     # --- round 1: braces that hide nothing protected (controls)
     Entry("control-brace-letter-range", "touch <project>/{a..c}", (A, N, A, A)),
-    Entry("control-brace-numeric-range-300", "touch <project>/f{1..300}", (A, N, A, A)),
-    Entry("control-brace-padded-range-300", "touch <project>/f{001..300}", (A, N, A, A)),
+    # flip 3: cap 256 to 64 (one cap)
+    Entry("9b-cap-numeric-range-300", "touch <project>/f{1..300}", (A, N, A, R), "3"),
+    # flip 3: cap 256 to 64 (one cap)
+    Entry("9b-cap-padded-range-300", "touch <project>/f{001..300}", (A, N, A, R), "3"),
     Entry("control-brace-padded-range", "touch <project>/f{01..03}", (A, N, A, A)),
     Entry("control-brace-numeric-step", "touch <project>/f{1..9..2}", (A, N, A, A)),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
-        "control-brace-three-members-five-groups",
+        "9b-cap-three-members-five-groups",
         "touch <project>/{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}",
-        (A, N, A, A),
+        (A, N, A, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
-        "control-brace-eight-groups",
+        "9b-cap-eight-groups",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, A, A),
+        (A, N, A, R),
+        "3",
     ),
+    # flip 3: cap 256 to 64 (one cap)
     Entry(
-        "control-brace-nine-groups",
+        "9b-cap-nine-groups",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
-        (A, N, A, A),
+        (A, N, A, R),
+        "3",
     ),
 )

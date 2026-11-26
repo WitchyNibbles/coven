@@ -1543,3 +1543,189 @@ def code_text(command: str, lone: Sequence[str] = ()) -> str:
     if EXPANSION_MARKS.intersection(blanked):
         return command  # what is left may expand to the blanked text (`$_`, `$[...]`)
     return blanked
+
+
+# brace_words: the one brace expander of the guards.
+# A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words one word is read as, and the
+# most `{` a word may hold (a list or range is one `{`, so no more could expand it).
+BRACE_MEMBERS = 64
+# A range of letters is a character, `..`, a character, and a step if it has one (`{a..e..2}`).
+LETTER_RANGE_LENGTH = 4
+
+
+@dataclass(frozen=True)
+class _Braces:
+    """The first brace expansion of a word: where it starts, where it ends (past its `}`), and the
+    words it stands for, None when the guard cannot tell them (`_brace_group`)."""
+
+    start: int
+    end: int
+    alternatives: tuple[str, ...] | None
+
+
+def closing_brace(word: str, start: int, *, one_word: bool = False) -> int:
+    """Where the brace that closes the `{` at `start` stands, nested braces counted; -1 when a
+    blank or the end of the text comes first (`one_word`: the text is a single word, so a blank in
+    it is part of a name and ends nothing)."""
+    depth = 0
+    for at in range(start, len(word)):
+        char = word[at]
+        if char.isspace() and not one_word:
+            return -1
+        depth += (char == "{") - (char == "}")
+        if depth == 0:
+            return at
+    return -1
+
+
+def _alternatives(content: str) -> list[str]:
+    """A brace list's words: its text cut at each comma outside the braces in it."""
+    found: list[str] = []
+    depth = 0
+    begin = 0
+    for at, char in enumerate(content):
+        depth += (char == "{") - (char == "}")
+        if char == "," and depth == 0:
+            found.append(content[begin:at])
+            begin = at + 1
+    found.append(content[begin:])
+    return found
+
+
+@dataclass(frozen=True)
+class _Range:
+    """The ends and step of a brace range as written (`01..10..2`, `a..e`)."""
+
+    first: str
+    last: str
+    step: str
+    numbers: bool
+
+
+def _is_integer(text: str) -> bool:
+    """Whether `text` is a whole number as a brace range reads it: digits, a `-` before them."""
+    return (text[1:] if text.startswith("-") else text).isdecimal()
+
+
+def _parse_range(content: str) -> _Range | None:
+    """The range that the inside of a brace is (`1..3`, `a..e`, either with `..step`); None when it
+    is not one (`{a}`, `{1..a}`, `{aa..bb}`)."""
+    first, dots, rest = content.partition("..")
+    if dots and _is_integer(first):
+        last, more, every = rest.partition("..")
+        if _is_integer(last) and (not more or _is_integer(every)):
+            return _Range(first, last, every if more else "1", numbers=True)
+        return None
+    letters = (
+        len(content) >= LETTER_RANGE_LENGTH
+        and content[1:3] == ".."
+        and not content[0].isdecimal()
+        and not content[3].isdecimal()
+    )
+    if not letters:
+        return None
+    if len(content) == LETTER_RANGE_LENGTH:
+        return _Range(content[0], content[3], "1", numbers=False)
+    if content[4:6] == ".." and _is_integer(content[6:]):
+        return _Range(content[0], content[3], content[6:], numbers=False)
+    return None
+
+
+def _range_words(brace: _Range) -> tuple[str, ...] | None:
+    """The words a brace range makes, zero-padded when an end is (`01..10`); None past
+    BRACE_MEMBERS, or when an end is too long a number to read."""
+    try:
+        step = abs(int(brace.step)) or 1
+        low, high = (
+            (int(brace.first), int(brace.last))
+            if brace.numbers
+            else (ord(brace.first), ord(brace.last))
+        )
+    except ValueError:
+        return None
+    if abs(high - low) // step + 1 > BRACE_MEMBERS:
+        return None
+    values = range(low, high + (1 if high >= low else -1), step if high >= low else -step)
+    if not brace.numbers:
+        return tuple(map(chr, values))
+    ends = [end.lstrip("-") for end in (brace.first, brace.last)]
+    padded = any(len(end) > 1 and end[0] == "0" for end in ends)
+    width = max(len(brace.first), len(brace.last)) if padded else 0
+    return tuple(f"{value:0{width}d}" for value in values)
+
+
+def _holds_expansion(content: str) -> bool:
+    """Whether the inside of a brace range may expand into something else: a `$`, a backtick, or a
+    brace list or range of its own."""
+    if "$" in content or "`" in content:
+        return True
+    at = content.find("{")
+    while at >= 0:
+        close = content.find("}", at)
+        inner = content[at + 1 : close]
+        if close >= 0 and "{" not in inner and ("," in inner or ".." in inner):
+            return True
+        at = content.find("{", at + 1)
+    return False
+
+
+def _brace_group(word: str, *, one_word: bool) -> _Braces | None:
+    """The first brace expansion of a word: a `{...}` with a comma outside the braces in it
+    (`{a,{b,c}}`, also after a `$`: `${a,b}`), or a range (`_parse_range`); None when it has
+    none. Not a brace that closes no list or range (`{}`, `{a}`), nor a range after `$` (`${a..c}`).
+    A range that holds an expansion has no alternatives: zsh expands `{1..$N}` after `$N`."""
+    index = 0
+    while (start := word.find("{", index)) >= 0:
+        index = start + 1
+        close = closing_brace(word, start, one_word=one_word)
+        if close < 0:
+            continue
+        content = word[start + 1 : close]
+        alternatives = _alternatives(content)
+        if len(alternatives) > 1:
+            return _Braces(start, close + 1, tuple(alternatives))
+        if word[start - 1 : start] == "$":
+            continue
+        if ".." in content and _holds_expansion(content):
+            return _Braces(start, close + 1, None)
+        brace = _parse_range(content)
+        if brace is not None:
+            return _Braces(start, close + 1, _range_words(brace))
+    return None
+
+
+def brace_words(word: str, *, one_word: bool = False) -> list[str] | None:
+    """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
+    `abd acd`, `{1..3}` is `1 2 3`, `{01..10..3}` and `{a..e}` are ranges, nested lists too);
+    `[word]` when it has none. An empty member is kept (`{a,}` is `a` and an empty word).
+
+    None when the guard cannot tell the words: more than BRACE_MEMBERS of them, a range that holds
+    an expansion (`{1..$N}`) or ends too long to read, or a word that holds more than
+    BRACE_MEMBERS braces (`{`, any: minified JSON, and each list or range is one `{`). A caller
+    that reads paths refuses on None.
+
+    The words are the ones a shell may make, and more: a brace in quotes or after a backslash is
+    expanded (`"{a,b}"` is `"a" "b"`), and so is a list after a `$` (`${a,b}` is `$a $b`), where
+    bash reads a parameter. A `$` brace that holds no list is no expansion (`${a}`, `${1..3}`).
+
+    A blank ends a brace (`{a b,c}` is no list: the text is cut into words before it is read),
+    unless `one_word`: the text is one word already, a pattern (`{a b,c}` is `a b` and `c`)."""
+    if word.count("{") > BRACE_MEMBERS:
+        return None
+    group = _brace_group(word, one_word=one_word)
+    if group is None:
+        return [word]
+    if group.alternatives is None:
+        return None
+    heads: list[str] = []
+    for alternative in group.alternatives:
+        made = brace_words(alternative, one_word=one_word)
+        if made is None:
+            return None
+        heads += made
+        if len(heads) > BRACE_MEMBERS:
+            return None
+    tails = brace_words(word[group.end :], one_word=one_word)
+    if tails is None or len(heads) * len(tails) > BRACE_MEMBERS:
+        return None
+    return [word[: group.start] + head + tail for head in heads for tail in tails]

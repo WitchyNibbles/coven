@@ -2,6 +2,7 @@
 deny-secrets; `code_text`, `heredoc_bodies`, `without_patterns` and `simple_commands` serve the
 production guard. The scanner only reads command strings: no test runs one."""
 
+import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
@@ -1360,3 +1361,241 @@ def test_one_prod_guard_run_lexes_each_text_and_variant_once(
     runners["prod_guard"](context.fill(entry.command), context.cwd)
     assert seen
     assert len(seen) == len(set(seen)), "a text was lexed twice in one variant"
+
+
+# --- brace_words: one brace expander for prod_guard and opencode_server_guard ---
+
+brace_words = module.brace_words
+
+# What bash 5.2 makes of each word, as a list of words: `bash -c 'for w in WORD; do ...'`, a word
+# that is empty after the expansion dropped (bash drops an unquoted empty word; `brace_words`
+# keeps it, see the empty members below). A word bash does not expand comes back as it is.
+BASH_BRACES: dict[str, list[str]] = {
+    "a{b,c}d": ["abd", "acd"],
+    "{a,b}": ["a", "b"],
+    "{a,b,c}": ["a", "b", "c"],
+    "{a,}": ["a"],
+    "{,a}": ["a"],
+    "{,}": [],
+    "x{,y}": ["x", "xy"],
+    "x{a,b}{c,d}y": ["xacy", "xady", "xbcy", "xbdy"],
+    "{a,{b,c}}": ["a", "b", "c"],
+    "{a,{b,c},d}": ["a", "b", "c", "d"],
+    "{{a,b},{c,d}}": ["a", "b", "c", "d"],
+    "a{b,{c,{d,e}}}f": ["abf", "acf", "adf", "aef"],
+    "{1..3}": ["1", "2", "3"],
+    "x{1..3}": ["x1", "x2", "x3"],
+    "{3..1}": ["3", "2", "1"],
+    "{-2..2}": ["-2", "-1", "0", "1", "2"],
+    "{1..10..2}": ["1", "3", "5", "7", "9"],
+    "{10..1..3}": ["10", "7", "4", "1"],
+    "{1..3..-1}": ["1", "2", "3"],
+    "{01..10}": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"],
+    "{1..010}": ["001", "002", "003", "004", "005", "006", "007", "008", "009", "010"],
+    "{08..10}": ["08", "09", "10"],
+    "{-01..01}": ["-01", "000", "001"],
+    "{a..e}": ["a", "b", "c", "d", "e"],
+    "{e..a}": ["e", "d", "c", "b", "a"],
+    "{a..e..2}": ["a", "c", "e"],
+    "{a..z..12}": ["a", "m", "y"],
+    "{m..m}": ["m"],
+    "{m..m..5}": ["m"],
+    "ho{m..m}e": ["home"],
+    "{x,{1..2},m}": ["x", "1", "2", "m"],
+    "{x,{01..02},m}": ["x", "01", "02", "m"],
+    "{{1..2},m}": ["1", "2", "m"],
+    "{a..c}{1..2}": ["a1", "a2", "b1", "b2", "c1", "c2"],
+    "{1..3}{a,b}": ["1a", "1b", "2a", "2b", "3a", "3b"],
+    "{a,b}$": ["a$", "b$"],
+    "{a,b}{c": ["a{c", "b{c"],
+    "{a,b}}": ["a}", "b}"],
+    "{{a,b}": ["{a", "{b"],
+    # no expansion: a brace that holds no list and no range, or is not closed
+    "{a}": ["{a}"],
+    "{}": ["{}"],
+    "a{}b": ["a{}b"],
+    "a{b}c": ["a{b}c"],
+    "{a": ["{a"],
+    "a}": ["a}"],
+    "{a,b": ["{a,b"],
+    "{1..3": ["{1..3"],
+    "{1..a}": ["{1..a}"],
+    "{a..1}": ["{a..1}"],
+    "{aa..bb}": ["{aa..bb}"],
+    "{1.5..3}": ["{1.5..3}"],
+    "{1..3.5}": ["{1..3.5}"],
+}
+
+
+@pytest.mark.parametrize("word", BASH_BRACES)
+def test_brace_words_make_the_words_bash_makes(word: str) -> None:
+    made = brace_words(word)
+    assert made is not None
+    assert [each for each in made if each] == BASH_BRACES[word]
+
+
+def test_the_table_of_bash_braces_is_what_bash_makes_on_this_machine() -> None:
+    """The expected words above were read from bash 5.2; read them again, so the table cannot rot.
+    A word goes in unquoted as a `for` list, one printed line per word."""
+    for word, expected in BASH_BRACES.items():
+        run = subprocess.run(
+            ["bash", "-c", f'for w in {word}; do printf "%s\\n" "$w"; done'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert run.stdout.splitlines() == expected, word
+
+
+@pytest.mark.parametrize(
+    ("word", "words"),
+    [
+        ("{a,}", ["a", ""]),
+        ("{,a}", ["", "a"]),
+        ("{,}", ["", ""]),
+        ("x{,y}", ["x", "xy"]),
+        ("{a,}b{,c}", ["ab", "abc", "b", "bc"]),
+    ],
+)
+def test_brace_words_keep_an_empty_member_as_the_guards_read_it(
+    word: str, words: list[str]
+) -> None:
+    assert brace_words(word) == words
+
+
+@pytest.mark.parametrize("word", ["plain", "", "a/b/c", "~/x", "$HOME/x", "a*b?c[d]", "x=1"])
+def test_a_word_with_no_brace_comes_back_as_it_is(word: str) -> None:
+    assert brace_words(word) == [word]
+
+
+def test_brace_words_return_a_new_list_each_time() -> None:
+    first = brace_words("a{b,c}")
+    assert first is not None
+    first.append("changed")
+    assert brace_words("a{b,c}") == ["ab", "ac"]
+    plain = brace_words("plain")
+    assert plain is not None
+    plain.append("changed")
+    assert brace_words("plain") == ["plain"]
+
+
+@pytest.mark.parametrize(
+    ("word", "words"),
+    [
+        # bash does not expand a brace in quotes or after a backslash; both guards over-expand it
+        ('"{a,b}"', ['"a"', '"b"']),
+        ("'{a,b}'", ["'a'", "'b'"]),
+        ('x"{a,b}"y', ['x"a"y', 'x"b"y']),
+        ("\\{a,b\\}", ["\\a", "\\b\\"]),
+        ("\\{a,b}", ["\\a", "\\b"]),
+        ('"{1..3}"', ['"1"', '"2"', '"3"']),
+        # a range reads its ends as written: a backslash in one is no number (a guard that reads
+        # the word with its quoting taken off, as opencode does, gets the range)
+        ("\\{1..3\\}", ["\\{1..3\\}"]),
+        ("\\{1..3}", ["\\1", "\\2", "\\3"]),
+        ("1..3", ["1..3"]),
+        # a list after `$` is a parameter's brace to bash; opencode read it as a list, and so does
+        # the one expander now
+        ("${a,b}", ["$a", "$b"]),
+        ("x${a,b}y", ["x$ay", "x$by"]),
+        ("${a,{b,c}}", ["$a", "$b", "$c"]),
+        ("${a,b}${c,d}", ["$a$c", "$a$d", "$b$c", "$b$d"]),
+        ("${mail-cli,x}", ["$mail-cli", "$x"]),
+        ("${x,mail-cli}", ["$x", "$mail-cli"]),
+        ("$${a,b}", ["$$a", "$$b"]),
+        ("${a:-b,c}", ["$a:-b", "$c"]),
+        # a `$` brace that is no list is a parameter, and stays one word; so does a range after it
+        ("${a}", ["${a}"]),
+        ("${HOME}/x", ["${HOME}/x"]),
+        ("${a:-b}", ["${a:-b}"]),
+        ("${1..3}", ["${1..3}"]),
+        ("${a..c}", ["${a..c}"]),
+        ("$a{1..2}", ["$a1", "$a2"]),
+        ("${a}{1..2}", ["${a}1", "${a}2"]),
+    ],
+)
+def test_brace_words_expand_what_the_guards_over_expand(word: str, words: list[str]) -> None:
+    assert brace_words(word) == words
+
+
+def test_a_brace_word_that_holds_a_parameter_is_read_around_it() -> None:
+    assert brace_words("a{b,c}") == ["ab", "ac"]
+    assert brace_words("{a,b}${c}") == ["a${c}", "b${c}"]
+
+
+def test_brace_words_are_at_most_the_member_cap() -> None:
+    assert module.BRACE_MEMBERS == 64
+    assert len(brace_words("{1..64}") or []) == 64
+    assert brace_words("{1..65}") is None
+    assert len(brace_words("{64..1}") or []) == 64
+    assert brace_words("{65..1}") is None
+    assert len(brace_words("{1..127..2}") or []) == 64
+    assert brace_words("{1..129..2}") is None
+    assert len(brace_words("{a..~}") or []) == 30
+    assert brace_words("{a..一}") is None
+    assert len(brace_words("{" + ",".join("a" for _ in range(64)) + "}") or []) == 64
+    assert brace_words("{" + ",".join("a" for _ in range(65)) + "}") is None
+    assert len(brace_words("{a,b}" * 6) or []) == 64
+    assert brace_words("{a,b}" * 7) is None
+    assert brace_words("{a,b}{1..33}") is None
+    assert len(brace_words("{a,b}{1..32}") or []) == 64
+    assert brace_words("{a,{b,c}}" * 4) is None  # 3 members each: 81
+    assert len(brace_words("{a,{b,c}}" * 3) or []) == 27
+
+
+def test_a_word_of_more_than_64_braces_is_none_even_when_none_expands() -> None:
+    assert brace_words("{a}" * 64) == ["{a}" * 64]
+    assert brace_words("{a}" * 65) is None
+    assert brace_words("{}" * 65) is None
+    assert brace_words("${x}" * 64) == ["${x}" * 64]
+    assert brace_words("${x}" * 65) is None
+    assert brace_words('{"a":{"b":1},' * 33) is None  # minified JSON
+
+
+@pytest.mark.parametrize(
+    "word", ["{1..$N}", "{a..$b}", "{$a..3}", "{1..`n`}", "{1..{2,3}}", "{1..{2..3}}", "x{1..$N}y"]
+)
+def test_a_brace_range_that_may_hold_an_expansion_is_none(word: str) -> None:
+    assert brace_words(word) is None
+
+
+def test_a_blank_ends_a_brace_unless_the_text_is_one_word() -> None:
+    assert brace_words("{a b,c}") == ["{a b,c}"]
+    assert brace_words("x{a b,c}") == ["x{a b,c}"]
+    assert brace_words("{a b,c}", one_word=True) == ["a b", "c"]
+    assert brace_words("x{a\tb,c}{1..2} y", one_word=True) == [
+        "xa\tb1 y",
+        "xa\tb2 y",
+        "xc1 y",
+        "xc2 y",
+    ]
+    assert brace_words("plain words", one_word=True) == ["plain words"]
+    assert brace_words("{a b,c}" * 7, one_word=True) is None
+    assert module.closing_brace("{a b}", 0) == -1
+    assert module.closing_brace("{a b}", 0, one_word=True) == 4
+    assert module.closing_brace("{a}", 0) == 2
+    assert module.closing_brace("{a", 0) == -1
+
+
+def test_a_range_beside_a_parameter_is_still_a_range() -> None:
+    assert brace_words("{1..3}$N") == ["1$N", "2$N", "3$N"]
+
+
+def test_a_range_with_a_huge_end_is_none_and_not_an_error() -> None:
+    assert brace_words("{1.." + "9" * 5000 + "}") is None
+    assert brace_words("{" + "9" * 5000 + "..1}") is None
+    assert brace_words("{1..3.." + "9" * 5000 + "}") is None
+
+
+def test_a_deep_nest_is_read_within_the_cap_and_does_not_recurse_without_end() -> None:
+    assert len(brace_words("{a," * 63 + "x" + "}" * 63) or []) == 64
+    assert brace_words("{a," * 64 + "x" + "}" * 64) is None
+    assert brace_words("{" * 200_000) is None
+    assert brace_words("{a," * 100_000) is None
+
+
+def test_a_long_word_with_few_braces_is_read_in_one_pass() -> None:
+    word = "a" * 200_000 + "{b,c}" + "d" * 200_000
+    made = brace_words(word)
+    assert made is not None
+    assert [len(each) for each in made] == [400_001, 400_001]

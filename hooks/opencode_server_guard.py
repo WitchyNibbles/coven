@@ -91,7 +91,6 @@ GM_TOOLS = "coven_pm_list, coven_pm_resume, coven_pm_stop"
 POINTER = f"this is coven's own server; ask the GM with a QUESTION (its tools: {GM_TOOLS})"
 MAX_NESTING = 8
 MAX_GLOB_MATCHES = 2000
-MAX_BRACE_WORDS = 256
 MAX_UNWRAP = 16
 
 
@@ -262,7 +261,6 @@ def holds_closed_place(path: Path, view: "View", mode: Mode) -> str | None:
 ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.DOTALL)
 WORD_BREAKS = re.compile(r"[\s;|&<>()]+")
 PART_BREAKS = re.compile(r"[=,:{}]")
-BRACES = re.compile(r"\{([^{}]*,[^{}]*)\}")
 ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=([^\s;|&<>()]*)")
 VARIABLE = re.compile(r"\$(?:\{(\w+)\}|([A-Za-z_]\w*)|[$?!#@*0-9_-])")
 UNRESOLVED = re.compile(r"\$[A-Za-z_{]")
@@ -329,19 +327,20 @@ class Quoting:
         return cls(text, sources, tuple(dict.fromkeys(found)))
 
 
-def _braces(word: str) -> list[str]:
-    """The words `a{b,c}d` stands for (bash brace expansion), at most MAX_BRACE_WORDS."""
-    pending = [word]
-    done: list[str] = []
-    while pending and len(done) + len(pending) <= MAX_BRACE_WORDS:
-        current = pending.pop()
-        match = BRACES.search(current)
-        if match is None:
-            done.append(current)
-            continue
-        for choice in match.group(1).split(","):
-            pending.append(current[: match.start()] + choice + current[match.end() :])
-    return done + pending
+def _brace_words(word: str, *, one_word: bool = False) -> list[str]:
+    """The words `a{b,c}d` stands for (bash brace expansion: lists, ranges, steps, zero padding),
+    by shell_words.brace_words; raises RefusedError when it cannot tell them (more than
+    shell_words.BRACE_MEMBERS words, or a range that holds a variable). `one_word`: the text is one
+    word already (a glob pattern), so a blank in a brace is part of a name."""
+    made: list[str] | None = hook_support.sibling("shell_words").brace_words(
+        word, one_word=one_word
+    )
+    if made is None:
+        raise RefusedError(
+            "a path built from a brace expansion the guard cannot tell (more than 64 words, or a"
+            " range with a variable) cannot be checked; write the paths out"
+        )
+    return made
 
 
 def _words_of(quoting: Quoting) -> list[str]:
@@ -350,7 +349,7 @@ def _words_of(quoting: Quoting) -> list[str]:
     found: dict[str, None] = {}
     for variant in quoting.variants:
         for chunk in WORD_BREAKS.split(variant):
-            for word in _braces(chunk) if chunk else []:
+            for word in _brace_words(chunk) if chunk else []:
                 found[word] = None
                 found.update(dict.fromkeys(part for part in PART_BREAKS.split(word) if part))
     return list(found)
@@ -1615,7 +1614,7 @@ def path_problem(
         check_word(path, [cwd], view, mode)
     if pattern is not None:
         where = [_resolve(path, cwd) or cwd for path in paths] or [cwd]
-        for word in _braces(pattern):
+        for word in _brace_words(pattern, one_word=True):
             check_word(word, where, view, mode)
 
 

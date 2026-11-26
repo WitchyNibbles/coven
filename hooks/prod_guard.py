@@ -513,13 +513,9 @@ CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
 # a write could reach the zone by: `/dev/shm` is a folder like /tmp, `/dev/tcp/HOST/PORT` a socket.
 ALIAS_FOLDERS = ("/proc", "/dev/fd", "/dev/stdin")
 DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
-# A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words the guard reads one word as
-# (`_brace_members`), a range's text, and a word of a text that holds a brace.
-BRACE_MEMBERS = 64
-BRACE_RANGE = re.compile(r"(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?|(\D)\.\.(\D)(?:\.\.(-?\d+))?")
-# A word that holds a `{`, matched only from its start: a long word is scanned once.
+# A word of a text that holds a brace expansion (`{a,b}`, `{1..3}`, nested too; `_brace_members`),
+# matched only from its start: a long word is scanned once.
 BRACE_WORD = re.compile(r"(?<![^\s;&|()<>`])[^\s;&|()<>`]*\{[^\s;&|()<>`]*")
-BRACE_OPENER = re.compile(r"(?<!\$)\{")
 # What `_glued_expansions` keeps in an expansion's word: blanks, separators, parentheses, braces
 # and backticks, as private-use characters.
 GLUED = str.maketrans({char: chr(0xE000 + at) for at, char in enumerate(" \t\n;&|(){}`<>")})
@@ -3573,103 +3569,18 @@ def _expansion_end(text: str, index: int) -> int:
 
 
 def _closing_brace(word: str, start: int) -> int:
-    """Where the brace that closes the `{` at `start` stands, nested braces counted; -1 when a
-    blank or the end of the text comes first."""
-    depth = 0
-    for at in range(start, len(word)):
-        char = word[at]
-        if char.isspace():
-            return -1
-        depth += (char == "{") - (char == "}")
-        if depth == 0:
-            return at
-    return -1
-
-
-class _Braces(NamedTuple):
-    """The first brace expansion of a word: where it starts, where it ends (past its `}`), and the
-    words it stands for, None when the guard cannot tell them (`_brace_group`)."""
-
-    start: int
-    end: int
-    alternatives: tuple[str, ...] | None
-
-
-def _brace_group(word: str) -> _Braces | None:
-    """The first brace expansion of a word: a `{...}` with a comma outside the braces in it
-    (`{a,{b,c}}`), or a range (`_range_members`); None when it has none. Not a `${`, nor a brace
-    that closes no list or range (`{}`, `{a}`). A range the guard cannot tell has no
-    alternatives: zsh expands `{1..$N}` after `$N`."""
-    index = 0
-    while (start := word.find("{", index)) >= 0:
-        index = start + 1
-        close = _closing_brace(word, start)
-        if close < 0 or word[start - 1 : start] == "$":
-            continue
-        content = word[start + 1 : close]
-        alternatives = _alternatives(content)
-        if len(alternatives) > 1:
-            return _Braces(start, close + 1, tuple(alternatives))
-        if ".." in content and UNPINNED_EXPANSION.search(content):
-            return _Braces(start, close + 1, None)
-        match = BRACE_RANGE.fullmatch(content)
-        if match:
-            return _Braces(start, close + 1, _range_members(match))
-    return None
-
-
-def _alternatives(content: str) -> list[str]:
-    """A brace list's words: its text cut at each comma outside the braces in it."""
-    found = [""]
-    depth = 0
-    for char in content:
-        depth += (char == "{") - (char == "}")
-        if char == "," and depth == 0:
-            found.append("")
-        else:
-            found[-1] += char
-    return found
-
-
-def _range_members(match: re.Match[str]) -> tuple[str, ...] | None:
-    """The words a brace range makes (BRACE_RANGE: `1..3`, `a..e`, `01..10..2`), zero-padded
-    when an end is; None past BRACE_MEMBERS."""
-    numbers = match[1] is not None
-    first, last, every = (match[1], match[2], match[3]) if numbers else match.group(4, 5, 6)
-    step = abs(int(every or 1)) or 1
-    low, high = (int(first), int(last)) if numbers else (ord(first), ord(last))
-    if abs(high - low) // step + 1 > BRACE_MEMBERS:
-        return None
-    values = range(low, high + (1 if high >= low else -1), step if high >= low else -step)
-    if not numbers:
-        return tuple(map(chr, values))
-    padded = any(len(end.lstrip("-")) > 1 and end.lstrip("-")[0] == "0" for end in (first, last))
-    width = max(len(first), len(last)) if padded else 0
-    return tuple(f"{value:0{width}d}" for value in values)
+    """shell_words.closing_brace: where the brace that closes the `{` at `start` stands."""
+    result: int = _shell_words().closing_brace(word, start)
+    return result
 
 
 def _brace_members(word: str) -> list[str] | None:
-    """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
-    `abd acd`, `{1..3}` is `1 2 3`, nested lists too); `[word]` when it has none. None when they
-    are more than BRACE_MEMBERS, or one cannot be told (`_brace_group`), or the word holds more
-    braces than BRACE_MEMBERS words could (minified JSON): each list or range is one `{`."""
-    if len(BRACE_OPENER.findall(word)) > BRACE_MEMBERS:
-        return None
-    group = _brace_group(word)
-    if group is None:
-        return [word]
-    if group.alternatives is None:
-        return None
-    heads: list[str] = []
-    for alternative in group.alternatives:
-        made = _brace_members(alternative)
-        if made is None:
-            return None
-        heads += made
-    tails = _brace_members(word[group.end :])
-    if tails is None or len(heads) * len(tails) > BRACE_MEMBERS:
-        return None
-    return [word[: group.start] + head + tail for head in heads for tail in tails]
+    """shell_words.brace_words: the words the shell makes of a word by its brace expansions
+    (`a{b,c}d` is `abd acd`, `{1..3}` is `1 2 3`); `[word]` when it has none. None when the guard
+    cannot tell them: more than BRACE_MEMBERS, a range that holds an expansion, or a word that
+    holds more than BRACE_MEMBERS braces (minified JSON)."""
+    result: list[str] | None = _shell_words().brace_words(word)
+    return result
 
 
 def _brace_expanded(text: str) -> str | None:
@@ -5312,9 +5223,10 @@ def _bash_touches(call: Call, zone: _Zone, *, follow_cds: bool = False) -> bool:
 def _loop_variants(command: str, code: str, glob_code: str) -> list[tuple[str, str]]:
     """The code and glob texts with the variable of each loop over literal words
     (`_literal_loops`) written as each of its words in turn; none when there is no such loop or
-    more than BRACE_MEMBERS ways to write them."""
+    more than shell_words.BRACE_MEMBERS ways to write them."""
     loops = _literal_loops(command)
-    if not loops or math.prod(map(len, loops.values())) > BRACE_MEMBERS:
+    cap: int = _shell_words().BRACE_MEMBERS
+    if not loops or math.prod(map(len, loops.values())) > cap:
         return []
     variants: list[tuple[str, str]] = []
     for values in itertools.product(*loops.values()):
