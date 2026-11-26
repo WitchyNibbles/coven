@@ -7,6 +7,7 @@
  */
 import { textOf } from "../harness/chat.ts";
 import type { ChatMessage, Reply } from "../harness/chat.ts";
+import type { Decide } from "../harness/fake-model.ts";
 import { SESSION_ID, sessionIDsIn } from "../harness/history.ts";
 
 interface ToolResult {
@@ -19,6 +20,8 @@ interface Conversation {
   toolNames: readonly string[];
   results: ToolResult[];
   params: Record<string, string>;
+  /** Where the fake workers' shell commands run. */
+  workdir: string;
 }
 
 const ROLE = /\b(CHILD|NEST|PARENT)\b/;
@@ -63,11 +66,20 @@ function shellName(toolNames: readonly string[]): string {
   return toolNames.includes("shell") ? "shell" : "bash";
 }
 
-function sleepCall(toolNames: readonly string[], seconds: string): Reply {
+/**
+ * One shell sleep, run in `workdir`: the e2e project sits inside coven's checkout, where the
+ * server guard allows only reading programs, so the sleep runs in a folder outside it.
+ */
+function sleepCall(
+  toolNames: readonly string[],
+  seconds: string,
+  workdir: string,
+): Reply {
   const args = {
     command: `sleep ${seconds}`,
     description: "work",
     timeout: 600000,
+    workdir,
   };
   return { kind: "calls", calls: [{ name: shellName(toolNames), args }] };
 }
@@ -78,7 +90,7 @@ function childReply(talk: Conversation): Reply {
   if (talk.results.some((r) => r.name === shellName(talk.toolNames))) {
     return { kind: "text", text: `REPORT from ${name}: slept ${sleep}s` };
   }
-  return sleepCall(talk.toolNames, sleep);
+  return sleepCall(talk.toolNames, sleep, talk.workdir);
 }
 
 function nestReply(talk: Conversation): Reply {
@@ -158,7 +170,7 @@ function parentDone(talk: Conversation): Reply {
   );
   const count = (talk.params["sleeps"] ?? "").split(",").length;
   if (!reportsComplete(talk, count) && polls.length < MAX_POLLS) {
-    return sleepCall(talk.toolNames, "1");
+    return sleepCall(talk.toolNames, "1", talk.workdir);
   }
   const last = awaits.at(-1)?.text.slice(0, 400) ?? "";
   return {
@@ -195,23 +207,24 @@ function parentReply(talk: Conversation): Reply {
     : parentDone(talk);
 }
 
-export function decide(
-  messages: readonly ChatMessage[],
-  toolNames: readonly string[],
-): Reply {
-  const first = userTexts(messages).find((text) => ROLE.test(text)) ?? "";
-  const role = ROLE.exec(first)?.[1];
-  const talk: Conversation = {
-    messages,
-    toolNames,
-    results: toolResults(messages),
-    params: parseParams(first.slice(first.search(ROLE))),
+/** The fake model's script, with every shell command it asks for run in `workdir`. */
+export function decideIn(workdir: string): Decide {
+  return (messages, toolNames) => {
+    const first = userTexts(messages).find((text) => ROLE.test(text)) ?? "";
+    const role = ROLE.exec(first)?.[1];
+    const talk: Conversation = {
+      messages,
+      toolNames,
+      results: toolResults(messages),
+      params: parseParams(first.slice(first.search(ROLE))),
+      workdir,
+    };
+    if (role === "CHILD") {
+      return childReply(talk);
+    }
+    if (role === "NEST") {
+      return nestReply(talk);
+    }
+    return role === "PARENT" ? parentReply(talk) : { kind: "text", text: "ok" };
   };
-  if (role === "CHILD") {
-    return childReply(talk);
-  }
-  if (role === "NEST") {
-    return nestReply(talk);
-  }
-  return role === "PARENT" ? parentReply(talk) : { kind: "text", text: "ok" };
 }

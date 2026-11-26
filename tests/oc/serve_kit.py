@@ -16,14 +16,17 @@ from coven.opencode import serve
 from coven.opencode.profile import load_profile
 
 WAIT = 10.0
+# 2.3.2 ends a session listing on a page whose cursor object holds nothing.
+LAST_CURSOR = {"previous": None, "next": None}
 # The server's answer to every route the fake does not know.
-SESSIONS = {"data": [], "cursor": None}
+SESSIONS = {"data": [], "cursor": LAST_CURSOR}
 ACTIVE_PLUGINS = {"data": [{"id": "coven", "state": {"status": "active"}}]}
 SKILLS = {"data": [{"id": "opencode", "path": "skill://opencode/SKILL.md"}]}
 
 # The stand-in for the 2.3.2 binary. `routes` maps a request path to the JSON it answers with,
 # once the basic-auth password matches. `mute` makes it listen to nothing and print nothing;
-# `ignore_term` makes it ignore SIGTERM; `exit_at_once` makes it exit before it listens.
+# `ignore_term` makes it ignore SIGTERM; `exit_at_once` makes it exit before it listens;
+# `echo_requests` makes it print one line per request, as a server that keeps writing its log.
 FAKE_OPENCODE = """#!%(python)s
 import base64
 import json
@@ -38,6 +41,8 @@ CONFIG = json.loads(%(config)r)
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if CONFIG.get("echo_requests"):
+            print("request " + self.path, flush=True)
         token = base64.b64encode(("opencode:" + os.environ["OPENCODE_SERVER_PASSWORD"]).encode())
         if self.headers.get("Authorization") != "Basic " + token.decode():
             self.send_response(401)

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { ShellCreateEvent } from "../src/context.ts";
-import { scrubShellEnv } from "../src/shell-env.ts";
 import { PROFILE_OPTIONS, bootCoven } from "./plugin-fixture.ts";
 
 const KEY = "GATEWAY_KEY";
@@ -19,50 +18,8 @@ function shellEvent(env: Record<string, string>) {
   } satisfies ShellCreateEvent & Record<string, unknown>;
 }
 
-await test("the key variable and the server password are removed", () => {
-  const event = shellEvent({ [KEY]: "k", [PASSWORD]: "p", PATH: "/bin" });
-  scrubShellEnv(KEY)(event);
-  assert.deepEqual(event.env, { PATH: "/bin" });
-});
-
-await test("every other variable is left alone, near-misses included", () => {
-  const env = {
-    HOME: "/h",
-    PATH: "/bin",
-    [`${KEY}_2`]: "other",
-    [`X_${KEY}`]: "other",
-    OPENCODE_SERVER_USERNAME: "opencode",
-    [KEY.toLowerCase()]: "lower",
-  };
-  const event = shellEvent({ ...env, [KEY]: "k", [PASSWORD]: "p" });
-  scrubShellEnv(KEY)(event);
-  assert.deepEqual(event.env, env);
-});
-
-await test("an env without them is left as it was, with no keys added", () => {
-  const env = { PATH: "/bin" };
-  const event = shellEvent({ ...env });
-  scrubShellEnv(KEY)(event);
-  assert.deepEqual(event.env, env);
-  assert.deepEqual(Object.keys(event.env), ["PATH"]);
-});
-
-await test("only the key variable is removed when the password is absent", () => {
-  const event = shellEvent({ [KEY]: "k", PATH: "/bin" });
-  scrubShellEnv(KEY)(event);
-  assert.deepEqual(event.env, { PATH: "/bin" });
-});
-
-await test("the rest of the event is not touched", () => {
-  const event = shellEvent({ [KEY]: "k" });
-  scrubShellEnv(KEY)(event);
-  assert.deepEqual(
-    { ...event, env: undefined },
-    { ...shellEvent({}), env: undefined },
-  );
-});
-
-await test("the plugin registers one create.before shell hook that scrubs", async () => {
+/** Runs the plugin's own `create.before` hook on `env`; returns the event afterwards. */
+async function throughPlugin(env: Record<string, string>) {
   const p = bootCoven({
     options: {
       covenRoot: "/c",
@@ -76,8 +33,48 @@ await test("the plugin registers one create.before shell hook that scrubs", asyn
     p.shellHooks.map((hook) => hook.name),
     ["create.before"],
   );
-  const event = shellEvent({ [KEY]: "k", [PASSWORD]: "p", PATH: "/bin" });
+  const event = shellEvent(env);
   await p.shellHooks[0]?.callback(event);
-  assert.deepEqual(event.env, { PATH: "/bin" });
   cleanup();
+  return event;
+}
+
+await test("the key variable and the server password are removed", async () => {
+  const event = await throughPlugin({
+    [KEY]: "k",
+    [PASSWORD]: "p",
+    PATH: "/bin",
+  });
+  assert.deepEqual(event.env, { PATH: "/bin" });
+});
+
+await test("every other variable is left alone, near-misses included", async () => {
+  const env = {
+    HOME: "/h",
+    PATH: "/bin",
+    [`${KEY}_2`]: "other",
+    [`X_${KEY}`]: "other",
+    OPENCODE_SERVER_USERNAME: "opencode",
+    [KEY.toLowerCase()]: "lower",
+  };
+  const event = await throughPlugin({ ...env, [KEY]: "k", [PASSWORD]: "p" });
+  assert.deepEqual(event.env, env);
+});
+
+await test("an env without them is left as it was, with no keys added", async () => {
+  const event = await throughPlugin({ PATH: "/bin" });
+  assert.deepEqual(Object.keys(event.env), ["PATH"]);
+});
+
+await test("only the key variable is removed when the password is absent", async () => {
+  const event = await throughPlugin({ [KEY]: "k", PATH: "/bin" });
+  assert.deepEqual(event.env, { PATH: "/bin" });
+});
+
+await test("the rest of the event is not touched", async () => {
+  const event = await throughPlugin({ [KEY]: "k" });
+  assert.deepEqual(
+    { ...event, env: undefined },
+    { ...shellEvent({}), env: undefined },
+  );
 });

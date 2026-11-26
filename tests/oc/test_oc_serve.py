@@ -6,15 +6,17 @@ import signal
 import socket
 import stat
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 from doctor_kit import Good
-from serve_kit import Procs, install_fake, start
+from serve_kit import LAST_CURSOR, Procs, install_fake, start
 
 from coven import cli
 from coven.opencode import serve
+from coven.opencode.canary import http_json
 from coven.opencode.profile import OpencodeError
 
 PASSWORD_SHAPE = re.compile(r"[0-9a-f]{64}")
@@ -39,6 +41,40 @@ def test_start_writes_password_port_pid_and_answers(fake: Good, procs: Procs) ->
     assert int(files.port.read_text()) == info.port
     assert f"server listening on http://127.0.0.1:{info.port}" in files.log.read_text()
     assert serve.running(fake.layout) == info
+
+
+def test_a_port_file_write_that_fails_leaves_the_old_port_file_whole(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The server guard reads a port file that is there but not a port as "refuse every loopback
+    # port", so a reader must never see it half written: a write that dies midway leaves the
+    # earlier file as it was, and no stray file in the serve folder.
+    files = serve.files(fake.layout)
+    files.password.parent.mkdir(parents=True, exist_ok=True)
+    files.password.write_text("0" * 64 + "\n")  # kept by the start, so only the port file syncs
+    files.port.write_text("11111\n")
+
+    def failing_sync(_fd: int) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "fsync", failing_sync)
+
+    with pytest.raises(OSError, match="disk full"):
+        start(fake, procs)
+
+    assert files.port.read_text() == "11111\n"
+    assert list(files.port.parent.glob("coven-*")) == []
+
+
+def test_a_started_server_leaves_a_whole_port_file_and_no_stray_file(
+    fake: Good, procs: Procs
+) -> None:
+    info = start(fake, procs)
+
+    files = serve.files(fake.layout)
+    assert files.port.read_text() == f"{info.port}\n"
+    assert stat.S_IMODE(files.port.stat().st_mode) == serve.PORT_MODE
+    assert list(files.port.parent.glob("coven-*")) == []
 
 
 def test_password_is_kept_across_starts(fake: Good, procs: Procs) -> None:
@@ -88,6 +124,50 @@ def test_stop_kills_and_removes_pid_and_port_keeps_password(fake: Good, procs: P
     assert serve.running(fake.layout) is None
     assert info.pid == procs.started[0].pid
     assert serve.stop(fake.layout) is False
+
+
+def test_stop_of_a_server_that_died_unreaped_succeeds(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A dead child nobody has reaped is a zombie: resolving its /proc/<pid>/exe raises.
+    start(fake, procs)
+    files = serve.files(fake.layout)
+    resolve = os.path.realpath
+
+    def zombie_proc(path: str, *args: Any, **kwargs: Any) -> str:
+        if str(path).startswith("/proc/"):
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(serve.os.path, "realpath", zombie_proc)
+
+    assert serve.running(fake.layout) is None
+    assert serve.stop(fake.layout, grace_s=0.2) is False
+    assert not files.pid.exists()
+    assert not files.port.exists()
+    assert files.password.is_file()
+
+
+def test_stop_of_a_server_that_dies_while_stopping_succeeds(
+    fake: Good, procs: Procs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The server is alive when stop looks and a zombie when stop waits for it to go.
+    info = start(fake, procs)
+    resolve = os.path.realpath
+    proc = f"/proc/{info.pid}/exe"
+    reads: list[str] = []
+
+    def zombie_after_term(path: str, *args: Any, **kwargs: Any) -> str:
+        if str(path) == proc and reads:
+            raise FileNotFoundError(2, "No such file or directory", proc)
+        if str(path) == proc:
+            reads.append(proc)
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(serve.os.path, "realpath", zombie_after_term)
+
+    assert serve.stop(fake.layout, grace_s=5.0) is True
+    assert not serve.files(fake.layout).pid.exists()
 
 
 def no_sigkill(pid: int, signum: int) -> None:
@@ -155,6 +235,48 @@ def test_a_stale_start_lock_is_replaced_and_released(fake: Good, procs: Procs) -
 
     assert serve.running(fake.layout) == info
     assert not lock.exists()
+
+
+def _pidless_lock(layout: Any, age_s: float) -> Path:
+    """A start lock with no pid in it (a crash between its creation and the pid write)."""
+    lock = serve.files(layout).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_text("")
+    then = time.time() - age_s
+    os.utime(lock, (then, then))
+    return lock
+
+
+def test_a_pidless_start_lock_older_than_the_wait_is_replaced(fake: Good, procs: Procs) -> None:
+    lock = _pidless_lock(fake.layout, age_s=60.0)
+
+    info = start(fake, procs, wait_s=5.0)
+
+    assert serve.running(fake.layout) == info
+    assert not lock.exists()
+
+
+def test_a_fresh_pidless_start_lock_is_refused_and_named(fake: Good, procs: Procs) -> None:
+    lock = _pidless_lock(fake.layout, age_s=0.0)
+
+    with pytest.raises(serve.ServeError, match=f"a server is starting.*{re.escape(str(lock))}"):
+        start(fake, procs, wait_s=5.0)
+
+    assert procs.started == []
+    assert lock.exists()
+
+
+def test_a_live_holders_lock_is_never_stale_by_age(fake: Good, procs: Procs) -> None:
+    lock = serve.files(fake.layout).lock
+    lock.parent.mkdir(parents=True)
+    lock.write_text(f"{os.getpid()}\n")
+    then = time.time() - 3600
+    os.utime(lock, (then, then))
+
+    with pytest.raises(serve.ServeError, match=f"a server is starting.*{re.escape(str(lock))}"):
+        start(fake, procs, wait_s=5.0)
+
+    assert procs.started == []
 
 
 def test_the_server_env_has_no_username(
@@ -241,8 +363,8 @@ def test_status_lists_pm_sessions(
         {"id": "ses_plain", "title": "chat"},
     ]
     routes = {
-        "/api/session": {"data": sessions, "cursor": None},
-        "/api/session/active": {"data": [{"id": "ses_x1"}]},
+        "/api/session": {"data": sessions, "cursor": LAST_CURSOR},
+        "/api/session/active": {"data": {"ses_x1": {"type": "running"}}},
         "/api/session/ses_x1/permission": {"data": []},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
@@ -257,12 +379,55 @@ def test_status_lists_pm_sessions(
     assert "ASK WAITING" not in lines[1]
 
 
+@pytest.mark.parametrize(
+    "case",
+    [({}, "idle"), ({"ses_x1": {"type": "running"}}, "busy"), ({"ses_other": {}}, "idle")],
+)
+def test_status_reads_the_active_sessions_as_an_object_keyed_by_session_id(
+    good: Good,
+    procs: Procs,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: tuple[dict[str, Any], str],
+) -> None:
+    active, word = case
+    routes = {
+        "/api/session": {"data": [pm_session("x1")], "cursor": LAST_CURSOR},
+        "/api/session/active": {"data": active},
+        "/api/session/ses_x1/permission": {"data": []},
+    }
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 2
+    assert lines[1].split("  ")[:2] == ["pm-x1", word]
+
+
+def test_status_says_why_when_the_active_sessions_are_not_an_object(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = {
+        "/api/session": {"data": [pm_session("x1")], "cursor": LAST_CURSOR},
+        "/api/session/active": {"data": [{"id": "ses_x1"}]},
+        "/api/session/ses_x1/permission": {"data": []},
+    }
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    info = start(good, procs)
+
+    assert serve.status(good.layout) == [
+        f"running pid {info.pid} port {info.port}",
+        "sessions unavailable: GET /api/session/active returned no data object",
+    ]
+
+
 def test_status_shows_a_waiting_ask(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     routes = {
-        "/api/session": {"data": [pm_session("x1", outcome="succeeded")], "cursor": None},
-        "/api/session/active": {"data": []},
+        "/api/session": {"data": [pm_session("x1", outcome="succeeded")], "cursor": LAST_CURSOR},
+        "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": [{"id": "per_42"}]},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
@@ -289,8 +454,8 @@ def test_status_names_an_ask_by_its_request_id_or_says_it_has_none(
 ) -> None:
     ask, shown = case
     routes = {
-        "/api/session": {"data": [pm_session("x1")], "cursor": None},
-        "/api/session/active": {"data": []},
+        "/api/session": {"data": [pm_session("x1")], "cursor": LAST_CURSOR},
+        "/api/session/active": {"data": {}},
         "/api/session/ses_x1/permission": {"data": [ask]},
     }
     install_fake(tmp_path, monkeypatch, routes=routes)
@@ -301,14 +466,55 @@ def test_status_names_an_ask_by_its_request_id_or_says_it_has_none(
     assert f"ASK WAITING (bug) {shown}" in lines[1]
 
 
-def test_status_warns_when_the_session_list_has_another_page(
+def paged_routes(*pages: tuple[str, list[dict[str, Any]], str | None]) -> dict[str, Any]:
+    """The routes of a listing in pages: (request path, sessions, `cursor.next`) for each page."""
+    routes: dict[str, Any] = {"/api/session/active": {"data": {}}}
+    for path, sessions, after in pages:
+        routes[path] = {"data": sessions, "cursor": {"previous": None, "next": after}}
+        for session in sessions:
+            routes[f"/api/session/{session['id']}/permission"] = {"data": []}
+    return routes
+
+
+def test_status_follows_the_cursor_to_the_page_that_has_none(
     good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    routes = {
-        "/api/session": {"data": [pm_session("x1")], "cursor": "next-page"},
-        "/api/session/active": {"data": []},
-        "/api/session/ses_x1/permission": {"data": []},
-    }
+    # 2.3.2: a string `next` on every page with sessions, then an empty page whose `next` is null;
+    # the cursor goes into the query encoded
+    routes = paged_routes(
+        ("/api/session", [pm_session("x1")], "c 1+"),
+        ("/api/session?cursor=c+1%2B", [pm_session("x2")], "c2"),
+        ("/api/session?cursor=c2", [], None),
+    )
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert [line.split("  ")[0] for line in lines[1:]] == ["pm-x1", "pm-x2"]
+
+
+def test_status_ends_the_walk_on_an_empty_next(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = paged_routes(("/api/session", [pm_session("x1")], ""))
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 2
+    assert "pm-x1" in lines[1]
+
+
+def test_status_warns_only_when_the_page_cap_stops_the_walk(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a server whose every page says there is another one
+    routes = paged_routes(
+        ("/api/session", [pm_session("x1")], "again"),
+        ("/api/session?cursor=again", [], "again"),
+    )
     install_fake(tmp_path, monkeypatch, routes=routes)
     start(good, procs)
 
@@ -316,7 +522,21 @@ def test_status_warns_when_the_session_list_has_another_page(
 
     assert len(lines) == 3
     assert "pm-x1" in lines[1]
-    assert lines[2] == "more sessions exist; this list may be incomplete"
+    assert lines[2] == serve.MORE_SESSIONS
+    assert serve.MAX_SESSION_PAGES == 20
+
+
+def test_status_is_unavailable_when_a_later_page_fails(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes = paged_routes(("/api/session", [pm_session("x1")], "gone"))
+    install_fake(tmp_path, monkeypatch, routes=routes)
+    start(good, procs)
+
+    lines = serve.status(good.layout)
+
+    assert len(lines) == 2
+    assert lines[1].startswith("sessions unavailable")
 
 
 def test_run_refuses_while_server_runs(
@@ -350,3 +570,25 @@ def test_the_command_starts_reports_and_stops_a_server(
     assert serve.running(fake.layout) is None
     assert cli.main(["opencode", "serve", "stop"]) == 0
     assert capsys.readouterr().out == "no server was running\n"
+
+
+def test_a_started_server_shares_its_log_with_the_plugins_writes(
+    good: Good, procs: Procs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_fake(tmp_path, monkeypatch, echo_requests=True)
+    log = serve.files(good.layout).log
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("a line of an earlier run\n")
+
+    info = start(good, procs)
+    with log.open("ab") as plugin_writer:  # an undelivered notice
+        plugin_writer.write(b"coven notice\n")
+    password = serve.read_password(good.layout)
+    http_json("GET", f"http://127.0.0.1:{info.port}/api/session", password)
+
+    lines = log.read_text().splitlines()
+    assert "a line of an earlier run" not in lines
+    assert f"server listening on http://127.0.0.1:{info.port}" in lines
+    assert lines.count("coven notice") == 1
+    assert lines[-1] == "request /api/session"
+    assert lines.index("coven notice") < len(lines) - 1

@@ -11,7 +11,7 @@ export interface HistoryItem {
 export interface Host {
   getSession(
     id: string,
-  ): Promise<{ id: string; parentID?: string } | undefined>;
+  ): Promise<{ id: string; parentID?: string | null } | undefined>;
   history(sessionID: string): Promise<HistoryItem[]>;
   lastAssistantText(sessionID: string): Promise<string>;
   waitIdle(sessionID: string, signal: AbortSignal): Promise<void>;

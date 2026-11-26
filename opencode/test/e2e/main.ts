@@ -4,7 +4,7 @@
  * loopback interface and starts this file there. It does nothing unless COVEN_E2E=1, and it
  * refuses to start outside that namespace.
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,9 +21,11 @@ import { CHECKS } from "./checks.ts";
 import type { Runs } from "./checks.ts";
 import { runScenario } from "./join-run.ts";
 import type { Harness } from "./join-run.ts";
+import { evaluateSuite } from "./evaluate/checks.ts";
+import { pmApiSuite } from "./pm-api/checks.ts";
 import { runtimeSuite } from "./runtime/checks.ts";
 import type { Outcome } from "./runtime/checks.ts";
-import { decide } from "./script.ts";
+import { decideIn } from "./script.ts";
 
 const PROJECT = fileURLToPath(new URL("./project", import.meta.url));
 
@@ -74,6 +76,8 @@ const joinSuite: Suite = async (harness) => {
 const SUITES: Record<string, Suite> = {
   runtime: runtimeSuite,
   join: joinSuite,
+  evaluate: evaluateSuite,
+  "pm-api": pmApiSuite,
 };
 
 /** The suites to run, or the refusal when one is not known. */
@@ -131,7 +135,10 @@ async function main(argv: readonly string[]): Promise<number> {
     return 1;
   }
   const root = await mkdtemp(join(tmpdir(), "coven-e2e-"));
-  const model = await startFakeModel({ decide });
+  // the fake workers' shell commands run here, outside coven's checkout (where the project sits)
+  const workdir = join(root, "work");
+  await mkdir(workdir);
+  const model = await startFakeModel({ decide: decideIn(workdir) });
   try {
     return (await runSuites(names, { binary, project: PROJECT, root })) === 0
       ? 0

@@ -58,8 +58,19 @@ function patchOf(...lines: string[]): { patchText: string } {
   };
 }
 
-function files(p: { spawned: readonly { stdin: string }[] }): string[] {
-  return p.spawned.map(
+/** The deny-secrets children: the other guards of a call see the same payloads. */
+function denyCalls<T extends { args: readonly string[] }>(p: {
+  spawned: readonly T[];
+}): T[] {
+  return p.spawned.filter((call) =>
+    (call.args[1] ?? "").endsWith("deny_secrets.py"),
+  );
+}
+
+function files(p: {
+  spawned: readonly { stdin: string; args: readonly string[] }[];
+}): string[] {
+  return denyCalls(p).map(
     (call) =>
       (JSON.parse(call.stdin) as { tool_input: { file_path: string } })
         .tool_input.file_path,
@@ -96,16 +107,16 @@ await test("a refused call throws the guard's text from the hook", async () => {
   );
 });
 
-await test("an allowed call resolves and the payload carries the session directory", async () => {
+await test("an allowed call resolves and the payload carries the call's workdir", async () => {
   const { p, hook } = await guardHook();
   await hook.callback(executeBefore("shell", { command: "ls", workdir: "/x" }));
   assert.deepEqual(
-    p.spawned.map((call) => JSON.parse(call.stdin) as unknown),
+    denyCalls(p).map((call) => JSON.parse(call.stdin) as unknown),
     [
       {
         tool_name: "Bash",
         tool_input: { command: "ls", workdir: "/x" },
-        cwd: DIRECTORY,
+        cwd: "/x",
         hook_event_name: "PreToolUse",
       },
     ],
@@ -117,10 +128,33 @@ await test("an allowed call resolves and the payload carries the session directo
   ]);
 });
 
+await test("a call with no workdir carries the session directory", async () => {
+  const { p, hook } = await guardHook();
+  await hook.callback(executeBefore("read", { path: "a.txt" }));
+  assert.equal(
+    (JSON.parse(p.spawned[0]?.stdin ?? "{}") as { cwd: string }).cwd,
+    DIRECTORY,
+  );
+});
+
 await test("a tool the guard does not check starts no child", async () => {
   const { p, hook } = await guardHook();
-  await hook.callback(executeBefore("webfetch", { url: "https://x" }));
+  await hook.callback(executeBefore("coven_ping", {}));
   assert.deepEqual(p.spawned, []);
+});
+
+await test("webfetch is checked: both guards read its url", async () => {
+  const { p, hook } = await guardHook();
+  await hook.callback(executeBefore("webfetch", { url: "https://x" }));
+  assert.equal(p.spawned.length, 2);
+  for (const child of p.spawned) {
+    assert.deepEqual(JSON.parse(child.stdin), {
+      tool_name: "WebFetch",
+      tool_input: { url: "https://x" },
+      cwd: DIRECTORY,
+      hook_event_name: "PreToolUse",
+    });
+  }
 });
 
 await test("a checked tool with a non-object input is refused", async () => {

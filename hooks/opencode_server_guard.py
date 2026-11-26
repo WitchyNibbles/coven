@@ -17,7 +17,9 @@ What it refuses:
   after a program that may run it (everything but a short list of programs that never run their
   arguments: `echo`, `grep`, `ls`, `git`...);
 - any text that names the server's port, a WebFetch URL included (read from `<serve>/port` at
-  call time; with no usable port file, any loopback address with a port);
+  call time; with no port file no server listens and only the `opencode` commands are refused,
+  while a port file that cannot be read or holds no port refuses any loopback address with a
+  port);
 - a read, grep or glob of the serve folder or the profile's `data/` folder, and
   `/proc/<pid>/environ`, `ps` options that print environments (`e`, `-E`, `eww`);
 - a folder that holds the serve or the `data/` folder (the profile, `/`...) for the file tools, and
@@ -27,9 +29,12 @@ What it refuses:
   diff|show|grep|blame`...) and nothing is redirected to a file. That covers the words of the
   line, the working folder and every folder a `cd` moves to (a bare `cd`, also with a redirection,
   is home), so `rg password` run in the folder that holds the profile is refused, unless the line
-  first moves to a literal folder that holds no closed place (`cd proj && ...`, `git -C proj`); a
-  `cd` whose folder cannot be known (`cd -`, `cd ~-`, `cd $UNSET`, which bash runs as a bare `cd`)
-  is refused on a line with a program that reads;
+  first moves to a literal folder that holds no closed place (`cd proj && ...` with the rest of
+  the line joined by `&&`: a `;` or a new line runs on when the `cd` fails; a lone
+  `git -C proj ...`; and no file written by that first command); a `cd` whose folder cannot be known (`cd -`, `cd ~-`,
+  `cd $UNSET`, which bash runs as a bare `cd`, `pushd +1`) and a word that names a folder
+  only the shell remembers (`$OLDPWD`, `~-`, `~1`) are refused on a line with a program that
+  reads;
 - an option or variable that makes git, man or rg run a command (`git -c`, `git bisect run`,
   `git rebase --exec`, `git submodule foreach`, `git difftool -x`, `man -P`, also in a bundle such
   as `-qx`, `rg --pre`, and `GIT_*=`, `PAGER=`, `EDITOR=` assigned before a program or exported),
@@ -40,7 +45,8 @@ What it refuses:
 - a write, edit or patch, and any shell command that names a path, in the protected set: the
   profile except its `tmp/` folder, the serve folder, and the coven root except its
   `.claude/worktrees/` folder; from a working folder in coven's checkout, a line runs only when it
-  only reads, or adds (or lists) a worktree under `.claude/worktrees/`;
+  only reads, adds (or lists) a worktree under `.claude/worktrees/`, or first moves into one the
+  way a line moves out of a folder that holds the profile (it is then judged from the worktree);
 - a command substitution (`$(...)`, backticks) that builds a program name, a path or a `cd`
   target, because what it prints is not seen: the text says to inline the substitution or write
   the path literally (a quoted heredoc body is literal text, not read for this);
@@ -112,6 +118,16 @@ TOOL_MODES = {
 PATH_KEYS = ("file_path", "notebook_path", "path")
 
 
+class PortFile(Enum):
+    """The server's port file when it gives no port."""
+
+    MISSING = auto()  # no server: only the `opencode` commands are refused
+    UNREADABLE = auto()  # there but not a port: every loopback port is refused
+
+
+type Port = int | PortFile
+
+
 class RefusedError(Exception):
     """A call the guard refuses; the text says which rule."""
 
@@ -129,11 +145,11 @@ class Scope:
     tmp: Path
     coven: Path
     worktrees: Path
-    port: int | None
+    port: Port
     home: Path
 
     @classmethod
-    def of(cls, profile: Path, serve: Path, coven_root: Path, port: int | None) -> Self:
+    def of(cls, profile: Path, serve: Path, coven_root: Path, port: Port) -> Self:
         real_profile = _real(profile)
         real_root = _real(coven_root)
         return cls(
@@ -207,17 +223,17 @@ def hit(path: Path, scope: Scope, mode: Mode, *, coven_open: bool = False) -> st
     """The rule a real path breaks, or None. With `coven_open` (a line that only reads, run in
     coven's checkout), coven's own files are open; the profile is not."""
     if path.is_relative_to(scope.serve):
-        return "the server's serve folder (its password) is closed to a PM"
+        return "the server's serve folder (its password) is closed to OpenCode sessions"
     if re.fullmatch(r"/proc/[^/]+(?:/task/[^/]+)?/environ", str(path)):
-        return "another process's environment is closed to a PM"
+        return "another process's environment is closed to OpenCode sessions"
     if mode is Mode.READ:
         if path.is_relative_to(scope.data):
-            return "the profile's data folder (credentials and sessions) is closed to a PM"
+            return "the profile's data folder (credentials and sessions) is closed to OpenCode sessions"
         return None
     in_profile = path.is_relative_to(scope.profile) and not path.is_relative_to(scope.tmp)
     in_coven = not coven_open and _in_coven_checkout(path, scope)
     if in_profile or in_coven:
-        return "the profile and coven's own files are protected from a PM"
+        return "the profile and coven's own files are protected from OpenCode sessions"
     return None
 
 
@@ -264,6 +280,8 @@ RUNNING_VARIABLE = re.compile(r"(GIT_\w+|\w*PAGER|\w*EDITOR|VISUAL)(\+?=)(.*)", 
 PLAIN_PAGERS = frozenset({"", "cat", "less"})
 # `cd ~-`, `cd ~2`, `cd ~+1`, `cd ~-1`: the previous folder or one of the folder stack.
 STACK_TILDE = re.compile(r"~(?:-\d*|\+?\d+)(?:/.*)?", re.DOTALL)
+# `pushd +1`, `pushd -0` (and zsh's `cd +1`): a turn of the folder stack.
+STACK_TURN = re.compile(r"[+-]\d+")
 # Builtins whose arguments are assignments (`export PAGER=x`).
 ASSIGNING_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
 # Variables of the PM's shell that this process's own environment cannot answer for.
@@ -418,8 +436,15 @@ def _glob_matches(pattern: str, folder: Path, scope: Scope, mode: Mode) -> list[
 
 def _candidates(word: str, bases: Sequence[Path], cwd: Path, names: Names) -> list[str]:
     """The absolute forms of a word, from each folder it may be read in; raises RefusedError for a
-    path built from a variable the guard cannot read."""
-    expanded = _tilde(names.expand(_drop_dollar(word)), cwd)
+    path built from a variable the guard cannot read or from a folder the shell remembers."""
+    named = names.expand(_drop_dollar(word))
+    # `~-/x`, `~1/x`: bash reads the folder stack; Python would read them as relative paths.
+    if "/" in named and STACK_TILDE.fullmatch(named):
+        raise RefusedError(
+            "a path from a folder the shell remembers (`~-`, `~1`) cannot be checked;"
+            " write the folder literally"
+        )
+    expanded = _tilde(named, cwd)
     if UNRESOLVED.search(expanded) and "/" in expanded and not expanded.startswith("//"):
         raise RefusedError("a path built from an unknown variable cannot be checked")
     if os.path.isabs(expanded):
@@ -507,6 +532,20 @@ def _cd_target(words: str) -> str | None:
     return None
 
 
+def _names_no_folder(target: str) -> bool:
+    """Whether a `cd` or `pushd` target is a place in the shell's own memory, not a folder:
+    `-`, `~-`, `~N`, `+N`, `-N`."""
+    return target == "-" or bool(STACK_TILDE.fullmatch(target) or STACK_TURN.fullmatch(target))
+
+
+def _names_a_remembered_folder(word: str) -> bool:
+    """Whether a word is, or holds, a folder only the PM's shell knows: `$OLDPWD`, `~-`, `~N`."""
+    return bool(STACK_TILDE.fullmatch(word)) or any(
+        (match.group(1) or match.group(2)) in SHELL_ONLY_VARIABLES
+        for match in VARIABLE.finditer(word)
+    )
+
+
 @dataclass(frozen=True)
 class Moves:
     """The working folder, every folder a `cd` or `pushd` of the line moves to, in order (the
@@ -530,8 +569,8 @@ def _moves(quoting: Quoting, cwd: Path, names: Names, scope: Scope) -> Moves:
         here = cwd
         for verb, words in CD_LINE.findall(variant):
             target = _cd_target(words)
-            expanded = ""  # `cd`, `cd -`, `cd ~-`: no folder named
-            if target is not None and target != "-" and not STACK_TILDE.fullmatch(target):
+            expanded = ""  # `cd`, `cd -`, `cd ~-`, `pushd +1`: no folder named
+            if target is not None and not _names_no_folder(target):
                 expanded = _tilde(names.expand(target), here)
             moved: Path | None
             if target is None and verb == "cd":
@@ -659,6 +698,15 @@ OPTION_SYNTAX = {
     "busybox": _wrapper(),
 }
 RUNNER_OPTIONS = _wrapper("-p --package -c --call -C --prefix --workspace -w")
+# Launcher options known to take no value, so the word after one is the program; any other option
+# may take the next word as its value. `-n` only for poetry: `conda run -n <env>` takes one.
+LAUNCHER_FLAGS = frozenset(
+    {
+        *("-q", "-v", "--quiet", "--verbose", "--frozen", "--locked", "--no-sync"),
+        *("--offline", "--isolated", "--all-extras", "--no-dev", "--no-project"),
+    }
+)
+LAUNCHER_OWN_FLAGS = {"poetry": frozenset({"-n", "--no-interaction"})}
 FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 COMMAND_STRING_OPTIONS = frozenset({"-c", "--call"})
 RUNNER_NAMES = frozenset({"npx", "bunx", "pnpx", *RUNNER_ARGUMENTS})
@@ -722,10 +770,20 @@ NULL_REDIRECTION = re.compile(r"(?:\d+|&)?>>?\s*/dev/null\b|\d*>&(?:\d+|-)")
 # The git options before `worktree add` that take a value, and the folder a PM may add one in.
 WORKTREE_ADD_VALUED = frozenset({"-b", "-B", "--reason"})
 COVEN_CHECKOUT_RULE = (
-    "coven's own checkout is read-only to a PM: run reading programs here, or add a worktree"
+    "coven's own checkout is read-only to OpenCode sessions: run reading programs here, or add a worktree"
     " with `git worktree add .claude/worktrees/<name>` and work under .claude/worktrees/"
+    " (`cd .claude/worktrees/<name> && ...`; a `;` or a new line does not count)"
 )
-WORKING_FOLDER_RULE = "the working folder holds coven's {}; cd into a project folder first"
+WORKING_FOLDER_RULE = (
+    "the working folder holds coven's {}; cd into a project folder first"
+    " (`cd <dir> && ...`; a `;` or a new line does not count)"
+)
+UNREAD_LINE_RULE = (
+    "the working folder holds coven's {} and the guard could not read this line{}, so its first"
+    " `cd` cannot be followed; write the line plainly"
+)
+# What in a line may stop the scanner, as written in the refusal.
+UNREAD_CONSTRUCTS = (("${", "`${...}`"), ("`", "backticks"))
 
 
 def _base(word: str) -> str:
@@ -1126,16 +1184,29 @@ def _runs_unknown_variable(words: Sequence[str], command: Sequence[str], names: 
 
 
 def _launched(command: Sequence[str]) -> list[str]:
-    """The program a launcher runs (`uv run X`, `uvx X`, `pipx run X`, `poetry run X`): the first
-    word after its options and its run word; none for a program that is not a launcher."""
+    """The words that may be the program a launcher runs (`uv run X`, `uvx X`, `pipx run X`,
+    `poetry run X`); none for a program that is not a launcher. Which of the launcher's options
+    take a value is not known, so a word after an option may be its value or the program: each
+    such word counts, up to the first word that cannot be a value (`uv run --with foo $x db`
+    counts `foo` and `$x`; `uv run pytest -k $sha` counts only `pytest`)."""
     name = _base(command[0])
     if name not in wrapper_commands.LAUNCHERS:
         return []
     run_words = wrapper_commands.LAUNCHER_RUN_WORDS.get(name, frozenset({"run"}))
+    flags = LAUNCHER_FLAGS | LAUNCHER_OWN_FLAGS.get(name, frozenset())
+    found: list[str] = []
+    may_be_a_value = False
     for word in command[1:]:
-        if not (word.startswith("-") or word in run_words):
-            return [word]
-    return []
+        if word in run_words:
+            may_be_a_value = False
+        elif word.startswith("-"):
+            may_be_a_value = "=" not in word and word not in flags
+        else:
+            found.append(word)
+            if not may_be_a_value:
+                break
+            may_be_a_value = False
+    return found
 
 
 def _sets_a_running_variable(prefix: Sequence[str], command: Sequence[str]) -> bool:
@@ -1166,20 +1237,24 @@ def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -
     if OPENCODE_NAME.fullmatch(name):
         if tuple(command[1:]) not in ALLOWED_OPENCODE:
             raise RefusedError(
-                "`opencode` is closed to a PM but for `opencode --version` and `--help`"
+                "`opencode` is closed to OpenCode sessions but for `opencode --version` and `--help`"
             )
     elif name not in NEVER_EXECUTES and (
         _names_opencode([each for each in words if each not in strings], cwd)
         or _names_opencode([each for each in command if each not in strings], cwd)
     ):
-        raise RefusedError("a program that may run `opencode` is closed to a PM when it names it")
+        raise RefusedError(
+            "a program that may run `opencode` is closed to OpenCode sessions when it names it"
+        )
 
 
 def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     words = [names.expand(word) for word in argv.words]
     command = [names.expand(word) for word in argv.command]
     if _sets_a_running_variable(argv.prefix, command):
-        raise RefusedError("a variable that makes git or man run a command is closed to a PM")
+        raise RefusedError(
+            "a variable that makes git or man run a command is closed to OpenCode sessions"
+        )
     if not command:
         return
     program = command[0]
@@ -1189,14 +1264,18 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
         raise RefusedError("a command whose program is built at run time cannot be checked")
     name = _base(program)
     if _runs_other_programs(name, command[1:]):
-        raise RefusedError("an option that makes this program run a command is closed to a PM")
+        raise RefusedError(
+            "an option that makes this program run a command is closed to OpenCode sessions"
+        )
     _opencode_problem(words, command, cwd)
     if name == "ps" and _ps_prints_environments(command[1:]):
         raise RefusedError(
-            "`ps` options that print other processes' environments are closed to a PM"
+            "`ps` options that print other processes' environments are closed to OpenCode sessions"
         )
     if _coven_lifecycle(command):
-        raise RefusedError("`coven opencode` is closed to a PM but for `doctor` and `--help`")
+        raise RefusedError(
+            "`coven opencode` is closed to OpenCode sessions but for `doctor` and `--help`"
+        )
     if name in SHELL_READERS and any(word.endswith(PROCESS_SUBSTITUTION) for word in command[1:]):
         raise RefusedError("a shell that reads a process substitution cannot be checked")
     if argv.piped and name in SHELL_READERS:
@@ -1206,14 +1285,15 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
 def check_text(quoting: Quoting, scope: Scope) -> None:
     """The rules that read the text of a command or a path as it stands."""
     for variant in (quoting.text, *quoting.variants):
-        if scope.port is not None and re.search(rf"(?<!\d){scope.port}(?!\d)", variant):
-            raise RefusedError("the coven OpenCode server's port is closed to a PM")
-        if scope.port is None and LOOPBACK_PORT.search(variant):
+        if isinstance(scope.port, int) and re.search(rf"(?<!\d){scope.port}(?!\d)", variant):
+            raise RefusedError("the coven OpenCode server's port is closed to OpenCode sessions")
+        if scope.port is PortFile.UNREADABLE and LOOPBACK_PORT.search(variant):
             raise RefusedError(
-                "a loopback port is closed to a PM while the server's port is unknown"
+                "the server's port file cannot be read; "
+                "ask the user to restart `coven opencode serve`"
             )
         if ENVIRON_TEXT.search(variant):
-            raise RefusedError("another process's environment is closed to a PM")
+            raise RefusedError("another process's environment is closed to OpenCode sessions")
 
 
 def _only_names_paths(commands: Sequence[Argv]) -> bool:
@@ -1338,27 +1418,44 @@ def _coven_checkout_allows(command: str, commands: Sequence[Argv], cwd: Path, sc
 
 def _first_folder(command: str, cwd: Path) -> Path | None:
     """The folder a line moves to before any other program runs: the literal, existing folder of
-    a first `cd <dir>` or `pushd <dir>` (the rest of the line runs there), or of `git -C <dir>` or
-    `env -C <dir>` when that is the only command. None for any other line, and for one with a
-    subshell or a `popd`, which go back to the working folder."""
+    a first `cd <dir>` or `pushd <dir>` when the rest of the line is joined to it by `&&` only
+    (a `;` or a new line would run on in the working folder if the `cd` failed), or of `git -C <dir>` or `env -C <dir>` when that is the only command. None for
+    any other line: one the scanner cannot follow, one whose first command writes a file or is a
+    bare redirection (`> x; cd proj`: it is read from the working folder), and one with a subshell
+    or a `popd`, which go back to the working folder."""
     if re.search(r"[()]|\bpopd\b", command):
         return None
-    top = _commands(command)
-    if not top:
+    scanned = hook_support.sibling("shell_words").simple_commands(command, substitutions=True)
+    top = [each for each in scanned or () if each.words or each.redirected]
+    if not top or top[0].writes or not top[0].words:
         return None
-    words = list(top[0].words)
+    words = [word.value if word.value is not None else word.raw for word in top[0].words]
     name = _base(words[0])
     target: str | None = None
-    if name in ("cd", "pushd"):
+    if name in ("cd", "pushd") and _only_after_success(
+        command, [(each.start, each.end) for each in top]
+    ):
         target = next((each for each in words[1:] if not CD_OPTION.fullmatch(each)), None)
     elif name in ("git", "env") and len(top) == 1:
         target = _chdir_value(words[1:])
-    if target is None or target == "-" or STACK_TILDE.fullmatch(target):
+    if target is None or _names_no_folder(target):
         return None
     if "$" in target or any(mark in target for mark in GLOB_MARKS):
         return None
     folder = _folder_of(target, cwd)
     return folder if folder is not None and folder.is_dir() else None
+
+
+def _only_after_success(command: str, spans: Sequence[tuple[int, int]]) -> bool:
+    """Whether every command after the first runs only when the first one succeeded: the first
+    is joined to the next by `&&`, and each later one by `&&` or a pipe (a pipeline stays inside
+    its `&&` list). A `;` or a new line runs on when a `cd` fails at run time, in the working
+    folder, and so do `||` and `&`; so does anything after them."""
+    for index, ((_, end), (start, _)) in enumerate(itertools.pairwise(spans)):
+        joint = re.sub(r"\\\n", " ", command[end:start]).strip()
+        if joint not in (("&&",) if index == 0 else ("&&", "|", "|&")):
+            return False
+    return True
 
 
 def _chdir_value(arguments: Sequence[str]) -> str | None:
@@ -1370,14 +1467,27 @@ def _chdir_value(arguments: Sequence[str]) -> str | None:
     return None
 
 
-def _working_folder_rule(cwd: Path, view: View) -> str:
+def _held(cwd: Path, view: View) -> str:
+    """What of coven's the working folder holds, as the refusals name it."""
     holds_profile = _holds_a_root(
         cwd,
         view.scope.roots_to_hold(
             Mode.SHELL, profile_side=view.profile_folders_closed, coven_side=False
         ),
     )
-    return WORKING_FOLDER_RULE.format("profile" if holds_profile else "own files")
+    return "profile" if holds_profile else "own files"
+
+
+def _working_folder_rule(cwd: Path, view: View) -> str:
+    return WORKING_FOLDER_RULE.format(_held(cwd, view))
+
+
+def _unread_line_rule(command: str, cwd: Path, view: View) -> str:
+    """The refusal for a line run from a folder that holds a closed place whose first move the
+    guard cannot follow, because the scanner could not read the line."""
+    constructs = [name for mark, name in UNREAD_CONSTRUCTS if mark in command]
+    named = f" ({', '.join(constructs)})" if constructs else ""
+    return UNREAD_LINE_RULE.format(_held(cwd, view), named)
 
 
 def _bases(command: str, moves: Moves, view: View) -> tuple[Path, ...]:
@@ -1392,36 +1502,67 @@ def _bases(command: str, moves: Moves, view: View) -> tuple[Path, ...]:
         or hit(first, view.scope, Mode.SHELL, coven_open=view.coven_open)
         or holds_closed_place(first, view, Mode.SHELL)
     ):
+        if hook_support.sibling("shell_words").simple_commands(command, substitutions=True) is None:
+            raise RefusedError(_unread_line_rule(command, moves.start, view))
         raise RefusedError(_working_folder_rule(moves.start, view))
     return tuple(dict.fromkeys((first, *moves.later)))
+
+
+def _judged_from(command: str, cwd: Path, scope: Scope) -> tuple[Path, bool]:
+    """The folder a line is judged from, and whether it is held to the checkout rule: a line run
+    in coven's checkout that first moves into a worktree under `.claude/worktrees/` is judged from
+    that worktree (Ruling 23's entry, applied to the checkout); any other line run there is held
+    to the rule. Raise RefusedError for a working folder that is closed."""
+    if not _in_coven_checkout(cwd, scope):
+        rule = hit(cwd, scope, Mode.SHELL)
+        if rule:
+            raise RefusedError(rule)
+        return cwd, False
+    entered = _first_folder(command, cwd)
+    if (
+        entered is not None
+        and entered != scope.worktrees
+        and entered.is_relative_to(scope.worktrees)
+    ):
+        return entered, False
+    return cwd, True
 
 
 def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
     quoting = Quoting.of(command)
     check_text(quoting, scope)
     names = Names(quoting, scope, cwd)
-    in_coven = _in_coven_checkout(cwd, scope)
-    rule = hit(cwd, scope, Mode.SHELL)
-    if rule and not in_coven:
-        raise RefusedError(rule)
+    here, in_coven = _judged_from(command, cwd, scope)
     commands = argvs(command)
     if in_coven and not _coven_checkout_allows(command, commands, cwd, scope):
         raise RefusedError(COVEN_CHECKOUT_RULE)
     for argv in commands:
-        check_command(argv, names, cwd)
+        check_command(argv, names, here)
     view = View(
         scope,
-        cwd,
+        here,
         names,
         profile_folders_closed=not _only_names_paths(commands),
         coven_folders_closed=not _only_reads(command, commands),
         coven_open=in_coven,
     )
-    moves = _moves(quoting, cwd, view.names, scope)
+    found = _moves(quoting, cwd, view.names, scope)
+    # A line that first moves into a worktree runs there: the checkout is not one of its folders,
+    # unless a move the guard cannot follow (`cd -`) may lead back to it.
+    later = (*found.later, cwd) if found.unknown else found.later
+    moves = Moves(here, later, found.unknown)
     if moves.unknown and view.profile_folders_closed:
         raise RefusedError(
             "a `cd` to a folder that cannot be known (`cd -`, an unset variable) is closed"
             " before a program that reads; write the folder literally"
+        )
+    words = _words_of(quoting)
+    if view.profile_folders_closed and any(
+        _names_a_remembered_folder(names.expand(word)) for word in words
+    ):
+        raise RefusedError(
+            "a folder the shell remembers (`$OLDPWD`, `~-`, `~1`) cannot be known to a program"
+            " that reads; write the folder literally"
         )
     bases = _bases(command, moves, view)
     # Every folder a program of the line runs in (a bare `cd` is home): what a program run there
@@ -1430,7 +1571,7 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         rule = holds_closed_place(folder, view, Mode.SHELL)
         if rule:
             raise RefusedError(rule)
-    for word in _words_of(quoting):
+    for word in words:
         check_word(word, bases, view, Mode.SHELL)
 
 
@@ -1483,7 +1624,7 @@ def refusal(
     profile: Path,
     serve: Path,
     coven_root: Path,
-    port: int | None,
+    port: Port,
 ) -> str | None:
     """The text that refuses the call, or None to allow it."""
     with _remembering_paths():
@@ -1495,7 +1636,7 @@ def _refusal(
     profile: Path,
     serve: Path,
     coven_root: Path,
-    port: int | None,
+    port: Port,
 ) -> str | None:
     try:
         tool = payload.get("tool_name")
@@ -1527,23 +1668,27 @@ def _refusal(
 # ---- the hook --------------------------------------------------------------------------------
 
 
-def read_port(serve: Path) -> int | None:
-    """The server's port from `<serve>/port`; None when the file is missing or holds no port."""
+def read_port(serve: Path) -> Port:
+    """The server's port from `<serve>/port`: MISSING when there is no such file, UNREADABLE when
+    it cannot be read or holds no port (it fails closed)."""
     try:
         text = (serve / "port").read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return PortFile.MISSING
     except (OSError, UnicodeError):
-        return None
+        return PortFile.UNREADABLE
     if not re.fullmatch(r"\d{1,5}", text):
-        return None
+        return PortFile.UNREADABLE
     port = int(text)
-    return port if 0 < port < 65536 else None
+    return port if 0 < port < 65536 else PortFile.UNREADABLE
 
 
-def _port_for(payload: Mapping[str, object], serve: Path) -> int | None:
-    """The server's port, read only for a call whose text can name it: a shell command or a URL."""
+def _port_for(payload: Mapping[str, object], serve: Path) -> Port:
+    """The server's port, read only for a call whose text can name it: a shell command or a URL;
+    MISSING for any other call, whose text is not read for it."""
     tool = payload.get("tool_name")
     mode = TOOL_MODES.get(tool) if isinstance(tool, str) else None
-    return read_port(serve) if mode in (Mode.SHELL, Mode.FETCH) else None
+    return read_port(serve) if mode in (Mode.SHELL, Mode.FETCH) else PortFile.MISSING
 
 
 class _Arguments(argparse.ArgumentParser):

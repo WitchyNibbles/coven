@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from coven.opencode import runtime
 from coven.opencode.canary import (
@@ -33,6 +33,8 @@ type Kill = Callable[[int, int], None]
 
 HOST: Final = "127.0.0.1"
 PASSWORD_MODE: Final = 0o600
+# The port is no secret; the server guard reads it, and a half-written file would refuse loopback.
+PORT_MODE: Final = 0o644
 POLL: Final = 0.05
 # After SIGKILL the process is gone within a moment; this only bounds a stuck wait.
 KILL_WAIT: Final = 5.0
@@ -40,6 +42,10 @@ PM_ROLE: Final = "pm"
 MORE_SESSIONS: Final = "more sessions exist; this list may be incomplete"
 STARTING: Final = "a server is starting"
 UNKNOWN_ASK: Final = "unknown id"
+ACTIVE_PATH: Final = "/api/session/active"
+SESSIONS_PATH: Final = "/api/session"
+# A listing longer than this many pages is cut and said so; 2.3.2 pages hold 50 sessions.
+MAX_SESSION_PAGES: Final = 20
 
 
 class ServeError(OpencodeError):
@@ -81,8 +87,13 @@ def _read_int(path: Path) -> int | None:
 
 
 def _is_server(pid: int, layout: Layout) -> bool:
-    """Whether `pid` is a live process running the runtime's binary (a gone or reused pid is not)."""
-    return os.path.realpath(f"/proc/{pid}/exe") == str(server_exe(layout))
+    """Whether `pid` is a live process running the runtime's binary (a gone or reused pid is not;
+    nor is a zombie, a dead child nobody reaped yet, whose `/proc/<pid>/exe` cannot be read)."""
+    expected = str(server_exe(layout))
+    try:
+        return os.path.realpath(f"/proc/{pid}/exe") == expected
+    except OSError:
+        return False
 
 
 def running(layout: Layout) -> ServerInfo | None:
@@ -136,7 +147,10 @@ def _spawn(
     argv = [str(binary), "serve", "--hostname", HOST, "--port", str(port)]
     log = files(layout).log
     try:
-        with log.open("wb") as output:
+        # emptied first so `_listening_port` reads only this run; opened for append so the
+        # plugin's own writes to the log (undelivered notices) are not overwritten by the server's
+        log.write_bytes(b"")
+        with log.open("ab") as output:
             return spawn(
                 argv,
                 env=env,
@@ -196,7 +210,7 @@ def start(
 ) -> ServerInfo:
     """Start the server detached and return once it answers with the saved password."""
     paths = files(layout)
-    with _start_lock(paths.lock):
+    with _start_lock(paths.lock, wait_s):
         if (info := running(layout)) is not None:
             raise ServeError(f"a server is already running on port {info.port}")
         if port is not None:
@@ -210,7 +224,7 @@ def start(
             bound = _wait_for(lambda: _listening_port(log), process, "listened", wait_s, log)
             _wait_for(lambda: _answers(bound, password), process, "answered", wait_s, log)
             paths.pid.write_text(f"{process.pid}\n")
-            paths.port.write_text(f"{bound}\n")
+            write_atomic(paths.port, f"{bound}\n".encode(), mode=PORT_MODE, backup=False)
         except BaseException:
             stop_server(process, GRACE)
             raise
@@ -231,25 +245,40 @@ def _create_lock(lock: Path) -> int:
     return os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 
 
+def _starting(lock: Path) -> ServeError:
+    return ServeError(f"{STARTING}: {lock} is held; remove it if no start is running")
+
+
+def _lock_is_stale(lock: Path, wait_s: float) -> bool:
+    """A lock whose holder's pid is gone, or one with no pid that is older than a start may take
+    (a crash between its creation and the pid write); a live holder never goes stale by age."""
+    holder = _read_int(lock)
+    if holder is not None:
+        return not _alive(holder)
+    try:
+        return time.time() - lock.stat().st_mtime > wait_s
+    except OSError:
+        return True
+
+
 @contextmanager
-def _start_lock(lock: Path) -> Iterator[None]:
+def _start_lock(lock: Path, wait_s: float) -> Iterator[None]:
     """Hold the start lock, a file made with O_EXCL that names its holder's pid, around the check
     that no server runs and the spawn. A live holder refuses with STARTING, and so does a lock
-    still being written (no pid yet); a lock whose pid is gone is replaced."""
+    still being written (no pid yet, younger than `wait_s`); a stale lock is replaced."""
     lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         handle = _create_lock(lock)
     except FileExistsError:
-        holder = _read_int(lock)
-        if holder is None or _alive(holder):
-            raise ServeError(STARTING) from None
+        if not _lock_is_stale(lock, wait_s):
+            raise _starting(lock) from None
         # shortcut: two starts that find the same stale lock at once can both replace it; add an
         # fcntl lock if concurrent starts right after a crashed one ever matter.
         lock.unlink(missing_ok=True)
         try:
             handle = _create_lock(lock)
         except FileExistsError:
-            raise ServeError(STARTING) from None
+            raise _starting(lock) from None
     try:
         with os.fdopen(handle, "w") as stream:
             stream.write(f"{os.getpid()}\n")
@@ -322,6 +351,37 @@ def _pm_line(code: str, session: dict[str, object], busy: bool, asks: list[str])
     return "  ".join(parts)
 
 
+def _active_ids(payload: object, path: str) -> set[str]:
+    """The ids of the sessions whose turn runs: 2.3.2 answers `{"data": {<id>: {"type": ...}}}`,
+    an empty object while all rest (Raise OpencodeError for any other shape)."""
+    data = _sub(payload, "data")
+    if not isinstance(data, dict):
+        raise OpencodeError(f"GET {path} returned no data object")
+    return set(data)
+
+
+def _next_page(listing: object) -> str | None:
+    """The path of the page after `listing`: 2.3.2 puts a string in `cursor.next` on every page
+    that has sessions and null on the page after the last (None when there is no next page)."""
+    after = _sub(_sub(listing, "cursor"), "next")
+    if isinstance(after, str) and after:
+        return f"{SESSIONS_PATH}?{urlencode({'cursor': after})}"
+    return None
+
+
+def _sessions(fetch: Callable[[str], object]) -> tuple[list[dict[str, object]], bool]:
+    """Every session of the listing, and whether the page cap stopped the walk."""
+    sessions: list[dict[str, object]] = []
+    path = SESSIONS_PATH
+    for _ in range(MAX_SESSION_PAGES):
+        listing = fetch(path)
+        sessions.extend(data_items(listing, path))
+        if (after := _next_page(listing)) is None:
+            return sessions, False
+        path = after
+    return sessions, True
+
+
 def _pm_lines(info: ServerInfo, password: str) -> list[str]:
     def fetch(path: str) -> object:
         return http_json("GET", f"http://{HOST}:{info.port}{path}", password)
@@ -329,17 +389,16 @@ def _pm_lines(info: ServerInfo, password: str) -> list[str]:
     def get(path: str) -> list[dict[str, object]]:
         return data_items(fetch(path), path)
 
-    busy = {item.get("id") for item in get("/api/session/active")}
-    listing = fetch("/api/session")
+    busy = _active_ids(fetch(ACTIVE_PATH), ACTIVE_PATH)
+    sessions, cut = _sessions(fetch)
     lines = []
-    for session in data_items(listing, "/api/session"):
+    for session in sessions:
         code, session_id = _pm_code(session), session.get("id")
         if code is None or not isinstance(session_id, str):
             continue
         asks = [_ask_id(ask) for ask in get(f"/api/session/{session_id}/permission")]
         lines.append(_pm_line(code, session, session_id in busy, asks))
-    # The cursor's request parameter is unverified, so a longer list is reported, not followed.
-    if _sub(listing, "cursor"):
+    if cut:
         lines.append(MORE_SESSIONS)
     return lines
 

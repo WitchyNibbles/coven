@@ -5,7 +5,8 @@
 
 export interface SessionInfo {
   id: string;
-  parentID?: string;
+  /** Missing or `null` for a root session. */
+  parentID?: string | null;
   title?: string;
 }
 

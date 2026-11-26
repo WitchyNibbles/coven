@@ -3,18 +3,23 @@ import { setImmediate as tick } from "node:timers/promises";
 import { covenSetup } from "../src/coven.ts";
 import type {
   CovenContext,
+  EvaluateEvent,
   ExecuteBeforeEvent,
+  SessionLike,
+  SessionPromptInput,
   ShellCreateEvent,
 } from "../src/context.ts";
 import type {
   ContextHookEvent,
   ContextMessage,
-  SessionInfo,
   ToolCallContext,
   ToolDefinition,
 } from "../src/join/context.ts";
+import type { SpawnFn } from "../src/guard.ts";
 import { joinSetup } from "../src/plugin.ts";
+import { Stream } from "./plugin-stream.ts";
 import { exits, fakeSpawn } from "./guard-fake.ts";
+import { realPage } from "./pm-fake-session.ts";
 import type { Behaviour } from "./guard-fake.ts";
 
 /** The options setup always writes besides `covenRoot` and `keyEnv`; placeholder paths. */
@@ -25,76 +30,28 @@ export const PROFILE_OPTIONS = {
   secretRules: [],
 };
 
+/** The tools the hierarchy adds to the plugin. */
+export const PM_TOOLS = [
+  "coven_gm_claim",
+  "coven_pm_launch",
+  "coven_pm_list",
+  "coven_pm_resume",
+  "coven_pm_stop",
+  "coven_send",
+];
+
 export const LEAD = "ses_lead";
 export const KID = "ses_kid";
+/** A PM session and a child of it (which has no role of its own). */
+export const PM = "ses_pm";
+export const PM_KID = "ses_pm_kid";
 export const DIRECTORY = "/work/session";
 
-class Stream {
-  private readonly queue: unknown[] = [];
-  private wake: (() => void) | undefined;
-  private over = false;
+/** Sessions per `list` page of the fake context. */
+const PAGE_SIZE = 100;
 
-  push(event: unknown): void {
-    this.queue.push(event);
-    this.wake?.();
-  }
-
-  end(): void {
-    this.over = true;
-    this.wake?.();
-  }
-
-  async *iterate(signal: AbortSignal): AsyncGenerator<unknown> {
-    signal.addEventListener("abort", () => this.end());
-    for (;;) {
-      const next = this.queue.shift();
-      if (next !== undefined) {
-        yield next;
-      } else if (this.over) {
-        return;
-      } else {
-        await new Promise<void>((resolve) => {
-          this.wake = resolve;
-        });
-      }
-    }
-  }
-}
-
-export function notFound(): Error {
-  return Object.assign(new Error("session not found"), {
-    _tag: "Session.NotFoundError",
-  });
-}
-
-export function started(sessionID: string): unknown {
-  return { type: "session.execution.started", data: { sessionID } };
-}
-
-export function ended(sessionID: string): unknown {
-  return { type: "session.execution.succeeded", data: { sessionID } };
-}
-
-export function report(
-  parentID: string,
-  childID: string,
-  state: string,
-): unknown {
-  return {
-    type: "session.inbox.enqueued",
-    data: {
-      sessionID: parentID,
-      item: {
-        type: "synthetic",
-        payload: {
-          text: `<subagent sessionID="${childID}" state="${state}" description="kid">\nbody\n</subagent>`,
-          description: "kid",
-          metadata: { source: "subagent", childID, state },
-        },
-      },
-    },
-  };
-}
+export { ended, notFound, report, started } from "./plugin-events.ts";
+import { notFound } from "./plugin-events.ts";
 
 export interface Registered {
   name: string;
@@ -117,21 +74,50 @@ interface Setup {
   options?: Readonly<Record<string, unknown>>;
   /** Tool names the fake `tool.list` leaves out, as if they never registered. */
   unlisted?: readonly string[];
+  /** False makes the shell and evaluate hooks return no registration to dispose. */
+  disposable?: boolean;
+  /** Makes the evaluate hook registration fail, after the shell one went through. */
+  failEvaluate?: boolean;
+  /** Makes disposing the execute.before hook throw. */
+  guardDisposeThrows?: boolean;
   /** What each guard child the fake spawn starts does; it allows the call by default. */
   guard?: Behaviour;
+  /** What the `python3` version check does; it passes by default, whatever `guard` does. */
+  python?: Behaviour;
 }
 
 function makeWorld({
   clock = { now: 1_000_000 },
   options,
   unlisted = [],
+  disposable = true,
+  failEvaluate = false,
+  guardDisposeThrows = false,
   guard = exits(0),
+  python = exits(0),
 }: Setup) {
   const streams: Stream[] = [];
   const subscriptions: { types: readonly string[]; signal: AbortSignal }[] = [];
-  const sessions = new Map<string, SessionInfo | Error>([
+  const here = { directory: DIRECTORY };
+  const sessions = new Map<string, (SessionLike & { title?: string }) | Error>([
     [KID, { id: KID, parentID: LEAD, title: "kid" }],
+    [LEAD, { id: LEAD, location: here, metadata: { coven: { role: "gm" } } }],
+    [
+      PM,
+      {
+        id: PM,
+        location: here,
+        metadata: { coven: { role: "pm", code: "proj" } },
+      },
+    ],
+    [PM_KID, { id: PM_KID, parentID: PM }],
   ]);
+  const disposals: string[] = [];
+  const registration = (name: string): object =>
+    disposable ? { dispose: () => disposals.push(name) } : {};
+  const prompts: SessionPromptInput[] = [];
+  const evaluateHooks: ((event: EvaluateEvent) => Promise<void> | void)[] = [];
+  const asks = new Map<string, unknown[]>();
   const messages = new Map<string, ContextMessage[]>();
   const lookups: string[] = [];
   const hooks: ((event: ContextHookEvent) => void)[] = [];
@@ -139,7 +125,11 @@ function makeWorld({
   const registered: Registered[] = [];
   const toolHooks: ToolHook[] = [];
   const shellHooks: ShellHook[] = [];
+  // The version check is a `python3` child of its own; `spawned` holds only the hook children.
   const fake = fakeSpawn(guard);
+  const pythonFake = fakeSpawn(python);
+  const spawn: SpawnFn = (command, args, env) =>
+    (command === "python3" ? pythonFake : fake).spawn(command, args, env);
   const ctx: CovenContext = {
     ...(options === undefined ? {} : { options }),
     location: { directory: DIRECTORY },
@@ -161,6 +151,23 @@ function makeWorld({
             ? Promise.reject(notFound())
             : Promise.resolve(found);
       },
+      list: ({ parentID, cursor }) =>
+        realPage(
+          [...sessions.values()].filter(
+            (found): found is SessionLike & { title?: string } =>
+              !(found instanceof Error) &&
+              (parentID === undefined || found.parentID === parentID),
+          ),
+          { cursor },
+          PAGE_SIZE,
+        ),
+      create: () => Promise.reject(new Error("create is not faked")),
+      prompt: (input) => {
+        prompts.push(input);
+        return Promise.resolve({});
+      },
+      interrupt: () => Promise.resolve({}),
+      update: () => Promise.resolve(),
       wait: () => new Promise<void>(() => undefined),
       context: ({ sessionID }) =>
         Promise.resolve(messages.get(sessionID) ?? []),
@@ -176,10 +183,19 @@ function makeWorld({
         return Promise.resolve({});
       }) as CovenContext["session"]["hook"],
     },
+    permission: {
+      hook: (_name, callback) => {
+        evaluateHooks.push(callback);
+        return failEvaluate
+          ? Promise.reject(new Error("evaluate refused"))
+          : Promise.resolve(registration("evaluate"));
+      },
+      list: ({ sessionID }) => Promise.resolve(asks.get(sessionID) ?? []),
+    },
     shell: {
       hook: (name, callback) => {
         shellHooks.push({ name, callback });
-        return Promise.resolve({});
+        return Promise.resolve(registration(name));
       },
     },
     tool: {
@@ -193,6 +209,9 @@ function makeWorld({
         return Promise.resolve({
           dispose: () => {
             entry.disposed += 1;
+            if (guardDisposeThrows) {
+              throw new Error("guard dispose failed");
+            }
           },
         });
       },
@@ -217,8 +236,13 @@ function makeWorld({
     registered,
     toolHooks,
     shellHooks,
-    spawn: fake.spawn,
+    prompts,
+    disposals,
+    evaluateHooks,
+    asks,
+    spawn,
     spawned: fake.calls,
+    pythonChecks: pythonFake.calls,
   };
 }
 
@@ -272,14 +296,21 @@ export async function boot(clock = { now: 1_000_000 }) {
 export function bootCoven(setup: Setup = {}) {
   const world = makeWorld(setup);
   const logs: string[] = [];
+  const serveLogs: string[] = [];
   const outcome = covenSetup(
     world.ctx,
     {
       now: () => world.clock.now,
       log: (line) => logs.push(line),
+      serveLog: (line) => serveLogs.push(line),
       spawn: world.spawn,
     },
     world.ctx.options,
   );
-  return { ...world, logs, outcome };
+  const emit = async (event: unknown, stream = 0): Promise<void> => {
+    world.streams[stream]?.push(event);
+    await tick();
+    await tick();
+  };
+  return { ...world, logs, serveLogs, outcome, emit };
 }

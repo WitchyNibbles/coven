@@ -97,6 +97,16 @@ export async function allowShell(profile: string): Promise<void> {
   );
 }
 
+/** Appends one more plugin to the generated config: a folder with an `index.ts` and its options. */
+export async function addPlugin(
+  profile: string,
+  entry: { package: string; options: Record<string, unknown> },
+): Promise<void> {
+  await editConfig<{ plugins: unknown[] }>(profile, (config) => {
+    config.plugins.push(entry);
+  });
+}
+
 /** Points the generated config's provider at a fake model on loopback port `port`. */
 export async function pointProviderAt(
   profile: string,

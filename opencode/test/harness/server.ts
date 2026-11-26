@@ -8,6 +8,7 @@ import { stop } from "./process.ts";
 export interface Api {
   get(path: string): Promise<unknown>;
   post(path: string, body?: object): Promise<unknown>;
+  patch(path: string, body: object): Promise<unknown>;
 }
 
 interface ServerOptions {
@@ -78,6 +79,7 @@ function apiFor(base: string, password: string): Api {
   return {
     get: (path) => request("GET", `${base}${path}`, password),
     post: (path, body) => request("POST", `${base}${path}`, password, body),
+    patch: (path, body) => request("PATCH", `${base}${path}`, password, body),
   };
 }
 
