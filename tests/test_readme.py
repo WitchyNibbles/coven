@@ -436,6 +436,10 @@ def test_known_gaps_lists_the_limits_of_pm_shell_isolation() -> None:
         "have no record and are not reached by a stop",
         "Linux only",
         "check-then-kill is not atomic",
+        "cannot be compared is reported as a stale record",
+        "is never stopped stay in their folder until the next stop",
+        "`!` shell",
+        "runs unwrapped",
     ):
         assert needle in isolation, needle
 
@@ -512,7 +516,7 @@ def test_the_hierarchy_section_says_how_pm_shells_are_isolated() -> None:
         "kills the isolation trees its shells started",
         "; killed N isolation tree(s)",
         "; skipped M stale record(s)",
-        "; M tree(s) still running after SIGKILL",
+        "; K tree(s) still running after SIGKILL",
         "mixed race",
         "docs/known-gaps.md#opencode",
     ):

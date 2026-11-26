@@ -245,7 +245,7 @@ PM can claim.
 - `coven_pm_stop {code, archive?}`: interrupts the PM's turn, which also ends a waiting ask, and
   kills the isolation trees its shells started (see "Isolated PM shells" below). Its text ends
   `; killed N isolation tree(s)`, then `; skipped M stale record(s)` and
-  `; M tree(s) still running after SIGKILL` when those counts are above zero.
+  `; K tree(s) still running after SIGKILL` when those counts are above zero.
 
 `coven_pm_launch`, `coven_pm_list`, `coven_pm_resume` and `coven_pm_stop` refuse any session but
 the GM. `coven_gm_claim` refuses a child session and a PM, so a session that is not the GM yet can

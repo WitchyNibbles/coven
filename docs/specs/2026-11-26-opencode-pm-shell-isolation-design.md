@@ -106,6 +106,11 @@ Checked on this machine (WSL2, kernel 6.18, util-linux 2.39.3): the command runs
 - The role queue's mixed race (`MIXED = "pm"`): a GM shell started in the same instant as a PM shell
   with the same command and folder can get the PM's treatment, so it runs isolated once. Safe
   direction; documented.
+- The role queue's other race, in the unsafe direction: a user's `!` shell with the same command and
+  folder as a PM call that is waiting can take that call's queue entry, and the PM's shell then
+  starts with no role and runs unwrapped, once. Nothing on the 2.3.2 `shell.create.before` event
+  tells the two apart: it carries `command`, `cwd`, `env`, `shell` and `timeout`, with no session id
+  or call id. (A `!` shell was not probed on 2.3.2; the keys are those of the probe report.)
 - The session messages show the model's command; only the result shows the wrapper ran.
 - A shell that runs past its `timeout` is not killed by OpenCode 2.3.2 (the call moves to the
   background); its tree lives until `coven_pm_stop` of that PM, which kills it (mechanism 5), or until

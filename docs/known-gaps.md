@@ -389,6 +389,14 @@ What `coven opencode` does not do, or does not know. The install steps are in
   - OpenCode 2.3.2 moves a timed-out shell to the background and does not kill it. Its tree lives
     until `coven_pm_stop` of that PM.
   - Trees started before the plugin wrote pid records have no record and are not reached by a stop.
+  - A record that cannot be compared is reported as a stale record: when the server cannot read the
+    `exe` or `cmdline` of its process, the record is skipped and nothing is killed.
+  - The pid records of a PM that is never stopped stay in their folder until the next stop of that
+    PM.
+  - The unsafe direction of the role queue: OpenCode 2.3.2's shell event carries only the command,
+    the folder, the env, the shell and a timeout, with no session or call id. A `!` shell of yours
+    with the same command and folder as a PM's waiting call can take that call's queue entry, and
+    the PM's shell then starts with no role and runs unwrapped (not isolated) once.
   - Linux only: on macOS a PM's shell refuses, and the doctor says so.
   - A stop checks a pid and then kills it in two steps (Node has no pidfd), so the check-then-kill
     is not atomic.
