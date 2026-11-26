@@ -4234,7 +4234,7 @@ def _wrapper_end(words: Sequence[_ShellWord]) -> int:
     [-i] [-u NAME] [NAME=VALUE]` (READ_ENVIRONMENT), or `command` and the program it runs. 0 when
     the first word is none of them, or has an option or a value this does not read (`env -C`,
     `timeout --signal`, `command -v`). The wrapper's options are read through its table."""
-    name = words[0].value
+    name = words[0].value or ""  # a word with no value is no wrapper
     syntax = _WRAPPER_COMMANDS.WRAPPER_SYNTAX.get(name)
     if name not in UNWRAPPED_OPTIONS or syntax is None:
         return 0
