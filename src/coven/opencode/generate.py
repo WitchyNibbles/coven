@@ -46,6 +46,7 @@ def plugin_options(
         "keyEnv": profile.key_env,
         "profileDir": str(layout.root),
         "serveDir": str(layout.serve_dir),
+        "dataDir": str(layout.data),
         "store": str(store) if store else None,
         "secretRules": secret_rules(layout),
         "toolChoiceAuto": ["litellm"] if profile.preset == "litellm" else [],

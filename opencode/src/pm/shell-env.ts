@@ -17,8 +17,6 @@ const WRAPPER_SEAMS = ["COVEN_ISOLATE_SYS", "COVEN_ISOLATE_PATH"];
 const REAL_SHELL_ENV = "COVEN_PM_REAL_SHELL";
 const HIDE_ENV = "COVEN_PM_HIDE";
 const WRAPPER_NAME = "pm-shell-isolate.sh";
-/** The profile's data folder, under `profileDir` (`Layout.data` in `src/coven/opencode/profile.py`). */
-const DATA_DIR = "data";
 const SECRET_NAME = /^OPENCODE(_.*)?_(PASSWORD|TOKEN|KEY)$/;
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["shell", "bash"]);
 /** The role a shell gets when its recorded calls disagree: the strictest. */
@@ -132,16 +130,16 @@ export interface PmIsolation {
 }
 
 /**
- * The wrapper's path and the folders it hides. The serve folder is the plugin's own `serveDir`;
- * the data folder is `<profileDir>/data`, where the Python `Layout.data` puts it.
+ * The wrapper's path and the folders it hides: the plugin's `serveDir` and `dataDir` options,
+ * which setup writes from the Python `Layout`.
  */
 export function pmIsolation(
-  options: Pick<CovenOptions, "covenRoot" | "profileDir" | "serveDir">,
+  options: Pick<CovenOptions, "covenRoot" | "serveDir" | "dataDir">,
 ): PmIsolation {
   const wrapper = join(options.covenRoot, "hooks", WRAPPER_NAME);
   return {
     wrapper,
-    hide: [options.serveDir, join(options.profileDir, DATA_DIR)].join(":"),
+    hide: [options.serveDir, options.dataDir].join(":"),
     found: isExecutableFile(wrapper),
   };
 }

@@ -9,6 +9,7 @@ const BASE = {
   keyEnv: "K",
   profileDir: "/tmp/coven-test/profile",
   serveDir: "/tmp/coven-test/profile/state/serve",
+  dataDir: "/tmp/coven-test/profile/data",
   store: null,
   secretRules: [],
 };
@@ -28,6 +29,7 @@ await test("a full valid options object passes through", () => {
     keyEnv: "GATEWAY_KEY",
     profileDir: "/p",
     serveDir: "/p/state/serve",
+    dataDir: "/p/data",
     store: "/s",
     secretRules: [{ action: "read", resource: "*.cfg", effect: "deny" }],
     toolChoiceAuto: ["litellm", "other"],
@@ -36,15 +38,17 @@ await test("a full valid options object passes through", () => {
   assert.deepEqual(parseOptions(full), full);
 });
 
-await test("parses keyEnv, profileDir, serveDir and store", () => {
+await test("parses keyEnv, profileDir, serveDir, dataDir and store", () => {
   const parsed = parseOptions({
     ...BASE,
     profileDir: "/p",
     serveDir: "/p/state/serve",
+    dataDir: "/p/data",
   });
   assert.equal(parsed.keyEnv, "K");
   assert.equal(parsed.profileDir, "/p");
   assert.equal(parsed.serveDir, "/p/state/serve");
+  assert.equal(parsed.dataDir, "/p/data");
   assert.equal(parsed.store, null);
   assert.equal(parseOptions({ ...BASE, store: "/s" }).store, "/s");
 });
@@ -71,6 +75,9 @@ const REFUSED: [string, unknown][] = [
   ["a missing covenRoot", without("covenRoot")],
   ["a missing profileDir", without("profileDir")],
   ["a missing serveDir", without("serveDir")],
+  ["a missing dataDir", without("dataDir")],
+  ["a relative dataDir", { ...BASE, dataDir: "data" }],
+  ["a numeric dataDir", { ...BASE, dataDir: 1 }],
   ["a missing store", without("store")],
   ["a missing secretRules", without("secretRules")],
   ["a relative profileDir", { ...BASE, profileDir: "p" }],
@@ -114,6 +121,7 @@ for (const key of [
   "covenRoot",
   "profileDir",
   "serveDir",
+  "dataDir",
   "store",
   "secretRules",
 ]) {

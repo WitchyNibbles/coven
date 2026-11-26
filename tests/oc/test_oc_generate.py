@@ -122,6 +122,7 @@ def test_plugin_options_carry_key_env_profile_and_store(tmp_path: Path):
     assert options["keyEnv"] == "GATEWAY_KEY"
     assert options["profileDir"] == str(layout.root)
     assert options["serveDir"] == str(layout.serve_dir)
+    assert options["dataDir"] == str(layout.data)
     assert options["store"] == str(store)
     assert generate.plugin_options(LITELLM, tmp_path, layout, None)["store"] is None
     skills_deny = generate._rule("edit", f"{layout.config_dir}/skills/*", "deny")

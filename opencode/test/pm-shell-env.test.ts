@@ -155,11 +155,11 @@ await test("scrub removes the wrapper's two test seams", () => {
 });
 
 const PROFILE = {
-  profileDir: "/tmp/coven-test/profile",
   serveDir: "/tmp/coven-test/profile/state/serve",
+  dataDir: "/tmp/coven-test/profile/data",
 };
 
-await test("the folders to hide are the profile's serve folder and its data folder, pinned", () => {
+await test("the folders to hide are the serve folder and the data folder options, pinned", () => {
   const found = pmIsolation({ covenRoot: "/c", ...PROFILE });
   assert.equal(
     found.hide,
@@ -167,13 +167,13 @@ await test("the folders to hide are the profile's serve folder and its data fold
   );
 });
 
-await test("the data folder follows the profile folder, as the Python layout puts it", () => {
+await test("the data folder is the option as given, not derived from anything", () => {
   const found = pmIsolation({
     covenRoot: "/c",
-    profileDir: "/other/prof",
-    serveDir: "/other/prof/state/serve",
+    serveDir: "/s/serve",
+    dataDir: "/elsewhere/data",
   });
-  assert.equal(found.hide, "/other/prof/state/serve:/other/prof/data");
+  assert.equal(found.hide, "/s/serve:/elsewhere/data");
 });
 
 await test("the wrapper is hooks/pm-shell-isolate.sh under the coven root", () => {

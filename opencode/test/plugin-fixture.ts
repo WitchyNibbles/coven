@@ -30,6 +30,7 @@ export const COVEN_ROOT = resolve(import.meta.dirname, "../..");
 export const PROFILE_OPTIONS = {
   profileDir: "/tmp/coven-test/profile",
   serveDir: "/tmp/coven-test/profile/state/serve",
+  dataDir: "/tmp/coven-test/profile/data",
   store: null,
   secretRules: [],
 };
