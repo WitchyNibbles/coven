@@ -1252,9 +1252,14 @@ def _command_candidates(words: Sequence[str]) -> list[int]:
     its command: every head word but a wrapper's own name. That is each word after an option
     (which may be the option's value), the word where the walk stops, and, stricter than those
     two, a wrapper's positional argument, an assignment, a redirect and its target, and every word
-    after `tmux`."""
+    after `tmux`. `ssh` is a wrapper of the shared table (it runs the command it is given) and
+    also a remote CLI whose host is judged, so its own name stays a candidate."""
     head = _command_head(words).indices
-    return [index for index in head if _basename(words[index]) not in WRAPPERS]
+    return [
+        index
+        for index in head
+        if _basename(words[index]) not in WRAPPERS or _basename(words[index]) in REMOTE_CLIS
+    ]
 
 
 def _split_env_strings(words: Sequence[str]) -> list[str]:
@@ -1329,7 +1334,9 @@ def _runs_its_input(names: Sequence[str], head: _Head) -> bool:
     runner = next((index for index, name in enumerate(names) if name in INPUT_RUNNERS), None)
     if runner is None or not head.open:
         return False
-    return names[runner] == PARALLEL or any(name in WRAPPERS for name in names[runner + 1 :])
+    return names[runner] == PARALLEL or any(
+        name in WRAPPERS and name not in REMOTE_CLIS for name in names[runner + 1 :]
+    )  # `xargs ssh` is a remote CLI with its host from the input, not a wrapper run
 
 
 def _runs_stdin(segment: str, fed: bool) -> bool:
