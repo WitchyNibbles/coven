@@ -26,13 +26,14 @@ OUTER = (
     "--map-root-user",
     "--pid",
     "--fork",
+    "--kill-child",
     "--mount",
     "--mount-proc",
 )
 PREFIX = "coven: PM shells run isolated and isolation is not available here: "
 SUFFIX = "; ask the user"
 # What the wrapper and its inner stage need besides the fakes.
-TOOLS = ("sh", "id", "mktemp", "rm", "tr", "cat")
+TOOLS = ("sh", "id", "mktemp", "rm", "tr", "cat", "true")
 HELP = (
     "Usage: unshare [options] [<program> [<argument>...]]\n  --map-user=<uid>  map current user\n"
 )
@@ -45,8 +46,11 @@ import sys
 
 tool = os.path.basename(sys.argv[0])
 argv = sys.argv[1:]
+stdin = sys.stdin.read() if tool == "shell" else None
 with open(os.environ["FAKE_LOG"], "a") as log:
-    log.write(json.dumps({{"tool": tool, "argv": argv, "env": dict(os.environ)}}) + "\\n")
+    log.write(
+        json.dumps({{"tool": tool, "pid": os.getpid(), "argv": argv, "stdin": stdin, "env": dict(os.environ)}}) + "\\n"
+    )
 if tool == "shell":
     sys.stderr.write(os.environ.get("FAKE_SHELL_ERR", ""))
     sys.exit(int(os.environ.get("FAKE_SHELL_EXIT", "0")))
@@ -58,8 +62,11 @@ if tool == "mount":
 if argv == ["--help"]:
     sys.stdout.write({OLD_HELP!r} if os.environ.get("FAKE_UNSHARE_OLD") else {HELP!r})
     sys.exit(0)
-if os.environ.get("FAKE_UNSHARE_FAIL"):
+if os.environ.get("FAKE_UNSHARE_FAIL") and "--map-root-user" in argv:
     sys.stderr.write(os.environ["FAKE_UNSHARE_FAIL"])
+    sys.exit(1)
+if os.environ.get("FAKE_NESTED_FAIL") and any(a.startswith("--map-user=") for a in argv):
+    sys.stderr.write(os.environ["FAKE_NESTED_FAIL"])
     sys.exit(1)
 rest = list(argv)
 while rest and rest[0].startswith("--"):
@@ -77,6 +84,7 @@ class World:
     hide: Path
     other: Path
     shell: Path
+    last_pid: int = 0
 
     def write_sys(self, relative: str, value: str) -> None:
         path = self.sys_root / relative
@@ -93,12 +101,27 @@ class World:
         """The argv of every `unshare` run that was not the `--help` question."""
         return [c["argv"] for c in self.calls("unshare") if c["argv"] != ["--help"]]
 
+    def preflight_runs(self) -> list[list[str]]:
+        """The outer unshare asked to run `true`, to learn whether it works before it is used."""
+        return [a for a in self.unshare_runs() if a[7:] == ["true"]]
+
+    def outer_runs(self) -> list[list[str]]:
+        """The outer unshare that runs the inner stage (`sh -c <stage> ...`)."""
+        return [a for a in self.unshare_runs() if a[7:8] == ["sh"]]
+
+    def nested_runs(self) -> list[list[str]]:
+        """The nested unshare that restores the user, asked first to run `true`, then the shell."""
+        return [
+            a for a in self.unshare_runs() if a[:1] == ["--user"] and a[1].startswith("--map-user=")
+        ]
+
     def run(
         self,
         command: str = "echo hi",
         *,
         path: Path | None = None,
         hide: str | None = None,
+        stdin: str = "",
         **extra: str,
     ) -> subprocess.CompletedProcess[str]:
         env = {
@@ -113,14 +136,18 @@ class World:
         }
         env.update(extra)
         env = {key: value for key, value in env.items() if value != "<unset>"}
-        return subprocess.run(
+        started = subprocess.Popen(
             [str(WRAPPER), "-c", command],
             env=env,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
             cwd=self.root,
         )
+        self.last_pid = started.pid
+        out, err = started.communicate(stdin)
+        return subprocess.CompletedProcess(started.args, started.returncode, out, err)
 
 
 def refusal(piece: str) -> str:
@@ -173,16 +200,40 @@ def test_the_script_is_a_posix_sh_file_that_can_run() -> None:
 def test_the_outer_unshare_has_exactly_the_documented_flags(world: World) -> None:
     done = world.run()
     assert done.returncode == 0, done.stderr
-    outer = world.unshare_runs()[0]
-    assert tuple(["unshare", *outer[:6]]) == OUTER
-    assert outer[6:9] == ["sh", "-c", outer[8]]
+    (outer,) = world.outer_runs()
+    assert tuple(["unshare", *outer[:7]]) == OUTER
+    assert outer[7:9] == ["sh", "-c"]
     # The inner stage is a fixed script: the caller's values arrive as arguments after it.
-    assert outer[9] == "sh"
-    assert outer[10] == str(world.shell)
-    assert outer[11] == str(os.getuid())
-    assert outer[12] == str(os.getgid())
-    assert outer[13] == f"{world.hide}:{world.root / 'absent'}:{world.other}"
-    assert outer[14:] == ["-c", "echo hi"]
+    assert outer[10] == "sh"
+    assert outer[11] == str(world.shell)
+    assert outer[12] == str(os.getuid())
+    assert outer[13] == str(os.getgid())
+    assert outer[14] == f"{world.hide}:{world.root / 'absent'}:{world.other}"
+    assert outer[15:] == ["-c", "echo hi"]
+
+
+def test_the_outer_unshare_replaces_the_wrapper_so_a_kill_reaches_the_namespace(
+    world: World,
+) -> None:
+    done = world.run()
+    assert done.returncode == 0, done.stderr
+    # The same process: the wrapper exec'd it, so a signal for the wrapper is a signal for unshare,
+    # and `--kill-child` takes the namespace's processes down with it.
+    outer_calls = [c for c in world.calls("unshare") if c["argv"][7:8] == ["sh"]]
+    assert [c["pid"] for c in outer_calls] == [world.last_pid]
+    assert "--kill-child" in outer_calls[0]["argv"]
+
+
+def test_a_preflight_with_the_same_flags_runs_before_the_outer_unshare(world: World) -> None:
+    done = world.run()
+    assert done.returncode == 0, done.stderr
+    (preflight,) = world.preflight_runs()
+    assert tuple(["unshare", *preflight]) == (*OUTER, "true")
+    runs = world.unshare_runs()
+    assert runs.index(preflight) < runs.index(world.outer_runs()[0])
+    # It is a separate process: only the exec'd one is the wrapper's own pid.
+    pids = [c["pid"] for c in world.calls("unshare") if c["argv"][7:] == ["true"]]
+    assert world.last_pid not in pids
 
 
 def test_inside_a_tmpfs_hides_each_folder_that_exists_then_the_user_is_restored(
@@ -198,14 +249,9 @@ def test_inside_a_tmpfs_hides_each_folder_that_exists_then_the_user_is_restored(
     order = [call["tool"] for call in map(json.loads, world.log.read_text().splitlines())]
     mounted, nested = order.index("mount"), len(order) - 1 - order[::-1].index("unshare")
     assert mounted < nested < order.index("shell")
-    assert world.unshare_runs()[1] == [
-        "--user",
-        f"--map-user={os.getuid()}",
-        f"--map-group={os.getgid()}",
-        str(world.shell),
-        "-c",
-        "echo hi",
-    ]
+    user = ["--user", f"--map-user={os.getuid()}", f"--map-group={os.getgid()}"]
+    # The nested unshare is first tried on `true`, so a failure can be told from the command's.
+    assert world.nested_runs() == [[*user, "true"], [*user, str(world.shell), "-c", "echo hi"]]
 
 
 COMMANDS = (
@@ -222,11 +268,11 @@ def test_the_command_reaches_the_real_shell_byte_for_byte(world: World, command:
     done = world.run(command)
     assert done.returncode == 0, done.stderr
     assert world.calls("shell")[0]["argv"] == ["-c", command]
-    outer = world.unshare_runs()[0]
+    (outer,) = world.outer_runs()
     if len(command) > 5:  # shorter texts also occur among the wrapper's own flags
-        assert command not in outer[8]
+        assert command not in outer[9]
         assert outer.count(command) == 1
-        assert world.unshare_runs()[1].count(command) == 1
+        assert world.nested_runs()[1].count(command) == 1
 
 
 def test_the_real_shells_exit_code_and_stderr_pass_through(world: World) -> None:
@@ -234,6 +280,24 @@ def test_the_real_shells_exit_code_and_stderr_pass_through(world: World) -> None
     assert done.returncode == 7
     assert done.stderr == "from the shell\n"
     assert done.stdout == ""
+
+
+def test_the_commands_stdin_reaches_the_real_shell(world: World) -> None:
+    done = world.run(stdin="piped in\nsecond line\n")
+    assert done.returncode == 0, done.stderr
+    assert world.calls("shell")[0]["stdin"] == "piped in\nsecond line\n"
+
+
+def test_the_namespaces_first_process_takes_term_and_kills_the_rest(world: World) -> None:
+    # The first process of a PID namespace ignores a TERM it has no handler for, and `--kill-child`
+    # only acts when unshare dies. So the stage that is that process traps TERM, INT and HUP and
+    # kills everything in the namespace. Sending the signal here would kill the test machine's
+    # processes (the fake runs no namespace), so the real behaviour is the manual check's job.
+    assert world.run().returncode == 0
+    (outer,) = world.outer_runs()
+    script = outer[9]
+    assert "trap 'kill -s KILL -- -1' TERM INT HUP" in script
+    assert script.index("trap ") < script.index("mount -t tmpfs")
 
 
 def test_a_folder_that_does_not_exist_is_skipped(world: World) -> None:
@@ -347,6 +411,19 @@ def test_an_unshare_that_fails_without_a_known_cause_reports_its_stderr(world: W
         "unshare failed: unshare: unshare failed: Operation not permitted more"
     )
     assert world.calls("shell") == []
+    assert world.outer_runs() == []
+    assert len(world.preflight_runs()) == 1
+
+
+def test_a_nested_unshare_that_fails_refuses_with_its_stderr(world: World) -> None:
+    done = world.run(FAKE_NESTED_FAIL="unshare: write failed /proc/self/uid_map\nsecond\n")
+    assert done.returncode == 126
+    assert done.stderr == refusal(
+        "cannot restore the user inside the namespaces (unshare: write failed "
+        "/proc/self/uid_map second)"
+    )
+    assert world.calls("shell") == []
+    assert len(world.nested_runs()) == 1
 
 
 def test_the_test_seam_moves_the_diagnosis_files_and_cannot_skip_the_unshare(
@@ -355,11 +432,11 @@ def test_the_test_seam_moves_the_diagnosis_files_and_cannot_skip_the_unshare(
     # A seam pointing at a tree that says everything is fine still runs the unshare.
     done = world.run()
     assert done.returncode == 0, done.stderr
-    assert len(world.unshare_runs()) == 2
+    assert len(world.outer_runs()) == 1
     # Pointing it at a folder that does not exist leaves nothing to refuse on: unshare still runs.
     done = world.run(COVEN_ISOLATE_SYS=str(world.root / "nowhere"))
     assert done.returncode == 0, done.stderr
-    assert len(world.unshare_runs()) == 4
+    assert len(world.outer_runs()) == 2
     # And a failing unshare refuses whatever the seam says.
     done = world.run(FAKE_UNSHARE_FAIL="nope")
     assert done.returncode == 126

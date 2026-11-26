@@ -10,7 +10,8 @@
 #                        (default /proc/sys). It moves those reads and nothing else: no value of it
 #                        skips or weakens the unshare.
 #
-# The command runs inside `unshare --user --map-root-user --pid --fork --mount --mount-proc`, so its
+# The command runs inside `unshare --user --map-root-user --pid --fork --kill-child --mount
+# --mount-proc` (`--kill-child`: a kill of the process OpenCode spawned also kills the namespace), so its
 # /proc shows only its own processes. There the folders are hidden, then a nested user namespace maps
 # the caller's own uid and gid back (so files and git behave as before) and the real shell runs with
 # the arguments untouched. The mounts of the outer namespace are locked for the inner one: the
@@ -63,11 +64,11 @@ gid=$(id -g)
 
 # The stage that runs inside the outer namespaces. It is a fixed text: the real shell, the ids, the
 # folders and the command arrive as arguments ($1 .. $4, then `-c <command>`), never inside it.
-# File descriptor 3 holds the wrapper's own stderr: the outer unshare's stderr is captured to tell a
-# failed unshare from a command that failed, and this stage hands the real one back first.
 # shellcheck disable=SC2016
 inner='
-exec 2>&3 3>&-
+# This stage is the first process of the namespace, which ignores a TERM it has no handler for:
+# trap the signals OpenCode may send and kill every process of the namespace.
+trap '"'"'kill -s KILL -- -1'"'"' TERM INT HUP
 real=$1 uid=$2 gid=$3 hide=$4
 shift 4
 set -f
@@ -81,19 +82,29 @@ for dir in $hide; do
     fi
 done
 unset IFS
-exec unshare --user --map-user="$uid" --map-group="$gid" "$real" "$@"
+# Try the nested unshare on `true` first: a failure of it is told from a failing command.
+if ! out=$(unshare --user --map-user="$uid" --map-group="$gid" true 2>&1); then
+    out=$(printf %s "$out" | tr "\n" " ")
+    printf "coven: PM shells run isolated and isolation is not available here: cannot restore the user inside the namespaces (%s); ask the user\n" "$out" >&2
+    exit 126
+fi
+exec 3<&0
+unshare --user --map-user="$uid" --map-group="$gid" "$real" "$@" <&3 3<&- &
+wait "$!"
+exit "$?"
 '
 
+# A preflight with the same flags, stderr captured, tells a failing unshare apart from a failing
+# command and lets the real run be an exec: the process OpenCode spawned then is the unshare, and
+# when OpenCode kills it (a timeout), `--kill-child` takes every process of the namespace with it.
 errors=$(mktemp "${TMPDIR:-/tmp}/coven-pm-isolate.XXXXXX") || refuse "cannot create a temporary file"
 trap 'rm -f "$errors"' EXIT
-
-unshare --user --map-root-user --pid --fork --mount --mount-proc \
-    sh -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$@" 3>&2 2> "$errors"
-status=$?
-
-# Nothing else writes to the captured stream: the stage restores stderr before it does anything.
-if [ "$status" -ne 0 ] && [ -s "$errors" ]; then
+if ! unshare --user --map-root-user --pid --fork --kill-child --mount --mount-proc true 2> "$errors"; then
     message=$(tr '\n' ' ' < "$errors")
     refuse "unshare failed: ${message%"${message##*[! ]}"}"
 fi
-exit "$status"
+trap - EXIT
+rm -f "$errors"
+
+exec unshare --user --map-root-user --pid --fork --kill-child --mount --mount-proc \
+    sh -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$@"
