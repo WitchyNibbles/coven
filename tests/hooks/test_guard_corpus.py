@@ -48,6 +48,7 @@ PROD_PREFIX = prod_tests.PREFIX
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
 ROLE = "COVEN_SESSION_ROLE"
+KEPT_GIT = "GIT_CONFIG_NOSYSTEM"
 PM_PREFIX = "coven pm-permissions:"
 SECRETS_PREFIX = "coven deny-secrets:"
 OPENCODE_PREFIX = "coven opencode-server-guard:"
@@ -128,7 +129,9 @@ def runners(
     monkeypatch.setenv(ROLE, "pm")
     # pm's guard refuses a push while GIT_* variables are set (pm's own `isolated_git` fixture
     # clears them, but it is autouse and would run before `store` commits): clear them now.
-    for name in [name for name in os.environ if name.startswith("GIT_")]:
+    # `GIT_CONFIG_NOSYSTEM` (the conftest's, which keeps the machine's git config out) stays; only
+    # the pm runner lifts it, for its own call.
+    for name in [name for name in os.environ if name.startswith("GIT_") and name != KEPT_GIT]:
         monkeypatch.delenv(name)
     # The gate imports `prod_guard` by name: hand it the module the prod tests patch.
     monkeypatch.setitem(sys.modules, "prod_guard", pg)
@@ -152,7 +155,14 @@ def runners(
             return Result("n/a", "")
         stdin = io.StringIO(_payload(command, cwd))
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        # pm refuses a push while any GIT_* variable is set, and a PM session has none: take the
+        # one the other guards keep out of this call only.
+        with (
+            monkeypatch.context() as scoped,
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            scoped.delenv(KEPT_GIT, raising=False)
             code = pm.main(["--pre-tool-use"], stdin, {ROLE: "pm"})
         assert out.getvalue() == "", f"pm_permissions wrote to stdout: {out.getvalue()!r}"
         return _result("pm_permissions", code, err.getvalue())
@@ -248,6 +258,35 @@ def test_every_behaviour_difference_of_the_map_has_entries() -> None:
     controls = [entry for entry in ENTRIES if entry.id.startswith("control-")]
     assert len(controls) >= 20
     assert all(R not in entry.verdicts for entry in controls)
+
+
+BRACE_ONLY_FORMS = (
+    "h-only-letter-range-wide",
+    "h-only-step-one",
+    "h-only-list-beside-numeric-range",
+    "h-only-list-beside-padded-range",
+    "h-only-list-beside-numeric-step",
+    "h-only-list-nested-pair",
+    "h-only-double-quoted-nested-range",
+    "h-only-escaped-nested-range",
+    "h-only-escaped-list",
+    "h-only-copy-source",
+    "h-only-coven-two-ranges",
+    "h-cap-nine-groups-component-names",
+    "h-cap-nine-groups-last-member",
+    "h-cap-write-coven-hooks",
+    "d-mail-first-word",
+    "d-psql-first-word",
+    "d-rm-claude-folder-tail",
+)
+
+
+@pytest.mark.parametrize("entry_id", BRACE_ONLY_FORMS)
+def test_a_brace_form_that_alone_hides_a_protected_word_has_an_entry(entry_id: str) -> None:
+    """Each form hides the protected path (or word) only behind braces: a regression of the
+    expander moves one of them."""
+    (entry,) = [entry for entry in ENTRIES if entry.id == entry_id]
+    assert "{" in entry.command
 
 
 def names_in(tables: tuple[tuple[str, str], ...]) -> set[str]:
