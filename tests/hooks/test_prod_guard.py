@@ -5406,6 +5406,29 @@ def test_a_write_whose_brace_expansion_makes_a_word_in_the_user_folder_is_refuse
     assert run(payload, env=job_env()).returncode == 0
 
 
+# A variable that names the user folder, behind `${NAME,}`: bash reads that as the variable with
+# its first letter lowered (`${HOME,}` is `$HOME`), and shell_words.brace_words reads it as the
+# list `$HOME` and `$`. The expansion changes no verdict here: prod already refuses a `$` word it
+# does not follow (UNPINNED_EXPANSION), and every member of a `$` list keeps its `$`, so no
+# `$`-list word reaches a protected name by the expansion alone. These pin the refusal.
+DOLLAR_LIST_WRITES: dict[str, str] = {
+    "home": "rm -rf ${HOME,}/.claude/skills",
+    "home-empty-members": "rm -rf ${HOME,,}/.claude/skills",
+    "second-member": "rm -rf ${X,HOME}/.claude/skills",
+    "config-dir": "rm -rf ${CLAUDE_CONFIG_DIR,}/plugins",
+    "assigned": "D={C}; rm -rf ${D,}/skills",
+}
+
+
+@pytest.mark.parametrize("name", list(DOLLAR_LIST_WRITES))
+def test_a_write_to_the_user_folder_through_a_dollar_brace_list_is_refused(
+    run: Run, store: Path, name: str
+) -> None:
+    payload = in_session(bash(pinned(DOLLAR_LIST_WRITES[name])))
+    assert run(payload, role="pm", env=job_env()).returncode == 2
+    assert run(payload, env=job_env()).returncode == 0
+
+
 @pytest.mark.parametrize(
     "command",
     [

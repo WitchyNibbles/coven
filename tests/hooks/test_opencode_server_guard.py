@@ -1953,6 +1953,7 @@ def test_a_brace_word_the_guard_cannot_tell_is_refused(world: World, command: st
     refused = world.call("Bash", "command", command)
     assert refused is not None
     assert BRACE_RULE in refused
+    assert "more than 64 words or braces in one word, or a range with a variable" in refused
     assert "write the paths out" in refused
 
 

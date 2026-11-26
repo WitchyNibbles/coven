@@ -337,8 +337,9 @@ def _brace_words(word: str, *, one_word: bool = False) -> list[str]:
     )
     if made is None:
         raise RefusedError(
-            "a path built from a brace expansion the guard cannot tell (more than 64 words, or a"
-            " range with a variable) cannot be checked; write the paths out"
+            "a path built from a brace expansion the guard cannot tell (more than 64 words or"
+            " braces in one word, or a range with a variable) cannot be checked; write the paths"
+            " out"
         )
     return made
 

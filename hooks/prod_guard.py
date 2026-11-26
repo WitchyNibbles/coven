@@ -3569,8 +3569,8 @@ def _closing_brace(word: str, start: int) -> int:
 def _brace_members(word: str) -> list[str] | None:
     """shell_words.brace_words: the words the shell makes of a word by its brace expansions
     (`a{b,c}d` is `abd acd`, `{1..3}` is `1 2 3`); `[word]` when it has none. None when the guard
-    cannot tell them: more than BRACE_MEMBERS, a range that holds an expansion, or a word that
-    holds more than BRACE_MEMBERS braces (minified JSON)."""
+    cannot tell them: more than shell_words.BRACE_MEMBERS, a range that holds an expansion, or a
+    word that holds more than shell_words.BRACE_MEMBERS braces (minified JSON)."""
     result: list[str] | None = _shell_words().brace_words(word)
     return result
 
@@ -3578,7 +3578,7 @@ def _brace_members(word: str) -> list[str] | None:
 def _brace_expanded(text: str) -> str | None:
     """`text` with each word that holds a brace expansion (BRACE_WORD) written as the words it
     makes (`_brace_members`), as the shell runs it; None when a word makes words the guard cannot
-    tell or more than BRACE_MEMBERS."""
+    tell or more than shell_words.BRACE_MEMBERS."""
     found: list[str] = []
     last = 0
     for match in BRACE_WORD.finditer(text):
