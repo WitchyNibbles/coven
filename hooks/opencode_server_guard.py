@@ -624,9 +624,7 @@ PROCESS_SUBSTITUTION = "<(...)"
 SHELLS: frozenset[str] = wrapper_commands.SHELLS
 # The builtins that run a file as shell text.
 SOURCING = frozenset({"source", "."})
-# A shell or one of those builtins: each runs what a pipe, a heredoc, a `<<<` string or a
-# process substitution gives it.
-SHELL_READERS = SHELLS | SOURCING
+SHELL_READERS: frozenset[str] = wrapper_commands.SHELL_READERS
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 # `opencode`, `opencode-ai@1`, `opencode.exe`, and `opencode serve` as one word (`pkill -f`).

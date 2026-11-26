@@ -9,6 +9,17 @@ names only; how each guard follows a wrapper's options is its own.
 # Shells, and busybox's shell applets (`busybox sh -c ...` names `sh`).
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "fish", "ksh", "ash", "hush", "csh", "tcsh"})
 
+# Words that read a heredoc body, a pipe, a `<<<` string or a process substitution as shell
+# commands, or start a shell without naming one: a body fed to one of them is shell text, and its
+# globs are real.
+SHELL_READERS = frozenset(
+    {
+        *SHELLS,
+        *("source", ".", "eval", "parallel", "make", "su", "sudo", "doas", "script"),
+        *("screen", "tmux"),
+    }
+)
+
 # Commands that run their arguments as a command, so `<wrapper> ... claude` starts claude. A
 # command string (`sh -c`, `su -c`, `script -c`) is read as the option's value, quotes dropped.
 WRAPPERS = frozenset(

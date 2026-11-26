@@ -215,15 +215,7 @@ SHELL_STRING_RUNNERS = frozenset({"sh", "bash", "zsh", "dash"})  # `sh -c STRING
 # The wrapper tables are shared with opencode_server_guard.py (wrapper_commands.py).
 _WRAPPER_COMMANDS: ModuleType = hook_support.sibling("wrapper_commands")
 SHELLS: frozenset[str] = _WRAPPER_COMMANDS.SHELLS
-# Words that read a heredoc body as shell commands, or start a shell without naming one: a body
-# fed by a line with one of them is shell text, and its globs are real.
-SHELL_READERS = frozenset(
-    {
-        *SHELLS,
-        *("source", ".", "eval", "parallel", "make", "su", "sudo", "doas", "script"),
-        *("screen", "tmux"),
-    }
-)
+SHELL_READERS: frozenset[str] = _WRAPPER_COMMANDS.SHELL_READERS
 CHARACTER_CLASS = re.compile(r"\[[^\]]*\]")  # a glob's `[a-z]`: one character from a set
 ONE_CHARACTER_CLASS = re.compile(r"\[([^\]!^])\]")  # `[w]`: the set holds the one character
 # Commands that read a heredoc body as a script or text, not as shell commands (python by
