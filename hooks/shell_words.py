@@ -252,6 +252,8 @@ class Word:
 
 @dataclass(frozen=True)
 class _Redirect:
+    # The one mutable part of a token (the lexer fills in its body when the line ends), and `_lex`
+    # keeps tokens across calls: `_commands` hands each caller a copy (`replace`), never this one.
     heredoc: _Heredoc | None
     writes: bool = False  # opens a file for writing
     target: str | None = None  # the value of its target word; None when it may expand

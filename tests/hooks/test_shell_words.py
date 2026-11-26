@@ -7,8 +7,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import corpus_harness as harness
+import guard_corpus as corpus
 import pytest
-import test_guard_corpus as corpus
 from guard_corpus import N
 from support import load_module
 
@@ -1289,15 +1290,6 @@ def test_the_cache_holds_at_most_256_texts(lexes: list[Lex]) -> None:
 
 # --- the guards: one process, two calls ---
 
-# The fixtures the corpus runners ask for, by their names.
-world = corpus.world
-repo = corpus.repo
-patient_hook = corpus.patient_hook
-store = corpus.store
-patient_guard = corpus.patient_guard
-runners = corpus.runners
-context = corpus.context
-
 
 def first_entry_with(guard: str, verdict: str) -> str:
     """The id of the first corpus entry on which `guard` gives `verdict`."""
@@ -1311,7 +1303,7 @@ def entry_named(entry_id: str) -> "corpus.Entry":
 @pytest.mark.usefixtures("patient_hook", "patient_guard")
 @pytest.mark.parametrize("guard", corpus.GUARDS)
 def test_two_calls_in_one_process_each_get_their_own_verdict(
-    guard: str, runners: dict[str, corpus.Runner], context: corpus.Context
+    guard: str, runners: dict[str, harness.Runner], context: harness.Context
 ) -> None:
     """Refuse, allow, refuse, allow (and the reverse order) in one process: a parse kept from one
     call never decides the next."""
@@ -1325,7 +1317,7 @@ def test_two_calls_in_one_process_each_get_their_own_verdict(
 @pytest.mark.usefixtures("patient_hook", "patient_guard")
 @pytest.mark.parametrize("guard", corpus.GUARDS)
 def test_two_commands_that_differ_only_in_quoting_get_their_own_verdict(
-    guard: str, runners: dict[str, corpus.Runner], context: corpus.Context
+    guard: str, runners: dict[str, harness.Runner], context: harness.Context
 ) -> None:
     """Every pair of corpus commands that differ only by blanks or quote marks, run back to back
     in one process, each keeps the verdict the corpus pins."""
@@ -1349,12 +1341,12 @@ PROD_RUNS = ("control-16", "control-29", "9i-heredoc-cat-claude")
 @pytest.mark.parametrize("entry_id", PROD_RUNS)
 def test_one_prod_guard_run_lexes_each_text_and_variant_once(
     entry_id: str,
-    runners: dict[str, corpus.Runner],
-    context: corpus.Context,
+    runners: dict[str, harness.Runner],
+    context: harness.Context,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """prod_guard read one Bash call about 14 times; the calls share a parse now."""
-    lexer = corpus.pg._shell_words()._Lexer
+    lexer = harness.pg._shell_words()._Lexer
     seen: list[Lex] = []
     real = lexer.tokenize
 
@@ -1362,7 +1354,7 @@ def test_one_prod_guard_run_lexes_each_text_and_variant_once(
         seen.append((self.text, self.comments, self.substitutions))
         return real(self)
 
-    corpus.pg._shell_words()._lex.cache_clear()
+    harness.pg._shell_words()._lex.cache_clear()
     monkeypatch.setattr(lexer, "tokenize", counting)
     entry = entry_named(entry_id)
     runners["prod_guard"](context.fill(entry.command), context.cwd)
