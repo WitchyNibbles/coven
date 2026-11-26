@@ -185,10 +185,8 @@ const NOT_DRIVEN: [string, string][] = [
   ],
 ];
 
-/** Runs the checks in `world`; the GM session is made here and claimed by the first check. */
-export async function hierarchyChecks(
-  world: HierarchyWorld,
-): Promise<Outcome[]> {
+/** The run of a world: its GM session is made here (the first check claims it), no PM yet. */
+export async function makeRun(world: HierarchyWorld): Promise<Run> {
   const tmp = join(world.profile, "tmp");
   const gm = await createSession(world, {
     directory: world.work,
@@ -198,7 +196,14 @@ export async function hierarchyChecks(
       { action: "external_directory", resource: `${tmp}/*`, effect: "allow" },
     ],
   });
-  const run: Run = { world, gm, pms: new Map() };
+  return { world, gm, pms: new Map() };
+}
+
+/** Runs the checks in `world`. */
+export async function hierarchyChecks(
+  world: HierarchyWorld,
+): Promise<Outcome[]> {
+  const run = await makeRun(world);
   const outcomes: Outcome[] = [];
   for (const [title, check] of steps()) {
     outcomes.push({ title, problem: await settle(() => check(run)) });
