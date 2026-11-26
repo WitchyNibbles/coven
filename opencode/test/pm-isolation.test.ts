@@ -136,6 +136,21 @@ await test("a source that is not an executable file is not found", () => {
   assert.equal(found.problem, `wrapper not found: ${w.source}`);
 });
 
+await test("a serve or data path with a colon is refused: the hide list is colon-joined", () => {
+  const w = world();
+  const colonServe = join(w.root, "profile", "state", "se:rve");
+  mkdirSync(colonServe, { recursive: true });
+  for (const options of [
+    { ...w.options, serveDir: colonServe },
+    { ...w.options, dataDir: join(w.root, "da:ta") },
+  ]) {
+    const found = pmIsolation(options);
+    assert.equal(found.found, false);
+    assert.equal(found.problem, "a hide path contains ':'");
+  }
+  assert.equal(pmIsolation(w.options).found, true);
+});
+
 await test("a serve folder that is not there fails the copy and names why", () => {
   const w = world();
   const options = { ...w.options, serveDir: join(w.root, "no", "serve") };

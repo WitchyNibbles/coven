@@ -157,12 +157,15 @@ export function pmIsolation(
 ): PmIsolation {
   const source = join(options.covenRoot, "hooks", WRAPPER_NAME);
   const wrapper = join(options.serveDir, COPY_DIR, WRAPPER_NAME);
-  const problem = isExecutableFile(source)
-    ? copyProblem(source, wrapper)
-    : `wrapper not found: ${source}`;
+  const folders = [options.serveDir, options.dataDir];
+  const problem = folders.some((folder) => folder.includes(":"))
+    ? "a hide path contains ':'"
+    : isExecutableFile(source)
+      ? copyProblem(source, wrapper)
+      : `wrapper not found: ${source}`;
   return {
     wrapper,
-    hide: [options.serveDir, options.dataDir].join(":"),
+    hide: folders.join(":"),
     found: problem === undefined,
     problem,
   };
@@ -273,13 +276,13 @@ function shellCall(
 
 /**
  * The two shell hooks. `executeBefore` notes which role a shell call belongs to (the call's one
- * role lookup, shared with the guards); `createBefore`
- * scrubs the environment of the shell that starts, then gives a PM's shell `ROLE_ENV` and points
- * it at the isolation wrapper (the real shell and the folders to hide go in the env). A throw
- * from `createBefore` stops the shell: a PM's shell is refused when the wrapper was not found or
- * its real shell is not an absolute path. Every plugin copy hooks the same shell event, so only
- * the first to run takes a queue entry; each still scrubs. A GM's shell gets no `ROLE_ENV`: the memory store's
- * pre-commit hook refuses a commit whenever it is set, and the GM writes the store.
+ * role lookup, shared with the guards). `createBefore` scrubs the environment of the shell that
+ * starts, then gives a PM's shell `ROLE_ENV` and points it at the isolation wrapper (the real
+ * shell and the folders to hide go in the env). A throw from `createBefore` stops the shell: a
+ * PM's shell is refused when the wrapper is not ready (`PmIsolation.problem`) or its real shell
+ * is not an absolute path. Every plugin copy hooks the same shell event, so only the first to
+ * run takes a queue entry; each still scrubs. A GM's shell gets no `ROLE_ENV`: the memory
+ * store's pre-commit hook refuses a commit whenever it is set, and the GM writes the store.
  */
 export function shellEnvHooks(deps: ShellEnvDeps): {
   executeBefore(event: ExecuteBeforeEvent, role: RoleLookup): Promise<void>;
