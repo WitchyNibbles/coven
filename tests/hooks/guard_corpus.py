@@ -612,11 +612,9 @@ ENTRIES = (
         "3",
     ),
     Entry("h-dollar-list", "cat <tmp>/ho${m,x}e/profile/state/serve/password", (A, N, A, R)),
-    Entry(
-        "h-dollar-list-in-name", "cat <tmp>/home/profile/state/serve/${a,password}", (A, N, A, R)
-    ),
+    Entry("h-dollar-list-in-name", "cat <serve>/${a,password}", (A, N, A, R)),
     Entry("h-dollar-nested", "cat <tmp>/ho${x,{m,y}}e/profile/state/serve/password", (A, N, A, R)),
-    Entry("h-dollar-glued", "cat <tmp>/home/profile/state/serve/pass$x{w,x}ord", (A, N, A, R)),
+    Entry("h-dollar-glued", "cat <serve>/pass$x{w,x}ord", (A, N, A, R)),
     Entry(
         "h-double-quoted-list", 'cat "<tmp>/ho{m,x}e/profile/state/serve/password"', (A, N, A, R)
     ),
@@ -1194,7 +1192,7 @@ ENTRIES = (
     Entry(
         "d-serve-folder-member", "cat <tmp>/${home,x}/profile/state/serve/password", (A, N, A, R)
     ),
-    Entry("d-serve-file-member", "cat <tmp>/home/profile/state/serve/${password,x}", (A, N, A, R)),
+    Entry("d-serve-file-member", "cat <serve>/${password,x}", (A, N, A, R)),
     # --- round 1: opencode, a protected path hidden only by braces (list, nested list, range, step, padding, quote, escape)
     Entry(
         "h-only-letter-range-wide",

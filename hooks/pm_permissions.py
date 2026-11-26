@@ -170,6 +170,7 @@ except Exception as exc:
             ("SHELLS", "SHELL_KEYWORDS", "WRAPPERS", "EXEC_WRAPPERS", "WALKED"), frozenset[str]()
         ),
         WRAPPER_SYNTAX={"parallel": None},
+        NUMERIC_OPTION=re.compile(r"(?!)"),
     )
     SUPPORT_ERROR = type(exc).__name__
 
