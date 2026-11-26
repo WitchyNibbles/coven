@@ -68,6 +68,12 @@ because Claude runs Bash non-interactively (`zsh -c`, `bash -c`), where comments
 One pass over the text, no backtracking regex (prod-guard runs under a deadline). Standard library
 only: the hooks run as `python3 -I`.
 
+One lex per text and lexer variant: the token stream is cached by the exact text and the lexer's
+options (`comments`, `substitutions`), 256 entries, in this process only (`_lex`). The cache holds
+only tuples of frozen tokens; every public function builds its own `Command` objects and lists from
+them, so a caller may change what it gets back. Two functions with the same options share the
+stream, because they only read it.
+
 This is text matching, not a shell. It only ever blanks a word whose value it knows exactly (no
 `$name`, glob or `~`), and only in a place where the word reaches `git`, `gh`, `grep`, `rg`,
 `cat` (or, for `code_text`, another inert command) as plain data. Claude Code runs Bash commands in
@@ -75,6 +81,7 @@ bash or zsh, so every rule has to hold for both: where they differ (`>!`, `12>f`
 functions kept in tables) the scanner gives up, and `without_data` also gives up on comments.
 """
 
+import functools
 import string
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -608,6 +615,33 @@ class _Lexer:
         return name, after
 
 
+@dataclass(frozen=True)
+class _Lexed:
+    """What one lex of a text found: its tokens, the spans of its comments and the spans of its
+    heredoc bodies. All tuples; the tokens are frozen (a `_Heredoc` is copied by `_commands`)."""
+
+    tokens: tuple[_Token, ...]
+    comment_spans: tuple[tuple[int, int], ...]
+    body_spans: tuple[tuple[int, int], ...]
+
+
+LEX_CACHE_SIZE = 256
+
+
+@functools.lru_cache(maxsize=LEX_CACHE_SIZE)
+def _lex(text: str, comments: bool, substitutions: bool) -> _Lexed | None:
+    """The lex of `text` under one set of `_Lexer` options; None when the scanner cannot follow it.
+    Kept by the exact text and the options, so a different text, or the same text under other
+    options, never gets this entry. A process holds one call (a hook reads one payload), and the
+    answer depends on nothing but the key. Any error but `_GiveUp` is not kept."""
+    lexer = _Lexer(text, comments=comments, substitutions=substitutions)
+    try:
+        tokens = lexer.tokenize()
+    except _GiveUp:
+        return None
+    return _Lexed(tuple(tokens), tuple(lexer.comment_spans), tuple(lexer.body_spans))
+
+
 def _is_under(parts: Sequence[str], folder: tuple[str, ...]) -> bool:
     """Whether the path components `parts` lie inside the components `folder`, met in a row."""
     size = len(folder)
@@ -694,7 +728,7 @@ def _commands(tokens: Sequence[_Token], *, exports: bool = False) -> tuple[list[
             commands[-1].redirected = True
             commands[-1].extend(*token.span)
             if token.heredoc is not None:
-                commands[-1].heredocs.append(token.heredoc)
+                commands[-1].heredocs.append(replace(token.heredoc))  # the lex is shared
                 commands[-1].extend(*token.heredoc.body)
             if token.writes:
                 commands[-1].redirect_targets.append(token.target)
@@ -1123,20 +1157,38 @@ def _blanked(command: str, spans: Sequence[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
+@dataclass(frozen=True)
+class _Scanned:
+    """A text read by `_scan`: the lex, the commands built from it for this caller alone, and
+    whether the line has a pipe."""
+
+    lexed: _Lexed
+    commands: list[Command]
+    piped: bool
+
+
+def _scan(command: str, *, comments: bool, substitutions: bool) -> _Scanned | None:
+    """`command` lexed (once per text and options) and split into fresh `Command` objects; None
+    when the scanner cannot follow it. With `substitutions`, an `export` of assignments is a
+    command like another."""
+    lexed = _lex(command, comments, substitutions)
+    if lexed is None:
+        return None
+    try:
+        commands, piped = _commands(lexed.tokens, exports=substitutions)
+    except _GiveUp:
+        return None
+    return _Scanned(lexed, commands, piped)
+
+
 def simple_commands(command: str, *, substitutions: bool = False) -> list[Command] | None:
     """The simple commands of `command`, in line order, comments read as comments (some come back
     without words: a separator ends one); None when the scanner cannot follow the command. With
     `substitutions`, a plain `$(...)` (`_plain_substitution`) stays in its word instead of
     stopping the scanner (the caller reads its text), a lone `[` or `]` is a word of its own, not
     a glob, and an `export` of assignments is no reason to give up (the caller judges its names)."""
-    try:
-        commands, _piped = _commands(
-            _Lexer(command, comments=True, substitutions=substitutions).tokenize(),
-            exports=substitutions,
-        )
-    except _GiveUp:
-        return None
-    return commands
+    scanned = _scan(command, comments=True, substitutions=substitutions)
+    return None if scanned is None else scanned.commands
 
 
 def _bound_word(word: Word, paths: Mapping[str, str]) -> Word:
@@ -1195,12 +1247,10 @@ def heredoc_bodies(command: str) -> HeredocBodies | None:
 
     None when the line cannot be read as plain words: the scanner cannot follow it (this includes
     an unquoted heredoc), or a pipe is on it (the next command may run a body)."""
-    try:
-        commands, piped = _commands(_Lexer(command, comments=True).tokenize())
-    except _GiveUp:
+    scanned = _scan(command, comments=True, substitutions=False)
+    if scanned is None or scanned.piped:
         return None
-    if piped:
-        return None
+    commands = scanned.commands
     readers = [c for c in commands if c.heredocs]
     spans = [heredoc.body for c in readers for heredoc in c.heredocs]
     return HeredocBodies(
@@ -1215,12 +1265,8 @@ def quoted_heredoc_spans(command: str) -> list[tuple[int, int]] | None:
     `$(cat <<'X' ...)` form included. Every one has a quoted delimiter (`<<'X'`, `<<"X"`, `<<\\X`,
     `<<-'X'`), so its body is literal text: the scanner gives up on an unquoted one, whose body
     expands. None when the scanner cannot follow the command."""
-    lexer = _Lexer(command, comments=True, substitutions=True)
-    try:
-        lexer.tokenize()
-    except _GiveUp:
-        return None
-    return list(lexer.body_spans)
+    lexed = _lex(command, True, True)
+    return None if lexed is None else list(lexed.body_spans)
 
 
 def without_patterns(command: str) -> str:
@@ -1228,11 +1274,10 @@ def without_patterns(command: str) -> str:
     `rg`, `git grep`) replaced by spaces (same length), or `command` unchanged when the scanner
     cannot follow it. A heredoc body, a file operand and a word the shell expands (`grep w*`) are
     never blanked: unlike `without_data`, this is for a check that must still read a body."""
-    try:
-        commands, _piped = _commands(_Lexer(command).tokenize())
-    except _GiveUp:
+    scanned = _scan(command, comments=False, substitutions=False)
+    if scanned is None:
         return command
-    spans = [(w.start, w.end) for c in commands if c.words for w in _pattern_words(c.words)]
+    spans = [(w.start, w.end) for c in scanned.commands if c.words for w in _pattern_words(c.words)]
     return _blanked(command, spans)
 
 
@@ -1355,11 +1400,13 @@ def without_quoted_globs(command: str) -> str:
 def without_data(command: str) -> str:
     """`command` with its data parts replaced by spaces (same length), or `command` unchanged
     when the scanner cannot follow it."""
-    try:
-        commands, piped = _commands(_Lexer(command).tokenize())
-    except _GiveUp:
+    scanned = _scan(command, comments=False, substitutions=False)
+    if scanned is None:
         return command
-    return _blanked(command, [span for c in commands for span in _command_data(c, piped=piped)])
+    piped = scanned.piped
+    return _blanked(
+        command, [span for c in scanned.commands for span in _command_data(c, piped=piped)]
+    )
 
 
 # code_text: commands that run nothing they are given, and the data they take.
@@ -1473,13 +1520,11 @@ def code_text(command: str, lone: Sequence[str] = ()) -> str:
 
     When what is left as code holds a `$` or a backtick, nothing is blanked: it may expand to
     the blanked text (`$_` after a message, then `echo $[$_]` runs `a[$(...)]` in bash)."""
-    reader = _Lexer(command, comments=True)
-    try:
-        tokens = reader.tokenize()
-        commands, piped = _commands(tokens)
-    except _GiveUp:
+    scanned = _scan(command, comments=True, substitutions=False)
+    if scanned is None:
         return command
-    if PAREN in tokens:
+    commands, piped = scanned.commands, scanned.piped
+    if PAREN in scanned.lexed.tokens:
         lone = ()
     lone_spans = [(c.words[0].start, c.words[-1].end) for c in commands if _is_lone(c, lone)]
     simple = [c for c in commands if c.words and not _is_lone(c, lone)]
@@ -1489,7 +1534,7 @@ def code_text(command: str, lone: Sequence[str] = ()) -> str:
     rewrites = any(c.writes_run_later for c in commands) or (
         has_git and any(c.writes for c in commands)
     )
-    spans = [*reader.comment_spans, *lone_spans]
+    spans = [*scanned.lexed.comment_spans, *lone_spans]
     for c in simple:
         spans += _code_data(c, keep_messages=rewrites, keep_text=piped or rewrites)
     blanked = _blanked(command, spans)

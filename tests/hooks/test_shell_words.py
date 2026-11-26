@@ -2,10 +2,14 @@
 deny-secrets; `code_text`, `heredoc_bodies`, `without_patterns` and `simple_commands` serve the
 production guard. The scanner only reads command strings: no test runs one."""
 
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
+import test_guard_corpus as corpus
+from guard_corpus import N
 from support import load_module
 
 SCRIPT = Path(__file__).resolve().parents[2] / "hooks" / "shell_words.py"
@@ -1019,3 +1023,348 @@ def test_without_quoted_globs_leaves_bodies_and_comments_as_written(command, mas
 )
 def test_without_quoted_globs_returns_the_command_unchanged_when_it_cannot_follow(command):
     assert module.without_quoted_globs(command) == command
+
+
+# --- one lex per text and lexer variant ---
+
+# A lexer variant is the set of `_Lexer` options: (comments, substitutions).
+Variant = tuple[bool, bool]
+Lex = tuple[str, bool, bool]  # the text and its variant
+
+
+@pytest.fixture
+def lexes(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Lex]]:
+    """Every `_Lexer.tokenize` call of `module`, as (text, comments, substitutions), starting from
+    an empty cache."""
+    seen: list[Lex] = []
+    real = module._Lexer.tokenize
+
+    def counting(self: Any) -> Any:
+        seen.append((self.text, self.comments, self.substitutions))
+        return real(self)
+
+    module._lex.cache_clear()
+    monkeypatch.setattr(module._Lexer, "tokenize", counting)
+    yield seen
+    module._lex.cache_clear()
+
+
+# Each public function once, with the variant it lexes in.
+PUBLIC_CALLS: dict[str, tuple[Callable[[str], object], Variant]] = {
+    "without_data": (module.without_data, (False, False)),
+    "without_patterns": (module.without_patterns, (False, False)),
+    "code_text": (module.code_text, (True, False)),
+    "heredoc_bodies": (module.heredoc_bodies, (True, False)),
+    "simple_commands": (module.simple_commands, (True, False)),
+    "simple_commands_substitutions": (
+        lambda text: module.simple_commands(text, substitutions=True),
+        (True, True),
+    ),
+    "quoted_heredoc_spans": (module.quoted_heredoc_spans, (True, True)),
+}
+
+
+def test_every_public_function_lexes_a_text_once_per_variant(lexes: list[Lex]) -> None:
+    text = "git commit -m 'a b' && ls"
+    for call, _variant in PUBLIC_CALLS.values():
+        call(text)
+        call(text)
+    assert sorted(lexes) == sorted({(text, *variant) for _call, variant in PUBLIC_CALLS.values()})
+    assert len(lexes) == 3
+
+
+@pytest.mark.parametrize("name", sorted(PUBLIC_CALLS))
+def test_a_second_call_on_the_same_text_does_not_lex(name: str, lexes: list[Lex]) -> None:
+    call, _variant = PUBLIC_CALLS[name]
+    call("ls -la")
+    assert len(lexes) == 1
+    call("ls -la")
+    assert len(lexes) == 1
+
+
+def test_a_text_the_scanner_cannot_follow_is_lexed_once_too(lexes: list[Lex]) -> None:
+    text = "echo `date`"
+    assert module.simple_commands(text) is None
+    assert module.simple_commands(text) is None
+    assert module.heredoc_bodies(text) is None
+    assert len(lexes) == 1
+
+
+def test_a_lexer_error_that_is_not_a_give_up_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch, lexes: list[Lex]
+) -> None:
+    def broken(self: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(module._Lexer, "tokenize", broken)
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            module.simple_commands("ls")
+    assert module._lex.cache_info().currsize == 0
+
+
+def words_of(text: str) -> list[tuple[str, str | None, int, int]]:
+    (command,) = module.simple_commands(text)
+    return [(word.raw, word.value, word.start, word.end) for word in command.words]
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("echo a b", "echo  a b"),  # one more blank before
+        ("echo a b", "echo a  b"),  # one more blank between
+        ("echo 'a b'", "echo a b"),  # quoted or not
+        ('echo "a  b"', 'echo "a b"'),  # a blank inside the quotes
+        ("echo 'x'", 'echo "x"'),  # the kind of quote
+        ("echo x", "echo \\x"),  # a backslash
+    ],
+)
+def test_texts_that_differ_in_quoting_or_blanks_get_their_own_entries(
+    first: str, second: str, lexes: list[Lex]
+) -> None:
+    one, two = words_of(first), words_of(second)
+    assert len(lexes) == 2
+    assert one != two
+    assert (words_of(first), words_of(second)) == (one, two)
+    assert len(lexes) == 2
+
+
+def test_a_different_command_never_reuses_an_entry_whatever_the_order(lexes: list[Lex]) -> None:
+    texts = ["ls a", "ls  a", "ls 'a'", 'ls "a"', "ls a ", " ls a", "ls a;", "ls\ta"]
+    first = [module.without_data(text) for text in texts]
+    second = [module.without_data(text) for text in reversed(texts)][::-1]
+    assert first == second == texts  # nothing to blank: each comes back as it was written
+    assert [text for text, *_ in lexes] == texts
+    different = [text for text in texts if text not in ("ls a ", "ls\ta")]  # same words as "ls a"
+    assert len({str(module.simple_commands(text)) for text in different}) == len(different)
+
+
+def test_the_corpus_gives_the_same_answer_with_and_without_the_cache(lexes: list[Lex]) -> None:
+    """The cache must not change any answer: every corpus command, every public function, once with
+    a warm cache and once with a cold one."""
+
+    def answers(text: str) -> list[str]:
+        return [str(call(text)) for call, _variant in PUBLIC_CALLS.values()]
+
+    texts = [entry.command for entry in corpus.ENTRIES]
+    cold = []
+    for text in texts:
+        module._lex.cache_clear()
+        cold.append(answers(text))
+    module._lex.cache_clear()
+    warm = [answers(text) for text in texts]
+    assert warm == cold
+    assert [answers(text) for text in texts] == cold  # a second, fully cached pass
+
+
+def test_the_variants_never_share_an_entry(lexes: list[Lex]) -> None:
+    """The same text under each set of options gets its own parse, and the results show it: a
+    comment is read only with `comments`, a `$(...)` only with `substitutions`."""
+    commented = "ls # note"
+    assert module.without_data(commented) == commented  # gives up on the comment
+    assert module.simple_commands(commented) is not None  # reads it
+    assert len(lexes) == 2
+    assert module.simple_commands(commented) is not None
+    assert module.without_data(commented) == commented
+    assert len(lexes) == 2
+
+    substituted = "echo $(date)"
+    assert module.simple_commands(substituted) is None
+    (command,) = module.simple_commands(substituted, substitutions=True)
+    assert command.words[1].substitutions == ("date",)
+    assert module.simple_commands(substituted) is None  # the other variant's entry is no answer
+    assert len(lexes) == 4
+    keys = {(text, comments, substitutions) for text, comments, substitutions in lexes}
+    assert keys == {
+        (commented, False, False),
+        (commented, True, False),
+        (substituted, True, False),
+        (substituted, True, True),
+    }
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("without_data", "code_text"),
+        ("without_patterns", "heredoc_bodies"),
+        ("without_data", "quoted_heredoc_spans"),
+        ("code_text", "quoted_heredoc_spans"),
+        ("simple_commands", "simple_commands_substitutions"),
+    ],
+)
+def test_functions_with_different_options_do_not_share(
+    first: str, second: str, lexes: list[Lex]
+) -> None:
+    PUBLIC_CALLS[first][0]("echo x")
+    PUBLIC_CALLS[second][0]("echo x")
+    assert len(lexes) == 2
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("without_data", "without_patterns"),
+        ("code_text", "heredoc_bodies"),
+        ("heredoc_bodies", "simple_commands"),
+        ("simple_commands_substitutions", "quoted_heredoc_spans"),
+    ],
+)
+def test_functions_with_the_same_options_share_one_parse(
+    first: str, second: str, lexes: list[Lex]
+) -> None:
+    """The parse is only read by each function, never changed, so the same options may share it."""
+    PUBLIC_CALLS[first][0]("echo x")
+    PUBLIC_CALLS[second][0]("echo x")
+    assert len(lexes) == 1
+
+
+def test_a_changed_command_list_does_not_change_the_next_result() -> None:
+    text = "cat > f <<'EOF'\nbody\nEOF\nls | wc"
+    expected = module.simple_commands(text)
+    changed = module.simple_commands(text)
+    changed.clear()
+    again = module.simple_commands(text)
+    assert again == expected
+    for command in again:
+        command.words.clear()
+        command.heredocs.clear()
+        command.redirect_targets.append("x")
+        command.write_paths.append("x")
+        command.argument_writes.append("x")
+        command.input_files.append("x")
+        command.redirect_inputs.append("x")
+        command.writes = not command.writes
+    assert module.simple_commands(text) == expected
+
+
+def test_a_heredoc_changed_by_a_caller_does_not_change_the_next_result() -> None:
+    text = "cat <<'EOF'\nbody\nEOF\n"
+    (reader, *_) = module.simple_commands(text)
+    (heredoc,) = reader.heredocs
+    original = heredoc.body
+    heredoc.body = (0, 0)
+    heredoc.delimiter = "changed"
+    (again, *_) = module.simple_commands(text)
+    assert again.heredocs[0].body == original
+    assert again.heredocs[0].delimiter == "EOF"
+
+
+def test_a_changed_heredoc_result_does_not_change_the_next_result() -> None:
+    text = "cat <<'EOF'\nbody\nEOF\n"
+    found = module.heredoc_bodies(text)
+    expected = (found.rest, list(found.bodies), list(found.readers))
+    found.bodies.append("x")
+    found.readers.clear()
+    again = module.heredoc_bodies(text)
+    assert (again.rest, again.bodies, again.readers) == expected
+
+
+def test_a_changed_span_list_does_not_change_the_next_result() -> None:
+    text = "cat <<'EOF'\nbody\nEOF\n"
+    spans = module.quoted_heredoc_spans(text)
+    expected = list(spans)
+    spans.clear()
+    assert module.quoted_heredoc_spans(text) == expected
+
+
+def test_commands_bound_to_names_do_not_change_the_cached_parse() -> None:
+    text = "cat $D/x"
+    bound = module.bind_names(module.simple_commands(text), {"D": "/etc"})
+    assert bound[0].words[1].raw == "/etc/x"
+    assert module.simple_commands(text)[0].words[1].raw == "$D/x"
+
+
+def test_the_cache_holds_at_most_256_texts(lexes: list[Lex]) -> None:
+    for number in range(300):
+        module.without_data(f"echo {number}")
+    assert len(lexes) == 300
+    assert module._lex.cache_info().currsize == 256
+    assert module._lex.cache_info().maxsize == 256
+    module.without_data("echo 299")  # the newest is still held
+    assert len(lexes) == 300
+    module.without_data("echo 0")  # the oldest was dropped, and is lexed again
+    assert len(lexes) == 301
+
+
+# --- the guards: one process, two calls ---
+
+# The fixtures the corpus runners ask for, by their names.
+world = corpus.world
+repo = corpus.repo
+patient_hook = corpus.patient_hook
+store = corpus.store
+patient_guard = corpus.patient_guard
+runners = corpus.runners
+context = corpus.context
+
+
+def first_entry_with(guard: str, verdict: str) -> str:
+    """The id of the first corpus entry on which `guard` gives `verdict`."""
+    return next(entry.id for entry in corpus.ENTRIES if entry.verdict(guard) == verdict)
+
+
+def entry_named(entry_id: str) -> "corpus.Entry":
+    return next(entry for entry in corpus.ENTRIES if entry.id == entry_id)
+
+
+@pytest.mark.usefixtures("patient_hook", "patient_guard")
+@pytest.mark.parametrize("guard", corpus.GUARDS)
+def test_two_calls_in_one_process_each_get_their_own_verdict(
+    guard: str, runners: dict[str, corpus.Runner], context: corpus.Context
+) -> None:
+    """Refuse, allow, refuse, allow (and the reverse order) in one process: a parse kept from one
+    call never decides the next."""
+    refused = entry_named(first_entry_with(guard, corpus.R))
+    allowed = entry_named(first_entry_with(guard, corpus.A))
+    for entry in (refused, allowed, allowed, refused, refused, allowed, allowed, refused):
+        result = runners[guard](context.fill(entry.command), context.cwd)
+        assert result.verdict == entry.verdict(guard), (guard, entry.id, result.text)
+
+
+@pytest.mark.usefixtures("patient_hook", "patient_guard")
+@pytest.mark.parametrize("guard", corpus.GUARDS)
+def test_two_commands_that_differ_only_in_quoting_get_their_own_verdict(
+    guard: str, runners: dict[str, corpus.Runner], context: corpus.Context
+) -> None:
+    """Every pair of corpus commands that differ only by blanks or quote marks, run back to back
+    in one process, each keeps the verdict the corpus pins."""
+    squeezed: dict[str, list[corpus.Entry]] = {}
+    for entry in corpus.ENTRIES:
+        key = "".join(char for char in entry.command if char not in " \t'\"")
+        squeezed.setdefault(key, []).append(entry)
+    pairs = [group for group in squeezed.values() if len(group) > 1]
+    for group in pairs:
+        for entry in [*group, *reversed(group)]:
+            if entry.verdict(guard) == N:
+                continue
+            result = runners[guard](context.fill(entry.command), context.cwd)
+            assert result.verdict == entry.verdict(guard), (guard, entry.id, result.text)
+
+
+PROD_RUNS = ("control-16", "control-29", "9i-heredoc-cat-claude")
+
+
+@pytest.mark.usefixtures("patient_hook", "patient_guard")
+@pytest.mark.parametrize("entry_id", PROD_RUNS)
+def test_one_prod_guard_run_lexes_each_text_and_variant_once(
+    entry_id: str,
+    runners: dict[str, corpus.Runner],
+    context: corpus.Context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """prod_guard read one Bash call about 14 times; the calls share a parse now."""
+    lexer = corpus.pg._shell_words()._Lexer
+    seen: list[Lex] = []
+    real = lexer.tokenize
+
+    def counting(self: Any) -> Any:
+        seen.append((self.text, self.comments, self.substitutions))
+        return real(self)
+
+    corpus.pg._shell_words()._lex.cache_clear()
+    monkeypatch.setattr(lexer, "tokenize", counting)
+    entry = entry_named(entry_id)
+    runners["prod_guard"](context.fill(entry.command), context.cwd)
+    assert seen
+    assert len(seen) == len(set(seen)), "a text was lexed twice in one variant"
