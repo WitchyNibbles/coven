@@ -58,6 +58,25 @@ but breaks the role pairing of `shell-env.ts`, so it is not used.
    PM shell's env.
 4. Mounts made in the outer namespace are locked for the inner one: the PM's process cannot unmount
    the tmpfs or the new `/proc`.
+5. Stopping a PM reaches every tree it started. On 2.3.2 a shell call's `timeout` kills nothing: the
+   call moves to the background and its namespace keeps running, so `--kill-child` alone is not
+   enough. Before the final `exec`, the wrapper writes a pid record: a file named for its own pid (the
+   `exec` keeps it, so it becomes the outer `unshare`) in `COVEN_PM_PIDS`, holding the process start
+   time (field 22 of `/proc/<pid>/stat`), written to a temp file and moved into place; a write that
+   fails refuses the shell. In `createBefore` the plugin sets `COVEN_PM_PIDS` to
+   `<serveDir>/isolate/pids/<PM session id>` (made 0700 there; a failure refuses the shell) and
+   `COVEN_PM_SESSION` to that id. The id is the session that holds the PM role, so the shell of a PM's
+   child session files its tree under the PM that `coven_pm_stop` is given. A caller's values for both
+   names are deleted. A shell whose PM cannot be placed (the role lookup failed) is refused, since no
+   stop could reach it. `coven_pm_stop` interrupts the turn, then reads each record of that PM and
+   sends SIGKILL to the pid only when its start time still matches, `/proc/<pid>/exe` is an `unshare`
+   binary and its command line has `--kill-child`; `--kill-child` then takes the namespace down. A pid
+   that is gone (or a zombie) is not killed and its record is removed; a pid with another start time (a
+   reused pid) is never killed, its record is removed and counted as stale; a pid that matches the
+   start time but is not our `unshare` is not killed, counted as stale, and its record stays. After a
+   kill the stop waits briefly for the pid to go and removes the record; an empty folder is removed.
+   The stop's text ends with `; killed N isolation tree(s)` and, when M > 0, `; skipped M stale
+   record(s)`. A sweep that fails is a tool error that says the PM was interrupted.
 
 Checked on this machine (WSL2, kernel 6.18, util-linux 2.39.3): the command runs as uid 1000 inside,
 `/proc` shows 3 processes, a tmpfs hides a folder's file, writes and `git status` work,
@@ -71,7 +90,8 @@ Checked on this machine (WSL2, kernel 6.18, util-linux 2.39.3): the command runs
   `--map-user`); user namespaces off (`max_user_namespaces` is 0, or
   `unprivileged_userns_clone` is 0); AppArmor blocks unprivileged user namespaces
   (`apparmor_restrict_unprivileged_userns` is 1); or the `unshare` error text when none of those
-  explains it. A missing hide list or real shell in the env is also a refusal.
+  explains it. A missing hide list, real shell or pid folder in the env, or a pid record that cannot be
+  written, is also a refusal.
 - If the plugin cannot find the wrapper at start, a PM's shell is refused (a throw from `createBefore`
   stops the shell).
 - No setting turns isolation off.
@@ -82,6 +102,13 @@ Checked on this machine (WSL2, kernel 6.18, util-linux 2.39.3): the command runs
   with the same command and folder can get the PM's treatment, so it runs isolated once. Safe
   direction; documented.
 - The session messages show the model's command; only the result shows the wrapper ran.
+- A shell that runs past its `timeout` is not killed by OpenCode 2.3.2 (the call moves to the
+  background); its tree lives until `coven_pm_stop` of that PM, which kills it (mechanism 5), or until
+  the OpenCode server exits. A tree started before the plugin wrote records (an older plugin) has no
+  record and is not reached by a stop.
+- A record whose start time cannot be compared (the server cannot read `/proc/<pid>/exe` or
+  `cmdline` of the `unshare`) is skipped, not killed, and is reported as a stale record.
+- Pid records of a PM that is never stopped stay in its folder until the next stop of that PM.
 
 ## Tests
 

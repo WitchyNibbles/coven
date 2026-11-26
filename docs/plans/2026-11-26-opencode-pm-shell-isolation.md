@@ -52,6 +52,10 @@ plugin's `shell.create.before` points a PM's shell at it; the doctor runs it onc
   read from the environment only, so Task 2 deletes both names from a PM shell's env. The wrapper never
   resolves a tool from the caller's PATH and gives the caller's PATH back only to the real shell.
 - Exit: the real shell's exit code; on refusal 126 with the spec's one stderr line.
+- Task 4b adds `COVEN_PM_PIDS` (absolute folder): before the final `exec` the wrapper writes the file
+  `<pid>` (its own pid) there, holding the start time (field 22 of `/proc/<pid>/stat`), through a temp
+  file and `mv`; a missing or relative value, or a failed write, refuses. The doctor probe gives it a
+  temp folder.
 
 - [ ] Step 1: tests with a fake `unshare` on PATH (records its argv, can fail with a given stderr) and a
   temp `/proc/sys` tree: the outer argv is exactly
@@ -82,6 +86,12 @@ plugin's `shell.create.before` points a PM's shell at it; the doctor runs it onc
   `env.COVEN_PM_HIDE = <serveDir>:<dataDir>`, and `event.shell = <the copy>`. A source that is not an
   executable file makes every PM shell throw (refused) with the spec's message and
   `wrapper not found: <path>`; a copy that fails does the same with `wrapper copy failed: <why>`.
+- Task 4b: `createBefore` also sets `env.COVEN_PM_SESSION = <the PM session that holds the role>` and
+  `env.COVEN_PM_PIDS = <serveDir>/isolate/pids/<that id>` (folder made 0700; a failure, an id that is not
+  a plain name, or a shell whose PM was not placed refuses the shell); both names are deleted from any
+  other shell's env. `opencode/src/pm/trees.ts` sweeps a PM's folder for `coven_pm_stop` (SIGKILL only
+  when start time, an `unshare` exe and `--kill-child` all match; stale and gone records removed) and
+  the stop text gains `; killed N isolation tree(s)` (and `; skipped M stale record(s)`).
 
 - [ ] Step 1: tests: PM shell gets the wrapper and both env values; GM shell and a shell with no queue
   entry keep `event.shell` and get neither value; a missing wrapper refuses a PM's shell and not a GM's;
@@ -117,6 +127,9 @@ plugin's `shell.create.before` points a PM's shell at it; the doctor runs it onc
   in the worktree work; the cwd is the call's `workdir`; the role variable is set; `umount` of `/proc` and
   of the serve folder fail and the folder still lists empty. From a GM session's shell: the server's pid is
   in `/proc` and the folders list their files.
+  Task 4b: the timeout check drives a call past its `timeout` (2.3.2 moves it to the background, nothing
+  killed), then `coven_pm_stop` of the PM; zero processes of that namespace may be left, and the stop
+  text must say it killed a tree.
 - [ ] Step 2: run `cd opencode && COVEN_OPENCODE_BIN=<2.3.2 binary> npm run e2e -- isolation`, then the
   whole `npm run e2e` once; every line ok.
 - [ ] Step 3: commit `test(opencode): e2e of PM shell isolation on 2.3.2`.
