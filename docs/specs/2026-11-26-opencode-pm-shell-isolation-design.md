@@ -70,13 +70,18 @@ but breaks the role pairing of `shell-env.ts`, so it is not used.
    names are deleted. A shell whose PM cannot be placed (the role lookup failed) is refused, since no
    stop could reach it. `coven_pm_stop` interrupts the turn, then reads each record of that PM and
    sends SIGKILL to the pid only when its start time still matches, `/proc/<pid>/exe` is an `unshare`
-   binary and its command line has `--kill-child`; `--kill-child` then takes the namespace down. A pid
-   that is gone (or a zombie) is not killed and its record is removed; a pid with another start time (a
-   reused pid) is never killed, its record is removed and counted as stale; a pid that matches the
-   start time but is not our `unshare` is not killed, counted as stale, and its record stays. After a
-   kill the stop waits briefly for the pid to go and removes the record; an empty folder is removed.
-   The stop's text ends with `; killed N isolation tree(s)` and, when M > 0, `; skipped M stale
-   record(s)`. A sweep that fails is a tool error that says the PM was interrupted.
+   binary, its command line has `--kill-child` and its `/proc/<pid>/environ` holds
+   `COVEN_PM_PIDS=<this PM's folder>` as a whole NUL-separated entry (so another PM's unshare is never
+   killed by this stop); `--kill-child` then takes the namespace down. A pid that is gone (or a zombie)
+   is not killed and its record is removed; a pid with another start time (a reused pid) is never
+   killed, its record is removed and counted as stale; a pid that matches the start time but fails the
+   exe, flags or environ check (or whose environ cannot be read) is not killed, counted as stale, and
+   its record stays. After a kill the stop waits briefly for the pid to go: a tree counts as killed
+   only when its pid is gone after the wait and its record is removed; a survivor is counted apart and
+   its record stays. A leftover temp record (`.record.XXXXXX`) older than 60 s is removed; an empty
+   folder is removed. The stop's text ends with `; killed N isolation tree(s)`, then `; skipped M stale
+   record(s)` when M > 0, then `; K tree(s) still running after SIGKILL` when K > 0. A sweep that
+   fails is a tool error that says the PM was interrupted.
 
 Checked on this machine (WSL2, kernel 6.18, util-linux 2.39.3): the command runs as uid 1000 inside,
 `/proc` shows 3 processes, a tmpfs hides a folder's file, writes and `git status` work,
@@ -109,6 +114,12 @@ Checked on this machine (WSL2, kernel 6.18, util-linux 2.39.3): the command runs
 - A record whose start time cannot be compared (the server cannot read `/proc/<pid>/exe` or
   `cmdline` of the `unshare`) is skipped, not killed, and is reported as a stale record.
 - Pid records of a PM that is never stopped stay in its folder until the next stop of that PM.
+- The check and the kill of a stop are separate steps (Node has no pidfd). The start time and the
+  environ are read microseconds before the kill, and a pid reused in that window would need a full pid
+  wrap.
+- The role queue's pairing: two PM shells with the same command and folder in the same instant can file
+  a tree under the other PM. A stop of that other PM then kills it, and a stop of the right PM misses
+  it until its next stop. This is the safe direction for isolation.
 
 ## Tests
 
