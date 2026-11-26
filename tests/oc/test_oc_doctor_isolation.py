@@ -8,6 +8,7 @@ does: no test creates a namespace.
 import os
 import shutil
 import stat
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -231,13 +232,28 @@ def alive(pid: int) -> bool:
     return state != "Z"
 
 
+def gone_within(pid: int, seconds: float) -> bool:
+    """Whether the process stops running before the deadline: a SIGKILL is not instant."""
+    deadline = time.monotonic() + seconds
+    while alive(pid):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
 def test_a_timeout_kills_the_children_the_wrapper_started(tmp_path: Path):
+    # The timeout leaves a loaded machine (CI, a parallel check) time to start the shell and write
+    # the pid; the child is then given a deadline to die, since killpg returns before it has. The
+    # child does not hold the probe's pipes, so killing only the wrapper would leave it running.
     pid_file = tmp_path / "child.pid"
-    wrapper = script(tmp_path / "wrapper.sh", f"sleep 30 &\necho $! > {pid_file}\nwait")
-    assert probe_isolation(wrapper, {}, timeout=0.5).detail.startswith("not available: timed out")
+    wrapper = script(
+        tmp_path / "wrapper.sh", f"sleep 30 >/dev/null 2>&1 &\necho $! > {pid_file}\nwait"
+    )
+    assert probe_isolation(wrapper, {}, timeout=3).detail.startswith("not available: timed out")
     child = int(pid_file.read_text())
     try:
-        assert not alive(child)
+        assert gone_within(child, 5)
     finally:
         if alive(child):
             os.kill(child, 9)
