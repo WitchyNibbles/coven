@@ -11,7 +11,8 @@ from fakes import fake_opencode, install_superpowers
 from serve_kit import Procs
 
 from coven import cli
-from coven.opencode import serve, superpowers
+from coven.opencode import checks_isolation, serve, superpowers
+from coven.opencode.check_types import Outcome
 from coven.opencode.profile import layout
 
 
@@ -42,6 +43,17 @@ def no_superpowers_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         start(self, args, *rest, **named)
 
     monkeypatch.setattr(subprocess.Popen, "__init__", guarded)
+
+
+@pytest.fixture(autouse=True)
+def no_real_namespaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The doctor's isolation probe says ok without running the wrapper: no test makes a namespace.
+
+    A test of the probe calls `probe_isolation` as imported at its own top, or patches the module.
+    """
+    monkeypatch.setattr(
+        checks_isolation, "probe_isolation", lambda _wrapper, _base: Outcome("ok", "ok")
+    )
 
 
 @pytest.fixture

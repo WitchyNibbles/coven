@@ -21,6 +21,7 @@ NAMES = [
     "skills",
     "operations",
     "coven root",
+    "PM shell isolation",
     "project config",
     "superpowers",
     "limits",
