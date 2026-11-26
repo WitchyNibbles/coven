@@ -18,6 +18,7 @@ import type { HierarchyWorld } from "../hierarchy/world.ts";
 import { fact, factsOf, writeFacts } from "./facts.ts";
 import type { Facts, Places } from "./facts.ts";
 import { serveWriteProblem } from "./files.ts";
+import { linkedWorkdirProblem } from "./link.ts";
 import { interruptProblem, timeoutProblem } from "./timeout.ts";
 
 /** The names the fake tree is reached by: the wrapper's seams. */
@@ -273,6 +274,10 @@ function steps(): Step[] {
     [
       "write-guard: a PM's Write and Edit into the serve folder, the wrapper copy and the password are refused, and the files are unchanged",
       (run, seen) => serveWriteProblem(run, seen.places.serve, seen.repo),
+    ],
+    [
+      "link: a PM shell whose workdir is a symlink into the serve folder is refused or does not see the password",
+      (run, seen) => linkedWorkdirProblem(run, seen.places.serve, seen.repo),
     ],
   ];
 }
