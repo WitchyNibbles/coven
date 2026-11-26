@@ -39,8 +39,9 @@ function said(out: ToolOut | undefined): string {
   return out?.content ?? out?.error ?? "no answer";
 }
 
+/** The stop's text, then what it says of the isolation trees it swept (none run here). */
 const STOPPED =
-  "stopped pm-x; hidden from coven_pm_list; the session is not archived in OpenCode";
+  /^stopped pm-x; hidden from coven_pm_list; the session is not archived in OpenCode; killed 0 isolation tree\(s\)$/;
 
 /** The first of `checks` whose condition fails, as its message. */
 function firstFailed(checks: readonly [boolean, string][]): string | undefined {
@@ -56,7 +57,7 @@ function flagProblem(lines: readonly Recorded[]): string | undefined {
   const afterResume = JSON.stringify(found(lines, "afterResume"));
   const listed = String(found(lines, "listAfterResume"));
   return firstFailed([
-    [stop === STOPPED, `coven_pm_stop with archive true says: ${stop}`],
+    [STOPPED.test(stop), `coven_pm_stop with archive true says: ${stop}`],
     [
       afterStop === '{"flag":true,"role":"pm","code":"x","note":"kept"}',
       `after the stop the metadata is ${afterStop}`,

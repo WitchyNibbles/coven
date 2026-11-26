@@ -10,8 +10,9 @@ import type { Run } from "./run.ts";
 import { infoOf, messagesOf, quiet } from "./sessions.ts";
 import { listLine } from "./manage.ts";
 
+/** The stop's text, then what it says of the isolation trees it swept (none run here). */
 const STOPPED =
-  "stopped pm-delta; hidden from coven_pm_list; the session is not archived in OpenCode";
+  /^stopped pm-delta; hidden from coven_pm_list; the session is not archived in OpenCode; killed 0 isolation tree\(s\)$/;
 
 /** The ids the server lists as archived. */
 async function archivedIds(run: Run): Promise<string[]> {
@@ -41,7 +42,7 @@ async function stopProblem(
   const shown = await listLine(run, "delta");
   const all = await hiddenLine(run, "delta");
   const checks: [boolean, string][] = [
-    [said === STOPPED, `the stop says: ${said}`],
+    [STOPPED.test(said), `the stop says: ${said}`],
     [
       at(coven, "archived") === true &&
         at(coven, "role") === "pm" &&

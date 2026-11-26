@@ -263,7 +263,7 @@ function steps(): Step[] {
       },
     ],
     [
-      "timeout: a PM shell call past its timeout leaves no process behind, or (2.3.2) is moved to the background with nothing killed",
+      "timeout: a PM shell call past its timeout leaves no process behind, or (2.3.2) is moved to the background and coven_pm_stop kills its whole tree",
       (run) => timeoutProblem(run, run.world.beta),
     ],
     [

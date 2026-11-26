@@ -218,21 +218,25 @@ async function stopBackgrounded(
   if (still.length === 0) {
     return "OpenCode moved the call to the background but its namespace is gone";
   }
-  const stopped = completedProblem(
-    await gmCall(run, "coven_pm_stop", { code: "delta" }),
-  );
+  const answer = await gmCall(run, "coven_pm_stop", { code: "delta" });
+  const stopped = completedProblem(answer);
   const left = await leftOver(ns);
   record(
     "timeout stop",
-    left === undefined
-      ? "coven_pm_stop ended the backgrounded sleep"
-      : `coven_pm_stop left the backgrounded sleep: ${left}`,
+    `${answer.text.slice(0, 120)} | ${
+      left === undefined
+        ? "no process of the namespace is left"
+        : `left: ${left}`
+    }`,
   );
+  if (left !== undefined) {
+    return `FAIL: coven_pm_stop of the PM left its backgrounded call: ${left}`;
+  }
   return (
     stopped ??
-    (left === undefined
+    (/; killed [1-9]\d* isolation tree\(s\)/.test(answer.text)
       ? undefined
-      : `FAIL: coven_pm_stop of the PM left its backgrounded call: ${left}`)
+      : `the stop ended the namespace but did not say it killed a tree: ${answer.text.slice(0, 120)}`)
   );
 }
 
