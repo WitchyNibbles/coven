@@ -6,6 +6,11 @@
 # shell of a PM's calls and passes the real shell and the folders to hide in the environment:
 #   COVEN_PM_REAL_SHELL  absolute path of the shell that runs the command
 #   COVEN_PM_HIDE        folders to hide, `:`-separated; each that exists gets an empty tmpfs
+#   COVEN_PM_PIDS        the folder (absolute) that holds this PM's pid records: just before the
+#                        outer unshare replaces this process, the wrapper writes a file there named
+#                        for its own pid, holding the process start time (field 22 of
+#                        /proc/<pid>/stat). `coven_pm_stop` kills the trees of the records whose
+#                        pid still has that start time, so a pid that was reused is never killed.
 #   COVEN_ISOLATE_SYS    test seam: where the /proc/sys files used for the diagnosis are read
 #                        (default /proc/sys). It moves those reads and nothing else: no value of it
 #                        skips or weakens the unshare.
@@ -49,12 +54,37 @@ sys_value() {
     printf '%s' "$value"
 }
 
+# The start time of process $1: field 22 of /proc/$1/stat. The command name (field 2) may hold
+# spaces and parentheses, so the fields are counted after the last closing parenthesis, where field 3
+# comes first; field 22 is then the 20th. Prints nothing and fails when it is not a number.
+start_time() {
+    line=
+    read -r line < "/proc/$1/stat" || return 1
+    rest=${line##*) }
+    skipped=0
+    while [ "$skipped" -lt 19 ]; do
+        rest=${rest#* }
+        skipped=$((skipped + 1))
+    done
+    value=${rest%% *}
+    case $value in
+    '' | *[!0-9]*) return 1 ;;
+    esac
+    printf '%s' "$value"
+}
+
 real_shell=${COVEN_PM_REAL_SHELL-}
 hide=${COVEN_PM_HIDE-}
+pids=${COVEN_PM_PIDS-}
 sys_root=${COVEN_ISOLATE_SYS:-/proc/sys}
 
 [ -n "$real_shell" ] || refuse "COVEN_PM_REAL_SHELL is not set"
 [ -n "$hide" ] || refuse "COVEN_PM_HIDE is not set"
+[ -n "$pids" ] || refuse "COVEN_PM_PIDS is not set"
+case $pids in
+/*) ;;
+*) refuse "COVEN_PM_PIDS is not an absolute path" ;;
+esac
 case $real_shell in
 /*) ;;
 *) refuse "COVEN_PM_REAL_SHELL is not an absolute path" ;;
@@ -73,7 +103,7 @@ case $sh_bin in
 /*) ;;
 *) refuse "sh is not an absolute path" ;;
 esac
-for tool in id mktemp rm tr mount; do
+for tool in id mktemp rm tr mount mv; do
     command -v "$tool" > /dev/null 2>&1 || refuse "$tool not found"
 done
 # `--map-user` came with util-linux 2.38; the help text says whether it is there.
@@ -136,6 +166,17 @@ if ! "$unshare_bin" --user --map-root-user --pid --fork --kill-child --mount --m
 fi
 trap - EXIT
 rm -f "$errors"
+
+# The pid record: the exec below keeps this pid, so the outer unshare will be this process. A stop
+# of the PM finds the namespace's tree by this file; the start time tells it the pid is still ours.
+# The file is made whole before it has its name (a temp file, then a move), so a reader never
+# sees half a record.
+start=$(start_time "$$") || refuse "cannot read the start time of process $$"
+record=$(mktemp "$pids/.record.XXXXXX" 2> /dev/null) || refuse "cannot write the pid record in $pids"
+if ! { printf '%s\n' "$start" > "$record" && mv -f "$record" "$pids/$$"; } 2> /dev/null; then
+    rm -f "$record"
+    refuse "cannot write the pid record in $pids"
+fi
 
 exec "$unshare_bin" --user --map-root-user --pid --fork --kill-child --mount --mount-proc \
     "$sh_bin" -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$unshare_bin" "$caller_path" "$@"

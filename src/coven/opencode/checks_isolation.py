@@ -45,8 +45,12 @@ def probe_isolation(wrapper: Path, base: Mapping[str, str], timeout: float = TIM
         return _not_available(f"wrapper not found: {wrapper}")
     env = {key: value for key, value in base.items() if key not in SEAMS}
     env["COVEN_PM_REAL_SHELL"] = REAL_SHELL
-    with tempfile.TemporaryDirectory(prefix="coven-isolation-") as hide:
+    with (
+        tempfile.TemporaryDirectory(prefix="coven-isolation-") as hide,
+        tempfile.TemporaryDirectory(prefix="coven-isolation-pids-") as pids,
+    ):
         env["COVEN_PM_HIDE"] = hide
+        env["COVEN_PM_PIDS"] = pids  # the wrapper's pid record goes here and goes with the folder
         try:
             code, stderr = _run(wrapper, env, timeout)
         except subprocess.TimeoutExpired:

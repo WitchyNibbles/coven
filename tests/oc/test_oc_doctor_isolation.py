@@ -236,6 +236,17 @@ def test_the_hide_folder_is_removed_when_the_wrapper_fails(tmp_path: Path):
     assert not Path(log.read_text()).exists()
 
 
+def test_the_pid_record_folder_exists_while_the_wrapper_runs_and_is_removed_after(tmp_path: Path):
+    log = tmp_path / "log"
+    wrapper = script(
+        tmp_path / "wrapper.sh", f'[ -d "$COVEN_PM_PIDS" ] && printf "%s" "$COVEN_PM_PIDS" > {log}'
+    )
+    assert probe_isolation(wrapper, {"COVEN_PM_PIDS": "/caller/value"}) == Outcome("ok", "ok")
+    folder = Path(log.read_text())
+    assert folder != Path("/caller/value")
+    assert not folder.exists()
+
+
 # The real wrapper behind a fake `unshare`
 
 FAKE_UNSHARE = """\
@@ -256,7 +267,7 @@ def fake_machine(tmp_path: Path, max_user_namespaces: str) -> Path:
     """A shim that runs the real wrapper on a trusted PATH of fakes and a temp `/proc/sys`."""
     tools = tmp_path / "tools"
     tools.mkdir()
-    for name in ("sh", "id", "mktemp", "rm", "tr", "true"):
+    for name in ("sh", "id", "mktemp", "rm", "tr", "true", "mv"):
         found = shutil.which(name)
         assert found
         (tools / name).symlink_to(found)

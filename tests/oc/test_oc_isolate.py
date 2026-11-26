@@ -33,7 +33,7 @@ OUTER = (
 PREFIX = "coven: PM shells run isolated and isolation is not available here: "
 SUFFIX = "; ask the user"
 # What the wrapper and its inner stage need besides the fakes.
-TOOLS = ("sh", "id", "mktemp", "rm", "tr", "cat", "true")
+TOOLS = ("sh", "id", "mktemp", "rm", "tr", "cat", "true", "mv")
 HELP = (
     "Usage: unshare [options] [<program> [<argument>...]]\n  --map-user=<uid>  map current user\n"
 )
@@ -47,9 +47,17 @@ import sys
 tool = os.path.basename(sys.argv[0])
 argv = sys.argv[1:]
 stdin = sys.stdin.read() if tool == "shell" else None
+# The process start time (field 22 of /proc/<pid>/stat) and the pid record the wrapper left for this
+# pid: both as this process sees them, so a test can tell the record was there before the exec.
+start = open("/proc/self/stat").read().rsplit(")", 1)[1].split()[19]
+try:
+    with open(os.path.join(os.environ.get("COVEN_PM_PIDS", ""), str(os.getpid()))) as saved:
+        record = saved.read()
+except OSError:
+    record = None
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(
-        json.dumps({{"tool": tool, "pid": os.getpid(), "argv": argv, "stdin": stdin, "env": dict(os.environ)}}) + "\\n"
+        json.dumps({{"tool": tool, "pid": os.getpid(), "argv": argv, "stdin": stdin, "start": start, "record": record, "env": dict(os.environ)}}) + "\\n"
     )
 if tool == "shell":
     sys.stderr.write(os.environ.get("FAKE_SHELL_ERR", ""))
@@ -86,6 +94,7 @@ class World:
     shell: Path
     caller_bin: Path
     pwned: Path
+    pids: Path
     last_pid: int = 0
 
     def write_sys(self, relative: str, value: str) -> None:
@@ -135,6 +144,7 @@ class World:
             "COVEN_PM_HIDE": f"{self.hide}:{self.root / 'absent'}:{self.other}"
             if hide is None
             else hide,
+            "COVEN_PM_PIDS": str(self.pids),
             "FAKE_LOG": str(self.log),
             "TMPDIR": str(self.root),
         }
@@ -183,7 +193,9 @@ def world(tmp_path: Path) -> World:
         bin_dir / "shell",
         tmp_path / "caller-bin",
         tmp_path / "pwned",
+        tmp_path / "pids",
     )
+    made.pids.mkdir()
     # What a PM can plant ahead of /usr/bin: a tool of each name that marks the attack and fails.
     made.caller_bin.mkdir()
     for name in (*TOOLS, "unshare", "mount"):
@@ -339,7 +351,7 @@ def test_a_mount_that_fails_refuses_and_the_command_does_not_run(world: World) -
     assert world.calls("shell") == []
 
 
-@pytest.mark.parametrize("name", ["COVEN_PM_REAL_SHELL", "COVEN_PM_HIDE"])
+@pytest.mark.parametrize("name", ["COVEN_PM_REAL_SHELL", "COVEN_PM_HIDE", "COVEN_PM_PIDS"])
 @pytest.mark.parametrize("value", ["<unset>", ""])
 def test_a_missing_env_value_refuses_before_anything_runs(
     world: World, name: str, value: str
@@ -348,6 +360,63 @@ def test_a_missing_env_value_refuses_before_anything_runs(
     assert done.returncode == 126
     assert done.stderr == refusal(f"{name} is not set")
     assert not world.log.exists()
+
+
+def test_a_pid_folder_that_is_not_an_absolute_path_refuses(world: World) -> None:
+    done = world.run(COVEN_PM_PIDS="pids")
+    assert done.returncode == 126
+    assert done.stderr == refusal("COVEN_PM_PIDS is not an absolute path")
+    assert not world.log.exists()
+
+
+def test_the_pid_record_holds_the_start_time_and_is_there_before_the_exec(world: World) -> None:
+    done = world.run()
+    assert done.returncode == 0, done.stderr
+    (outer,) = [c for c in world.calls("unshare") if c["argv"][8:9] == ["-c"]]
+    # The record is named for the pid the outer unshare has (the wrapper's own, kept by the exec) and
+    # holds that process's start time, read from /proc/<pid>/stat field 22.
+    assert outer["pid"] == world.last_pid
+    assert outer["record"] == f"{outer['start']}\n"
+    assert [path.name for path in world.pids.iterdir()] == [str(world.last_pid)]
+    assert (world.pids / str(world.last_pid)).read_text() == f"{outer['start']}\n"
+
+
+def test_each_call_leaves_its_own_record_and_no_temp_file(world: World) -> None:
+    world.run()
+    first = world.last_pid
+    world.run()
+    assert sorted(path.name for path in world.pids.iterdir()) == sorted(
+        [str(first), str(world.last_pid)]
+    )
+
+
+def test_the_record_is_written_after_the_preflight_and_before_the_outer_exec(world: World) -> None:
+    done = world.run(FAKE_UNSHARE_FAIL="nope")
+    assert done.returncode == 126
+    # a refusal leaves no record: nothing runs, so there is nothing for a stop to kill
+    assert list(world.pids.iterdir()) == []
+
+
+def test_a_record_that_cannot_be_written_refuses_and_nothing_runs(world: World) -> None:
+    missing = world.root / "no-such-folder"
+    done = world.run(COVEN_PM_PIDS=str(missing))
+    assert done.returncode == 126
+    assert done.stderr == refusal(f"cannot write the pid record in {missing}")
+    assert world.calls("shell") == []
+    assert [a for a in world.unshare_runs() if a[8:9] == ["-c"]] == []
+    assert not missing.exists()
+
+
+def test_a_pid_record_that_fails_to_move_leaves_no_temp_file(world: World) -> None:
+    # `mv` fails: the temp file the record was written to is removed, and the shell is refused.
+    (world.bin / "mv").unlink()
+    (world.bin / "mv").write_text("#!/bin/sh\nexit 1\n")
+    (world.bin / "mv").chmod(0o755)
+    done = world.run()
+    assert done.returncode == 126
+    assert done.stderr == refusal(f"cannot write the pid record in {world.pids}")
+    assert list(world.pids.iterdir()) == []
+    assert world.calls("shell") == []
 
 
 def test_a_real_shell_that_is_not_an_absolute_path_refuses(world: World) -> None:
@@ -379,7 +448,7 @@ def test_unshare_missing_refuses(world: World) -> None:
     assert not world.pwned.exists()  # the caller's own unshare is never a fallback
 
 
-@pytest.mark.parametrize("tool", ["sh", "id", "mktemp", "rm", "tr", "mount"])
+@pytest.mark.parametrize("tool", ["sh", "id", "mktemp", "rm", "tr", "mount", "mv"])
 def test_a_tool_the_wrapper_needs_that_is_missing_refuses(world: World, tool: str) -> None:
     (world.bin / tool).unlink()
     done = world.run()
