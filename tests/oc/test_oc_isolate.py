@@ -523,3 +523,31 @@ def test_the_script_passes_shellcheck() -> None:
         [shellcheck, "--shell=sh", str(WRAPPER)], capture_output=True, text=True, check=False
     )
     assert done.returncode == 0, done.stdout
+
+
+def test_a_tool_found_by_a_relative_path_entry_refuses(world: World) -> None:
+    # A relative entry in the trusted PATH would make `command -v` answer with a relative name, and a
+    # later call by that name would search the caller's PATH.
+    done = world.run(path=Path("bin"))
+    assert done.returncode == 126
+    assert done.stderr == refusal("unshare is not an absolute path")
+    assert world.calls("shell") == []
+    assert not world.pwned.exists()
+
+
+def test_a_shell_found_by_a_relative_path_entry_refuses(world: World) -> None:
+    only_unshare = world.root / "only-unshare"
+    only_unshare.mkdir()
+    (only_unshare / "unshare").symlink_to(world.bin / "unshare")
+    done = world.run(path=Path(f"{only_unshare}:bin"))
+    assert done.returncode == 126
+    assert done.stderr == refusal("sh is not an absolute path")
+    assert world.calls("shell") == []
+
+
+def test_the_trusted_path_is_exported_when_the_caller_has_none(world: World) -> None:
+    done = world.run(PATH="<unset>")
+    assert done.returncode == 0, done.stderr
+    assert {call["env"]["PATH"] for call in world.calls("mount")} == {str(world.bin)}
+    # The real shell gets the caller's PATH; with none, whatever default the wrapper's sh had.
+    assert world.calls("shell")[0]["env"]["PATH"]

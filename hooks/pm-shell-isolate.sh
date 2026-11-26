@@ -32,6 +32,7 @@
 
 caller_path=${PATH-}
 PATH=${COVEN_ISOLATE_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
 [ -n "$caller_path" ] || caller_path=$PATH
 
 refuse() {
@@ -63,6 +64,15 @@ esac
 
 unshare_bin=$(command -v unshare) || refuse "unshare not found"
 sh_bin=$(command -v sh) || refuse "sh not found"
+# Both run later by this name: a relative one would be searched on whatever PATH is then set.
+case $unshare_bin in
+/*) ;;
+*) refuse "unshare is not an absolute path" ;;
+esac
+case $sh_bin in
+/*) ;;
+*) refuse "sh is not an absolute path" ;;
+esac
 for tool in id mktemp rm tr mount; do
     command -v "$tool" > /dev/null 2>&1 || refuse "$tool not found"
 done
