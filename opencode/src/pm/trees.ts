@@ -140,13 +140,18 @@ function judge(
   if (found === undefined || found.start !== recorded) {
     return "stale";
   }
+  return isPmUnshare(proc, pid, folder) ? "ours" : "other";
+}
+
+/** Whether the process is the outer `unshare` of the wrapper of the PM whose folder is `folder`. */
+function isPmUnshare(proc: Proc, pid: number, folder: string): boolean {
   const exe = proc.exe(pid);
-  const isOurs =
+  return (
     exe !== undefined &&
     basename(exe) === UNSHARE &&
     proc.cmdline(pid)?.includes(KILL_CHILD_FLAG) === true &&
-    proc.environ(pid)?.includes(`${PIDS_ENV}=${folder}`) === true;
-  return isOurs ? "ours" : "other";
+    proc.environ(pid)?.includes(`${PIDS_ENV}=${folder}`) === true
+  );
 }
 
 function isMissing(error: unknown, code: string): boolean {
