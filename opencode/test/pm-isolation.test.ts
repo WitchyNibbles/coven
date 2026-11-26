@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -165,4 +168,37 @@ await test("an isolate entry that is a file fails the copy", () => {
   const found = pmIsolation(w.options);
   assert.equal(found.found, false);
   assert.match(found.problem ?? "", /^wrapper copy failed: /);
+});
+
+await test("a link planted at the isolate folder fails the copy and its target is left alone", () => {
+  const w = world();
+  const target = join(w.root, "elsewhere");
+  mkdirSync(target, { mode: 0o755 });
+  chmodSync(target, 0o755);
+  symlinkSync(target, join(w.serveDir, "isolate"));
+  const found = pmIsolation(w.options);
+  assert.equal(found.found, false);
+  assert.match(found.problem ?? "", /^wrapper copy failed: /);
+  assert.deepEqual(readdirSync(target), []);
+  assert.equal(mode(target), 0o755);
+});
+
+await test("a link planted at the copy is replaced by a real file and its target is left alone", () => {
+  const w = world();
+  const folder = join(w.serveDir, "isolate");
+  mkdirSync(folder, { mode: 0o700 });
+  const target = join(w.root, "precious");
+  writeFileSync(target, "keep me\n");
+  chmodSync(target, 0o644);
+  const copy = join(folder, WRAPPER_NAME);
+  symlinkSync(target, copy);
+  const found = pmIsolation(w.options);
+  assert.equal(found.found, true);
+  assert.equal(found.wrapper, copy);
+  assert.equal(lstatSync(copy).isSymbolicLink(), false);
+  assert.equal(lstatSync(copy).isFile(), true);
+  assert.equal(mode(copy), 0o500);
+  assert.equal(readFileSync(copy, "utf8"), SCRIPT);
+  assert.equal(readFileSync(target, "utf8"), "keep me\n");
+  assert.equal(mode(target), 0o644);
 });
