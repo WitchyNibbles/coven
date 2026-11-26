@@ -846,6 +846,15 @@ ENTRIES = (
     Entry("wrap-chrt-push", "chrt -f 10 git push -f origin main", (A, R, A, A)),
     Entry("wrap-chrt-opencode", "chrt -f 10 opencode db", (A, N, A, R)),
     Entry("wrap-chrt-claude", "chrt -f 10 claude -p hi", (A, N, R, A)),
+    # Ruling 7: a valued option of the shared table may swallow a word opencode used to judge as
+    # the command; opencode still refuses it (it reads the option once as a flag too).
+    Entry("valued-chrt-D-opencode", "chrt -D opencode db", (A, N, A, R)),
+    Entry("valued-chrt-sched-deadline-opencode", "chrt --sched-deadline opencode db", (A, N, A, R)),
+    Entry("valued-chrt-P-opencode", "chrt -P opencode db", (A, N, A, R)),
+    Entry("valued-chrt-sched-period-opencode", "chrt --sched-period opencode db", (A, N, A, R)),
+    Entry("valued-chrt-T-opencode", "chrt -T opencode db", (A, N, A, R)),
+    Entry("valued-chrt-sched-runtime-opencode", "chrt --sched-runtime opencode db", (A, N, A, R)),
+    Entry("valued-flock-wait-opencode", "flock --wait opencode db", (A, N, A, R)),
     Entry("wrap-ionice-push", "ionice -c 3 git push -f origin main", (A, R, A, A)),
     Entry("wrap-ionice-opencode", "ionice -c 3 opencode db", (A, N, A, R)),
     Entry("wrap-ionice-claude", "ionice -c 3 claude -p hi", (A, N, R, A)),

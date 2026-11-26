@@ -73,7 +73,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from functools import cached_property
 from pathlib import Path
@@ -600,23 +600,38 @@ class Argv:
     piped: bool = False
     substitutions: tuple[str, ...] = ()
     inputs: tuple[str, ...] = ()
+    loose: frozenset[int] = frozenset()  # positions of valued options read as flags (see below)
 
     @cached_property
-    def _unwrapping(self) -> tuple[list[str], int]:
-        return _unwrap(self.words)
+    def _unwrapping(self) -> "_Walk":
+        return _walk(self.words, self.loose)
 
     @cached_property
     def command(self) -> tuple[str, ...]:
         """The words under their assignments and wrappers (env, timeout, xargs, npx, pnpm dlx...),
         worked out once."""
-        words, start = self._unwrapping
-        return tuple(words[start:])
+        walk = self._unwrapping
+        return tuple(walk.words[walk.start :])
 
     @cached_property
     def prefix(self) -> tuple[str, ...]:
         """The words before the command: its assignments, wrappers and their options."""
-        words, start = self._unwrapping
-        return tuple(words[:start])
+        walk = self._unwrapping
+        return tuple(walk.words[: walk.start])
+
+    @cached_property
+    def loose_readings(self) -> tuple["Argv", ...]:
+        """This command read once more for each valued option of a wrapper it walks past whose
+        value is a bare word, with that option taken as a flag: the value (and the words after
+        it) are then the command. A program may not take a value there (`chrt -D opencode db`:
+        the man page says a nanosecond count), and the table follows the program; this guard
+        checks both readings, so what it refused as the command before it refuses still."""
+        walk = self._unwrapping
+        return tuple(
+            replace(self, loose=frozenset({position}))
+            for position in walk.valued
+            if not walk.words[position + 1].startswith("-")
+        )
 
 
 SEPARATORS = re.compile(r"(\|\||&&|\||;|&|\n)")
@@ -809,7 +824,7 @@ def _commands(text: str) -> list[Argv]:
     return found
 
 
-def _skip_options(words: Sequence[str], start: int, wrapper: _Syntax) -> int:
+def _skip_options(words: Sequence[str], start: int, wrapper: _Syntax, walk: "_Walking") -> int:
     index = start
     while index < len(words):
         word = words[index]
@@ -817,7 +832,10 @@ def _skip_options(words: Sequence[str], start: int, wrapper: _Syntax) -> int:
             index += 1
             break
         if word.startswith("-") and word != "-":
-            index += 2 if word in wrapper.valued else 1
+            valued = word in wrapper.valued and index not in walk.loose
+            if valued and index + 1 < len(words):
+                walk.valued.append(index)
+            index += 2 if valued else 1
         elif wrapper.assignments and SHELL_ASSIGNMENT.match(word):
             index += 1
         else:
@@ -851,10 +869,28 @@ def _split_string(words: Sequence[str], index: int) -> list[str] | None:
         return [*words[:index], *value.split(), *rest]
 
 
-def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
-    """The words (with an `env -S` string split) and where the command under its assignments and
-    wrappers starts in them."""
+@dataclass
+class _Walking:
+    """What `_walk` has found so far: the positions of the options that took a value, and the
+    positions it was told to read as flags."""
+
+    loose: frozenset[int]
+    valued: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Walk:
+    """The words of a command (with an `env -S` string split), where the command under its
+    assignments and wrappers starts in them, and the positions of the options that took a value."""
+
+    words: list[str]
+    start: int
+    valued: tuple[int, ...]
+
+
+def _walk(words: Sequence[str], loose: frozenset[int] = frozenset()) -> _Walk:
     current = list(words)
+    walking = _Walking(loose)
     index = _after_prefixes(current, 0)
     for _ in range(MAX_UNWRAP):
         if index >= len(current):
@@ -875,8 +911,15 @@ def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
                 if split is not None:
                     current = split
                     break
-        index = _after_prefixes(current, _skip_options(current, index + 1, wrapper))
-    return current, min(index, len(current))
+        index = _after_prefixes(current, _skip_options(current, index + 1, wrapper, walking))
+    return _Walk(current, min(index, len(current)), tuple(walking.valued))
+
+
+def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
+    """The words (with an `env -S` string split) and where the command under its assignments and
+    wrappers starts in them."""
+    walk = _walk(words)
+    return walk.words, walk.start
 
 
 def _short_c_option(word: str) -> bool:
@@ -1500,7 +1543,8 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
     if in_coven and not _coven_checkout_allows(command, commands, cwd, scope):
         raise RefusedError(COVEN_CHECKOUT_RULE)
     for argv in commands:
-        check_command(argv, names, here)
+        for reading in (argv, *argv.loose_readings):
+            check_command(reading, names, here)
     view = View(
         scope,
         here,

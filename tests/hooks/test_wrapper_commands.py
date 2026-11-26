@@ -224,6 +224,47 @@ def test_opencode_goes_past_an_option_the_program_gives_a_value(words: list[str]
     assert unwrapped[start] == "opencode"
 
 
+def readings(words: list[str]) -> list[tuple[str, ...]]:
+    """The commands opencode judges for `words`: the one the table gives, then one for each valued
+    option read as a flag."""
+    argv = opencode.Argv(tuple(words))
+    return [argv.command, *(each.command for each in argv.loose_readings)]
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        ["chrt", "-D", "opencode", "db"],
+        ["chrt", "--sched-deadline", "opencode", "db"],
+        ["chrt", "-P", "opencode", "db"],
+        ["chrt", "--sched-period", "opencode", "db"],
+        ["chrt", "-T", "opencode", "db"],
+        ["chrt", "--sched-runtime", "opencode", "db"],
+        ["flock", "--wait", "opencode", "db"],
+        ["sudo", "-u", "root", "chrt", "-D", "opencode", "db"],
+        ["env", "-i", "flock", "--wait", "opencode", "db"],
+    ],
+)
+def test_opencode_also_reads_a_valued_option_as_a_flag(words: list[str]) -> None:
+    """The table follows the program (`chrt -D` takes a number of nanoseconds), but opencode also
+    reads the option as a flag, as it did before the table: the word the option swallowed then
+    stays in the words the command is judged from (`db` runs with `opencode` named in them), where
+    the table's own reading leaves no command."""
+    assert readings(words)[0] == ()
+    assert ("db",) in readings(words)
+
+
+def test_opencode_reads_an_option_with_no_bare_value_once() -> None:
+    assert readings(["sudo", "-u", "-x", "ls"]) == [("ls",)]
+    assert readings(["ls", "-u", "root"]) == [("ls", "-u", "root")]
+    assert readings(["chrt", "-f", "10", "ls"]) == [("ls",)]
+
+
+def test_opencode_reads_each_valued_option_in_turn() -> None:
+    words = ["nice", "-n", "5", "timeout", "-k", "9", "5", "ls"]
+    assert readings(words) == [("ls",), ("5", "timeout", "-k", "9", "5", "ls"), ("5", "ls")]
+
+
 @pytest.mark.parametrize(
     ("words", "command"),
     [
