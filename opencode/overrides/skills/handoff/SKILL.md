@@ -1,4 +1,4 @@
-<!-- opencode override of skills/handoff/SKILL.md sha256:99126221e7b72d528c4a72f277a7699586d3d26045795512f131d70dda4454d5 -->
+<!-- opencode override of skills/handoff/SKILL.md sha256:325cf823dc96e6efc9de72438fe15723cccf222b222052f3b6ff72505cf512c3 -->
 ---
 name: handoff
 description: Compact the current conversation into a handoff document for a fresh session to pick up. Use proactively when the conversation has grown long or context is filling up, before /clear or compaction, when switching to a different task, or when a work session is wrapping up.
@@ -22,6 +22,8 @@ file (never print it), commit again and tell the user. Never leave the handoff u
 uncommitted file blocks every later sync of the store). Tell the user the file path and the
 one-line prompt to start the next session with. A session opened in that project will see the
 newest handoff in its "Shared memory" block.
+
+Name the language the user writes in, so the next session replies in it from its first line.
 
 Include a "suggested skills" section in the document, naming which skills the next agent should
 call the Skill tool for.

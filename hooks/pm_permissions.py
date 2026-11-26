@@ -68,10 +68,19 @@ program (`--ext-diff`, `--textconv`), reads config or a repository from the comm
 a list, and a `%G` placeholder in `--format` or `--pretty` (git runs gpg for it) is refused.
 `git fetch` is not approved: it moves refs, creates tags and can run programs through config.
 
-Every directory a push could run in is checked with git (a `cd` may fail, and `;`, `||` and
-subshells make the real directory uncertain, so each `cd` adds a candidate and none is dropped):
-the remote (the one named, else the one git picks: branch.<b>.pushRemote, remote.pushDefault,
-branch.<b>.remote, origin) must be a configured name; no configured push refspec, mirror,
+Every directory a push could run in is checked with git. A segment joined to the start of its list
+(the command's start, or the last `;`) by `&&` alone runs only where the `cd` before it led: when
+that `cd` fails, nothing after it runs, so `cd <dir> && git push` is checked in `<dir>` alone, and
+`cd A && cd B && git push` in `B`. Any other segment may run where any earlier one did, so each
+`cd` adds a candidate and none is dropped: after `;` (the push runs when the `cd` failed), and in
+the rest of a list that holds a `||` or a `|` (`git status || cd X && git push` may skip the
+`cd`). A command with a parenthesis is never narrowed: a subshell's `cd` ends at its `)`, and
+a `;` inside it must not reset the chain, so every segment may run wherever any earlier one did.
+A newline is refused with the other control
+characters, so it never joins two commands. A `gh` segment keeps the wider reading: its `--repo` and
+file options are checked in every directory any earlier segment may have reached. The remote (the
+one named, else the one git picks: branch.<b>.pushRemote, remote.pushDefault, branch.<b>.remote,
+origin) must be a configured name; no configured push refspec, mirror,
 receivepack, pushurl, vcs, URL rewrite (insteadOf), push option, followTags or submodule recursion
 may widen or redirect the push; and every branch the push would update (named, `HEAD`, a refspec
 destination such as `HEAD:main` or `feature:refs/heads/main`, or the current and upstream branch of
@@ -342,6 +351,9 @@ TRIMMERS = frozenset({"tail", "head"})
 TRIM_OPTIONS = re.compile(r"(?:-n [0-9]+|-[0-9]+)?")
 SEPARATORS = frozenset({"&&", "||", ";", "|"})
 PARENS = frozenset({"(", ")"})
+# What breaks an `&&` chain until the next `;` in a command without parentheses: `a || cd X && git
+# push` may run the push in the old directory. (With a parenthesis nothing is narrowed at all.)
+TAINTING = frozenset({"||", "|"})
 OPERATOR_CHARS = frozenset("();<>|&")
 # The guard's scanner. The shell's operators by length, longest first when read (`|&` is a pipe
 # and a lone `&` runs in the background: both separate commands); the redirects among them; and
@@ -522,10 +534,17 @@ class Call:
 
 @dataclass(frozen=True)
 class Segment:
-    """The words of one command, and whether a `|` directly precedes it."""
+    """The words of one command and the last separator token before it (`&&`, `||`, `;`, `|`, `(`
+    or `)`; "" for the first segment). An empty part between two separators is skipped: in
+    `(a) && b`, `b` follows `&&`, not `)`, and in `a | (b)`, `b` follows `(`, not `|`."""
 
     words: list[str]
-    piped: bool
+    after: str
+
+    @property
+    def piped(self) -> bool:
+        """Whether a `|` directly precedes the segment."""
+        return self.after == "|"
 
 
 @dataclass(frozen=True)
@@ -655,14 +674,18 @@ def _segments(tokens: Iterable[str]) -> list[Segment]:
         if not part and not (opens_after or closes_before):
             raise Unsupported("the command has an empty part next to an operator")
     return [
-        Segment(part, piped=index > 0 and breaks[index - 1] == "|")
+        Segment(
+            part,
+            after=breaks[index - 1] if index > 0 else "",
+        )
         for index, part in enumerate(parts)
         if part
     ]
 
 
 def _after_cd(candidates: Sequence[str], arguments: Sequence[str]) -> list[str]:
-    """The candidate directories once a `cd` may have run: the old ones stay (the cd can fail)."""
+    """The directories a `cd` run in each of `candidates` leads to (the old ones are not among
+    them: the caller decides whether a failed cd keeps them)."""
     if len(arguments) != 1 or arguments[0].startswith("-"):
         raise Unsupported("cd is approved automatically only with one directory and no option")
     target = os.path.expanduser(arguments[0])
@@ -671,7 +694,7 @@ def _after_cd(candidates: Sequence[str], arguments: Sequence[str]) -> list[str]:
         joined = os.path.join(candidate, target)
         # A symlink makes the shell's logical `..` differ from the filesystem's.
         moved += [joined, os.path.normpath(joined)]
-    return list(dict.fromkeys([*candidates, *moved]))
+    return list(dict.fromkeys(moved))
 
 
 def _git_step(words: Sequence[str], candidates: Sequence[str]) -> GitStep:
@@ -902,13 +925,32 @@ def _check_gh(arguments: Sequence[str], cwd: str, directories: Sequence[str]) ->
         raise Unsupported(TITLE_REASON)
 
 
+def _chain_after(
+    separator: str, possible: list[str], chained: list[str] | None, narrowing: bool
+) -> list[str] | None:
+    """Where an `&&` segment runs, given the separator before the segment: the first segment and
+    one after `;` run wherever any earlier one may have; `||` and `|` taint the list (None) until
+    the next `;`; `&&` keeps the chain. Without `narrowing` (the command has a parenthesis, whose
+    subshell's `cd` ends at its `)`) every segment runs wherever any earlier one may have."""
+    if not narrowing:
+        return None
+    if separator in ("", ";"):
+        return possible
+    return None if separator in TAINTING else chained
+
+
 def _plan(command: str, cwd: str) -> list[GitStep]:
     """The git steps of a command made only of `cd`, gh pr segments, git segments and a last
     `| tail`/`| head`. Every cd and gh segment is checked here; the git steps are returned."""
-    candidates = [cwd]
+    possible = [cwd]  # every directory a segment so far may have run in or moved to
+    chained: list[str] | None = [cwd]  # where an `&&` segment runs; None once the list is tainted
     steps: list[GitStep] = []
-    segments = _segments(_tokens(command))
+    tokens = _tokens(command)
+    narrowing = not any(token in PARENS for token in tokens)
+    segments = _segments(tokens)
     for index, segment in enumerate(segments):
+        chained = _chain_after(segment.after, possible, chained, narrowing)
+        directories = possible if chained is None else chained
         words, _ = _without_merge(segment.words)
         if words[0] != "gh" and any(TITLE_WORD in word for word in words):
             raise Unsupported(TITLE_REASON)
@@ -918,11 +960,13 @@ def _plan(command: str, cwd: str) -> list[GitStep]:
         elif segment.piped:
             raise Unsupported(f"a pipe into {words[0]} is not approved automatically")
         elif words[0] == "cd":
-            candidates = _after_cd(candidates, words[1:])
+            moved = _after_cd(directories, words[1:])
+            possible = list(dict.fromkeys([*possible, *moved]))
+            chained = None if chained is None else moved
         elif words[0] == "gh":
-            _check_gh(words[1:], cwd, candidates)
+            _check_gh(words[1:], cwd, possible)
         elif words[0] == "git":
-            steps.append(_git_step(words[1:], candidates))
+            steps.append(_git_step(words[1:], directories))
         else:
             raise Unsupported(f"the command runs {words[0]}, not only git, gh pr and cd")
     if not segments:

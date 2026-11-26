@@ -644,3 +644,45 @@ def test_the_opencode_override_and_its_source_use_the_same_prefixes(rel: str) ->
     for prefix in (*PM_PREFIXES, *GM_PREFIXES):
         assert prefix in source, f"{rel} source lacks {prefix}"
         assert prefix in override, f"{rel} override lacks {prefix}"
+
+
+def opening(skill: str) -> str:
+    """The skill's text before its first `## ` section, whitespace collapsed."""
+    return " ".join(body(skill).split("\n## ", 1)[0].split())
+
+
+def test_manager_states_the_user_language_rule_first() -> None:
+    head = opening("manager")
+    assert "in the language they write in" in head
+    assert "after a compaction" in head
+    for message in ("`QUESTION`", "`PROD-STEP`", "`DRAFT`", "`DONE`"):
+        assert message in head, message
+    assert "Briefs and replies to PMs are in English" in head
+    always = body("manager").split("\n## Always\n", 1)[1]
+    assert "language" in always.split("\n\n", 1)[0]
+
+
+def test_manager_brief_lists_the_users_language() -> None:
+    brief = " ".join(
+        body("manager").split("The brief, in English:", 1)[1].split("\n- ", 1)[0].split()
+    )
+    assert "`User language:" in brief
+
+
+def test_project_manager_drafts_follow_their_reader_and_default_to_the_briefs_language() -> None:
+    text = " ".join((REPO / "agents" / "project-manager.md").read_text(encoding="utf-8").split())
+    assert "in the language of its reader" in text
+    assert "`User language`, when the reader is not named" in text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        SKILLS / "handoff" / "SKILL.md",
+        REPO / "opencode" / "overrides" / "skills" / "handoff" / "SKILL.md",
+    ],
+    ids=["claude", "opencode"],
+)
+def test_handoff_records_the_users_language(path: Path) -> None:
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    assert "language the user writes in" in text

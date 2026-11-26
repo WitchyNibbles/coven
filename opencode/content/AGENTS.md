@@ -57,6 +57,13 @@ unless the content needs them. Facts, receipts, links and exact commands still g
 Docs, specs and code comments keep their usual plain style. The user's own tone preferences are
 in the `user/` entries of the store.
 
+Reply to the user in the language they write in, from the first line, and keep to it after a
+compaction or a resume, even when briefs, agent messages, tool output or the summary around you are
+in another language. This covers every reply, question, production-step summary and report, and the
+text around a draft. Text for agents (briefs, subagent prompts, messages to other agents) stays in
+English. Repo text (code, commits, PRs, docs) follows the repo's language, and a draft for someone
+else follows its reader.
+
 ## Writing code
 
 Checks: in a repo with `.coven/`, use `python3 .coven/check.py`; without it, use the repo's own

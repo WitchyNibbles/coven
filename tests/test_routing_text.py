@@ -43,3 +43,17 @@ def test_a_live_system_with_no_entry_goes_to_systems_map() -> None:
     rule = next(bullet for bullet in bullets if "`coven:systems-map`" in bullet)
     assert "live system" in rule
     assert "systems/" in rule
+
+
+def section(title: str) -> str:
+    start = text().index(f"## {title}\n")
+    rest = text()[start + len(title) + 4 :]
+    return rest.split("\n## ", 1)[0]
+
+
+def test_routing_keeps_replies_in_the_users_language() -> None:
+    talking = " ".join(section("Talking to people").split())
+    assert "in the language they write in" in talking
+    assert "after a compaction" in talking
+    assert "briefs, subagent prompts" in talking
+    assert "stays in English" in talking

@@ -25,6 +25,12 @@
   flag; the session is not archived in OpenCode. `coven_pm_list` with `archived: true` shows
   hidden PMs, and `coven_pm_resume` clears the flag.
 - `coven opencode doctor` adds the checks `python3`, `server`, `password` and `operations`.
+- pm-permissions: a plain `git push` after `cd <dir> &&` is checked in `<dir>` alone, so a PM can
+  push a worktree's branch from the main checkout; after `;`, `||` or `|`, and anywhere in a command
+  with a parenthesis, the old directory is still checked.
+- The manager, and the routing on Claude Code and OpenCode, keep replies to the user in the language
+  they write in, also after a compaction or a resume; briefs and messages to agents stay English.
+  The handoff and the PM brief name the user's language.
 
 ## 0.2.0 (2026-11-25)
 
