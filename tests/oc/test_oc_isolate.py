@@ -49,6 +49,10 @@ argv = sys.argv[1:]
 stdin = sys.stdin.read() if tool == "shell" else None
 # The process start time (field 22 of /proc/<pid>/stat) and the pid record the wrapper left for this
 # pid: both as this process sees them, so a test can tell the record was there before the exec.
+try:
+    cwd = os.getcwd()
+except OSError:
+    cwd = None
 start = open("/proc/self/stat").read().rsplit(")", 1)[1].split()[19]
 try:
     with open(os.path.join(os.environ.get("COVEN_PM_PIDS", ""), str(os.getpid()))) as saved:
@@ -57,7 +61,7 @@ except OSError:
     record = None
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write(
-        json.dumps({{"tool": tool, "pid": os.getpid(), "argv": argv, "stdin": stdin, "start": start, "record": record, "env": dict(os.environ)}}) + "\\n"
+        json.dumps({{"tool": tool, "pid": os.getpid(), "argv": argv, "stdin": stdin, "start": start, "record": record, "cwd": cwd, "env": dict(os.environ)}}) + "\\n"
     )
 if tool == "shell":
     sys.stderr.write(os.environ.get("FAKE_SHELL_ERR", ""))
@@ -66,6 +70,8 @@ if tool == "mount":
     if os.environ.get("FAKE_MOUNT_FAIL"):
         sys.stderr.write(os.environ["FAKE_MOUNT_FAIL"])
         sys.exit(32)
+    if os.environ.get("FAKE_MOUNT_RMDIR") and os.path.isdir(os.environ["FAKE_MOUNT_RMDIR"]):
+        os.rmdir(os.environ["FAKE_MOUNT_RMDIR"])
     sys.exit(0)
 if argv == ["--help"]:
     sys.stdout.write({OLD_HELP!r} if os.environ.get("FAKE_UNSHARE_OLD") else {HELP!r})
@@ -132,6 +138,7 @@ class World:
         *,
         path: Path | None = None,
         hide: str | None = None,
+        cwd: Path | None = None,
         stdin: str = "",
         **extra: str,
     ) -> subprocess.CompletedProcess[str]:
@@ -157,7 +164,7 @@ class World:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd=self.root,
+            cwd=cwd or self.root,
         )
         self.last_pid = started.pid
         out, err = started.communicate(stdin)
@@ -235,7 +242,8 @@ def test_the_outer_unshare_has_exactly_the_documented_flags(world: World) -> Non
     assert outer[14] == f"{world.hide}:{world.root / 'absent'}:{world.other}"
     assert outer[15] == str(world.bin / "unshare")
     assert outer[16] == str(world.caller_bin)
-    assert outer[17:] == ["-c", "echo hi"]
+    assert outer[17] == str(world.root)  # the real working directory, entered after the mounts
+    assert outer[18:] == ["-c", "echo hi"]
 
 
 def test_the_outer_unshare_replaces_the_wrapper_so_a_kill_reaches_the_namespace(
@@ -348,6 +356,99 @@ def test_a_mount_that_fails_refuses_and_the_command_does_not_run(world: World) -
     assert done.stderr == refusal(
         f"cannot hide {world.hide} (mount: permission denied second line)"
     )
+    assert world.calls("shell") == []
+
+
+CWD_PIECE = "working directory is inside a hidden folder"
+
+
+def assert_nothing_ran(world: World) -> None:
+    """No unshare run (the `--help` question aside), no mount, no shell and no pid record."""
+    assert world.unshare_runs() == []
+    assert world.calls("mount") == []
+    assert world.calls("shell") == []
+    assert not list(world.pids.iterdir())
+
+
+def test_a_working_directory_inside_a_hidden_folder_refuses_before_anything_runs(
+    world: World,
+) -> None:
+    inside = world.hide / "deep" / "er"
+    inside.mkdir(parents=True)
+    done = world.run(cwd=inside)
+    assert done.returncode == 126
+    assert done.stderr == refusal(CWD_PIECE)
+    assert_nothing_ran(world)
+
+
+def test_a_working_directory_that_is_a_hidden_folder_refuses(world: World) -> None:
+    done = world.run(cwd=world.other)
+    assert done.returncode == 126
+    assert done.stderr == refusal(CWD_PIECE)
+    assert_nothing_ran(world)
+
+
+def test_a_working_directory_that_only_shares_a_prefix_with_a_hidden_folder_runs(
+    world: World,
+) -> None:
+    sibling = world.root / "serve2"
+    sibling.mkdir()
+    done = world.run(cwd=sibling)
+    assert done.returncode == 0, done.stderr
+    assert len(world.calls("shell")) == 1
+
+
+def test_a_working_directory_reached_through_a_link_is_judged_by_its_real_path(
+    world: World,
+) -> None:
+    inside = world.hide / "sub"
+    inside.mkdir()
+    link = world.root / "link"
+    link.symlink_to(inside)
+    done = world.run(cwd=link)
+    assert done.returncode == 126
+    assert done.stderr == refusal(CWD_PIECE)
+    assert_nothing_ran(world)
+
+
+def test_a_hidden_folder_named_through_a_link_is_judged_by_its_real_path(world: World) -> None:
+    link = world.root / "serve-link"
+    link.symlink_to(world.hide)
+    done = world.run(hide=str(link), cwd=world.hide)
+    assert done.returncode == 126
+    assert done.stderr == refusal(CWD_PIECE)
+
+
+def test_a_link_into_a_folder_that_is_not_hidden_runs_and_the_shell_starts_in_the_real_path(
+    world: World,
+) -> None:
+    real = world.root / "work" / "real"
+    real.mkdir(parents=True)
+    link = world.root / "work-link"
+    link.symlink_to(real)
+    done = world.run(cwd=link)
+    assert done.returncode == 0, done.stderr
+    assert world.calls("shell")[0]["cwd"] == str(real)
+
+
+def test_the_working_directory_is_entered_again_after_the_mounts(world: World) -> None:
+    work = world.root / "work"
+    work.mkdir()
+    done = world.run(cwd=work)
+    assert done.returncode == 0, done.stderr
+    assert world.calls("shell")[0]["cwd"] == str(work)
+    # the real path travels to the inner stage, which enters it after the mounts
+    (outer,) = world.outer_runs()
+    assert outer[17] == str(work)
+    assert outer[18:] == ["-c", "echo hi"]
+
+
+def test_a_working_directory_that_cannot_be_entered_again_refuses(world: World) -> None:
+    work = world.root / "work"
+    work.mkdir()
+    done = world.run(cwd=work, FAKE_MOUNT_RMDIR=str(work))
+    assert done.returncode == 126
+    assert done.stderr == refusal(f"cannot return to the working directory {work}")
     assert world.calls("shell") == []
 
 

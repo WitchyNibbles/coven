@@ -32,6 +32,11 @@
 # command cannot unmount the tmpfs or the new /proc. The command text only ever travels as an
 # argument; no script text is built from it.
 #
+# A tmpfs hides a folder by path, so a shell that already stands inside a hidden folder would keep
+# the real one under its feet: the script compares its real working directory (`pwd -P`) with the
+# real path of each hidden folder before any mount and refuses when it is the folder or under it,
+# and the inner stage enters the working directory again by its real path after the mounts.
+#
 # Fail closed: where isolation is not available the script exits 126 with one line on stderr naming
 # the first missing piece and never runs the command. There is no off switch.
 
@@ -121,6 +126,27 @@ esac
 uid=$(id -u)
 gid=$(id -g)
 
+# A tmpfs hides a folder by path only: a shell whose working directory is already inside a hidden
+# folder keeps the real folder underneath it. (A symlink swapped between the guard's check and the
+# spawn's chdir can put a shell there.) So the real working directory is compared with the real path
+# of each hidden folder that exists, on a `/` boundary, before anything is mounted.
+cwd=$(pwd -P) || refuse "cannot resolve the working directory"
+case $cwd in
+/*) ;;
+*) refuse "the working directory is not an absolute path" ;;
+esac
+set -f
+IFS=:
+for dir in $hide; do
+    [ -d "$dir" ] || continue
+    real_dir=$(cd -P -- "$dir" 2> /dev/null && pwd -P) || refuse "cannot resolve the hidden folder $dir"
+    case $cwd in
+    "$real_dir" | "$real_dir"/*) refuse "working directory is inside a hidden folder" ;;
+    esac
+done
+unset IFS
+set +f
+
 # The stage that runs inside the outer namespaces. It is a fixed text: the real shell, the ids, the
 # folders, the unshare to run, the caller's PATH and the command arrive as arguments ($1 .. $6, then
 # `-c <command>`), never inside it. It runs on the trusted PATH and gives the caller's back only to
@@ -130,8 +156,8 @@ inner='
 # This stage is the first process of the namespace, which ignores a TERM it has no handler for:
 # trap the signals OpenCode may send, kill every process of the namespace and never go on.
 trap '"'"'kill -s KILL -- -1; exit 143'"'"' TERM INT HUP
-real=$1 uid=$2 gid=$3 hide=$4 unshare_bin=$5 caller_path=$6
-shift 6
+real=$1 uid=$2 gid=$3 hide=$4 unshare_bin=$5 caller_path=$6 cwd=$7
+shift 7
 set -f
 IFS=:
 for dir in $hide; do
@@ -143,6 +169,12 @@ for dir in $hide; do
     fi
 done
 unset IFS
+# The tmpfs hid the folders by path: enter the working directory again by its real path, so the
+# shell does not keep a handle on what was there before the mounts.
+if ! cd -P -- "$cwd" 2> /dev/null; then
+    printf "coven: PM shells run isolated and isolation is not available here: cannot return to the working directory %s; ask the user\n" "$cwd" >&2
+    exit 126
+fi
 # Try the nested unshare on `true` first: a failure of it is told from a failing command.
 if ! out=$("$unshare_bin" --user --map-user="$uid" --map-group="$gid" true 2>&1); then
     out=$(printf %s "$out" | tr "\n" " ")
@@ -179,4 +211,4 @@ if ! { printf '%s\n' "$start" > "$record" && mv -f "$record" "$pids/$$"; } 2> /d
 fi
 
 exec "$unshare_bin" --user --map-root-user --pid --fork --kill-child --mount --mount-proc \
-    "$sh_bin" -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$unshare_bin" "$caller_path" "$@"
+    "$sh_bin" -c "$inner" sh "$real_shell" "$uid" "$gid" "$hide" "$unshare_bin" "$caller_path" "$cwd" "$@"
