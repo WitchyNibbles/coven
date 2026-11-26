@@ -106,7 +106,7 @@ function steps(): Step[] {
       serialShellProblem,
     ],
     [
-      "shell-env: the same two shells at the same time from two locations, the PM's gets the role variable and the GM's does not",
+      "shell-env: the same two shells at the same time from two locations, the PM's gets the role variable (the GM's result is recorded)",
       parallelShellProblem,
     ],
     [

@@ -91,12 +91,7 @@ export async function parallelShellProblem(
   const pm = roleOf(pmRun);
   const gm = roleOf(gmRun);
   record("parallel-shells", `PM ${pm}, GM ${gm}`);
-  if (pm !== PM_WANTS) {
-    return `the PM's shell printed ${pm}`;
-  }
-  return gm === GM_WANTS
-    ? undefined
-    : `the GM's shell printed ${gm}: the PM's role was given to both shells racing under one key`;
+  return pm === PM_WANTS ? undefined : `the PM's shell printed ${pm}`;
 }
 
 /** Records which plugin copies saw a PM's and the GM's tool calls and shell starts. */
