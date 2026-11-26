@@ -147,7 +147,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from types import ModuleType
-from typing import NoReturn, TextIO
+from typing import NoReturn, Protocol, TextIO
 
 # `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -156,10 +156,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # prompt would stay open. So a broken or missing hook_support is kept and answered by main().
 try:
     hook_support = importlib.import_module("hook_support")
+    # The wrapper names and options, shared with the other guards (wrapper_commands.py).
+    wrapper_commands = hook_support.sibling("wrapper_commands")
     SUPPORT_ERROR: str | None = None
 except Exception as exc:
-    logging.exception("coven pm-permissions: hook_support cannot be loaded")
-    hook_support = ModuleType("hook_support")  # never used: main() refuses before any check runs
+    logging.exception("coven pm-permissions: hook_support or wrapper_commands cannot be loaded")
+    # Never used: main() refuses before any check runs. The tables are empty so that this module
+    # still loads.
+    hook_support = ModuleType("hook_support")
+    wrapper_commands = ModuleType("wrapper_commands")
+    vars(wrapper_commands).update(
+        dict.fromkeys(
+            ("SHELLS", "SHELL_KEYWORDS", "WRAPPERS", "EXEC_WRAPPERS", "WALKED"), frozenset[str]()
+        ),
+        WRAPPER_SYNTAX={"parallel": None},
+    )
     SUPPORT_ERROR = type(exc).__name__
 
 HOOK = "pm-permissions"
@@ -227,7 +238,7 @@ GIT_VALUED_OPTIONS = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
 )
 # Shells, and the commands that run text as shell commands: a heredoc fed to one is commands.
-SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"})
+SHELLS: frozenset[str] = wrapper_commands.SHELLS
 COMMAND_READERS = SHELLS | {"source", ".", "eval"}
 # The same among a wrapper's words: `.` there is a path (`flock . cat`), not the command.
 WORD_READERS = COMMAND_READERS - {"."}
@@ -238,33 +249,12 @@ COMPOUND_ENDS = frozenset({"}", "done", "fi", "esac"})
 # compound command), or unknown (a name that expands, or a wrapper the guard cannot unwrap).
 NO_COMMAND = ""
 UNKNOWN_COMMAND = "$"
-# Commands that run the rest of their words as a command (or that make does), and the words a
-# shell puts before a command.
-WRAPPERS = SHELLS | {
-    "eval",
-    "exec",
-    "builtin",
-    "xargs",
-    "env",
-    "command",
-    "nohup",
-    "time",
-    "sudo",
-    "nice",
-    "timeout",
-    "make",
-    "trap",  # its action is a command string, as eval's words are
-}
+# Commands that run the rest of their words as a command (or that make does): the names are
+# wrapper_commands.WRAPPERS, without the words a shell puts before a command (SHELL_PREFIXES).
+WRAPPERS: frozenset[str] = wrapper_commands.WRAPPERS - wrapper_commands.SHELL_KEYWORDS
 # Commands that run the rest of their words as a command, with options the guard does not follow:
 # a push, merge, send-pack or gh word among their words guards. find does so with an exec action.
-EXEC_WRAPPERS = frozenset(
-    {
-        *("setsid", "stdbuf", "ionice", "flock", "taskset", "chrt", "unshare", "nsenter"),
-        *("script", "doas", "su", "runuser", "chroot", "watch", "strace", "ltrace", "nocache"),
-        *("unbuffer", "faketime", "firejail", "systemd-run", "sg", "numactl", "cgexec"),
-        *("parallel", "proxychains", "proxychains4", "torsocks", "pkexec", "ssh", "busybox"),
-    }
-)
+EXEC_WRAPPERS: frozenset[str] = wrapper_commands.EXEC_WRAPPERS
 FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
 # The words that open and close a group or compound command, at the start of a command: a pipe
@@ -1786,96 +1776,39 @@ def _simple_commands(tokens: Sequence[Token]) -> list[SimpleCommand]:
     return _CommandList().read(tokens)
 
 
-@dataclass(frozen=True)
-class WrapperSyntax:
-    """How a wrapper reads its words before the command it runs: options with no value, options
+class WrapperSyntax(Protocol):
+    """What this guard reads of a wrapper_commands.WrapperSyntax: options with no value, options
     that take one (the next word, the rest of a short option's word, or `--name=value`), how many
     words follow them (timeout's duration), whether `NAME=value` words may come next (env, sudo),
     and whether a `-<number>` option is one (nice)."""
 
-    flags: frozenset[str] = frozenset()
-    valued: frozenset[str] = frozenset()
-    operands: int = 0
-    assignments: bool = False
-    numeric: bool = False
+    @property
+    def flags(self) -> frozenset[str]: ...
+
+    @property
+    def valued(self) -> frozenset[str]: ...
+
+    @property
+    def operands(self) -> int: ...
+
+    @property
+    def assignments(self) -> bool: ...
+
+    @property
+    def numeric(self) -> bool: ...
 
 
-# The wrappers whose options the guard follows to the command they run. An option not listed
-# (`env -S`, `sudo -s`, `sudo -h`, `xargs -I`) is not followed, and the wrapper's words are checked
-# for a push, merge, send-pack or gh word instead (HOLDS_GUARDED).
-WRAPPER_SYNTAX = {
-    "env": WrapperSyntax(
-        flags=frozenset({"-", "-i", "-0", "-v", "--ignore-environment", "--null", "--debug"}),
-        valued=frozenset({"-u", "--unset", "-C", "--chdir"}),
-        assignments=True,
-    ),
-    "nice": WrapperSyntax(valued=frozenset({"-n", "--adjustment"}), numeric=True),
-    "nohup": WrapperSyntax(),
-    "builtin": WrapperSyntax(),
-    "time": WrapperSyntax(
-        flags=frozenset(
-            {"-p", "-a", "-v", "-q", "--append", "--verbose", "--portability", "--quiet"}
-        ),
-        valued=frozenset({"-f", "-o", "--format", "--output"}),
-    ),
-    "timeout": WrapperSyntax(
-        flags=frozenset({"-v", "-p", "-f", "--verbose", "--preserve-status", "--foreground"}),
-        valued=frozenset({"-s", "-k", "--signal", "--kill-after"}),
-        operands=1,
-    ),
-    "command": WrapperSyntax(flags=frozenset({"-p", "-v", "-V"})),
-    "exec": WrapperSyntax(flags=frozenset({"-c", "-l"}), valued=frozenset({"-a"})),
-    "sudo": WrapperSyntax(
-        flags=frozenset(
-            {
-                *("-A", "-B", "-b", "-E", "-H", "-K", "-k", "-N", "-n", "-P", "-S", "-V", "-v"),
-                *("--askpass", "--bell", "--background", "--preserve-env", "--set-home"),
-                *("--remove-timestamp", "--reset-timestamp", "--non-interactive", "--stdin"),
-                "--preserve-groups",
-            }
-        ),
-        valued=frozenset(
-            {
-                *("-C", "-D", "-g", "-p", "-R", "-r", "-T", "-t", "-U", "-u", "--close-from"),
-                *("--chdir", "--group", "--prompt", "--chroot", "--role", "--type", "--user"),
-                *("--command-timeout", "--other-user", "--host"),
-            }
-        ),
-        assignments=True,
-    ),
-    "xargs": WrapperSyntax(
-        flags=frozenset(
-            {"-0", "-r", "-t", "-p", "-x", "-o", "--null", "--no-run-if-empty", "--verbose"}
-            | {"--interactive", "--exit", "--open-tty", "-i", "--replace"}
-        ),
-        valued=frozenset(
-            {"-a", "-E", "-I", "-L", "-n", "-P", "-s", "-d", "--arg-file", "--eof", "--max-lines"}
-            | {"--max-args", "--max-procs", "--max-chars", "--delimiter", "--process-slot-var"}
-        ),
-    ),
+# The wrappers whose options the guard follows to the command they run (wrapper_commands.WALKED:
+# their tables list every option). An option not listed (`env -S`, `sudo -s`, `sudo -h`) is not
+# followed, and the wrapper's words are checked for a push, merge, send-pack or gh word instead
+# (HOLDS_GUARDED). The other wrappers (EXEC_WRAPPERS) are not walked: their words are checked whole.
+WRAPPER_SYNTAX: Mapping[str, WrapperSyntax] = {
+    name: wrapper_commands.WRAPPER_SYNTAX[name] for name in wrapper_commands.WALKED
 }
-NUMERIC_OPTION = re.compile(r"-\d+")
+NUMERIC_OPTION: re.Pattern[str] = wrapper_commands.NUMERIC_OPTION
 # GNU parallel's options, to find the command it adds what it reads to. An option not listed means
 # the guard cannot tell where that command is.
-PARALLEL_SYNTAX = WrapperSyntax(
-    flags=frozenset(
-        {
-            *("-0", "-k", "-u", "-v", "-t", "-q", "-r", "-X", "-m", "-g", "--null"),
-            *("--keep-order", "--ungroup", "--group", "--verbose", "--quote", "--dry-run"),
-            *("--no-run-if-empty", "--progress", "--bar", "--eta", "--xargs", "--tag"),
-            *("--line-buffer", "--lb", "--pipe", "--shuf", "--will-cite", "--plain"),
-        }
-    ),
-    valued=frozenset(
-        {
-            *("-j", "-P", "-n", "-N", "-L", "-l", "-s", "-d", "-a", "-C", "-E", "-I", "-S"),
-            *("--jobs", "--max-args", "--max-lines", "--max-chars", "--delimiter"),
-            *("--arg-file", "--colsep", "--sshlogin", "--joblog", "--results", "--halt"),
-            *("--timeout", "--delay", "--retries", "--tmpdir", "--workdir", "--wd", "--block"),
-            *("--tagstring", "--header", "--env", "--memfree", "--load"),
-        }
-    ),
-)
+PARALLEL_SYNTAX: WrapperSyntax = wrapper_commands.WRAPPER_SYNTAX["parallel"]
 # The words after which parallel's arguments come, not its command.
 PARALLEL_SOURCES = frozenset({":::", "::::", ":::+", "::::+"})
 # The paths a command reads its stdin from, and make's short options with a file glued on.

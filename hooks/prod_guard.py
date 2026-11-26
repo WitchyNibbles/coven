@@ -634,7 +634,6 @@ READ_ENVIRONMENT = re.compile(rf"(?:{READ_NAME.pattern})=[\w.@:+-]*")
 SORT_OPTION = re.compile(r"-(?:[bdfghiMnRrsuVzcCm]+|[kt]\S*|S\S*)|--(?:reverse|unique|stable)")
 READ_OPTIONS = frozenset("rs")
 TIMEOUT_DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?")
-NICE_OPTION = re.compile(r"-\d+")
 # The words that open a command inside a compound one, and those that close it.
 COMMAND_OPENERS = frozenset(
     {"if", "then", "elif", "else", "do", "while", "until", "!", "{", "time"}
@@ -4165,35 +4164,85 @@ def _program_name(word: _ShellWord, zone: _Zone) -> str | None:
     return name
 
 
+# The options of a wrapper that `_wrapper_end` reads past, out of the ones its table lists
+# (wrapper_commands.WRAPPER_SYNTAX): the ones that only limit or tidy what it runs. The others
+# change where or how the command runs (`env -C`, `env -S`, `timeout --signal`, `command -v`), so
+# a read that has one is not read past.
+UNWRAPPED_OPTIONS: Mapping[str, frozenset[str]] = {
+    "timeout": frozenset({"-k", "-s"}),
+    "nice": frozenset({"-n"}),
+    "env": frozenset({"-i", "-u"}),
+    "command": frozenset(),
+}
+# `nice` is read past with one option (`nice -n 5`, `nice -5`), the others with any number.
+ONE_OPTION = frozenset({"nice"})
+
+
+class _WrapperSyntax(Protocol):
+    """What `_wrapper_end` reads of a wrapper_commands.WrapperSyntax."""
+
+    @property
+    def flags(self) -> frozenset[str]: ...
+
+    @property
+    def valued(self) -> frozenset[str]: ...
+
+    @property
+    def operands(self) -> int: ...
+
+    @property
+    def assignments(self) -> bool: ...
+
+    @property
+    def numeric(self) -> bool: ...
+
+
+def _reads_past_value(option: str, value: str) -> bool:
+    """Whether `value` is one a read goes past after `option`: `env -u` takes a plain variable name
+    (`_plain_name`), `nice -n` a number, `timeout -k` and `-s` any word."""
+    if option == "-u":
+        return _plain_name(value)
+    return value.isdigit() if option == "-n" else True
+
+
+def _followed_word(
+    words: Sequence[_ShellWord], at: int, name: str, syntax: _WrapperSyntax
+) -> int | None:
+    """Where the words go on after the word at `at` of a wrapper's options when `_wrapper_end` reads
+    past it: an option of UNWRAPPED_OPTIONS (with its value), a `-<number>` where the table says
+    there is one, an assignment of READ_ENVIRONMENT where it says there are; None for any other."""
+    word, followed = words[at], UNWRAPPED_OPTIONS[name]
+    if word.value in followed & syntax.flags:
+        return at + 1
+    if word.value in followed & syntax.valued:
+        reads = at + 1 < len(words) and _reads_past_value(word.value, words[at + 1].raw)
+        return at + 2 if reads else None
+    if syntax.numeric and _WRAPPER_COMMANDS.NUMERIC_OPTION.fullmatch(word.raw):
+        return at + 1
+    return at + 1 if syntax.assignments and READ_ENVIRONMENT.fullmatch(word.raw) else None
+
+
 def _wrapper_end(words: Sequence[_ShellWord]) -> int:
     """Where the command a wrapper runs starts: after `timeout DURATION`, `nice [-n N]` or `env
     [-i] [-u NAME] [NAME=VALUE]` (READ_ENVIRONMENT), or `command` and the program it runs. 0 when
     the first word is none of them, or has an option or a value this does not read (`env -C`,
-    `timeout --signal`, `command -v`)."""
+    `timeout --signal`, `command -v`). The wrapper's options are read through its table."""
     name = words[0].value
-    at = 1
-    if name == "timeout":
-        while at + 1 < len(words) and words[at].value in ("-k", "-s"):
-            at += 2
-        valid = at < len(words) and TIMEOUT_DURATION.fullmatch(words[at].raw)
-        return at + 1 if valid else 0
-    if name == "nice":
-        if words[1:2] and words[1].value == "-n" and words[2:3] and words[2].raw.isdigit():
-            return 3
-        return 2 if words[1:2] and NICE_OPTION.fullmatch(words[1].raw) else 1
-    if name == "command":
-        return 0 if _unquoted(words[1].raw).startswith("-") else 1
-    if name != "env":
+    syntax = _WRAPPER_COMMANDS.WRAPPER_SYNTAX.get(name)
+    if name not in UNWRAPPED_OPTIONS or syntax is None:
         return 0
-    while at < len(words):
-        word = words[at]
-        if word.value == "-i" or READ_ENVIRONMENT.fullmatch(word.raw):
-            at += 1
-        elif word.value == "-u" and at + 1 < len(words) and _plain_name(words[at + 1].raw):
-            at += 2
-        else:
+    at = 1
+    while at < len(words) and (after := _followed_word(words, at, name, syntax)) is not None:
+        at = after
+        if name in ONE_OPTION:
             break
-    return at if at > 1 and not _unquoted(words[min(at, len(words) - 1)].raw).startswith("-") else 0
+    for _ in range(syntax.operands):  # timeout's duration
+        if at >= len(words) or not TIMEOUT_DURATION.fullmatch(words[at].raw):
+            return 0
+        at += 1
+    if syntax.assignments and at == 1:  # a bare `env` is not read past
+        return 0
+    return 0 if at < len(words) and _unquoted(words[at].raw).startswith("-") else at
 
 
 def _unwrap(words: Sequence[_ShellWord], zone: _Zone) -> Sequence[_ShellWord]:

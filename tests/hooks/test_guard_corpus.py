@@ -131,18 +131,18 @@ def test_a_moved_verdict_prints_the_command_the_guard_and_both_values(
     assert "guard deny_secrets: expected refuse, got allow" in problem
 
 
-PROD_SHELL_READERS = frozenset(
+SHELL_READERS = frozenset(
     {
-        *("sh", "bash", "zsh", "dash", "fish", "ksh", "ash", "hush", "csh", "tcsh"),
+        *("sh", "bash", "zsh", "dash", "fish", "ksh", "mksh", "ash", "hush", "csh", "tcsh"),
         *("source", ".", "eval", "parallel", "make", "su", "sudo", "doas", "script"),
         *("screen", "tmux"),
     }
 )
 
 
-def test_the_shared_table_holds_the_shell_readers_of_prod() -> None:
-    assert TABLES["wrapper_commands"].SHELL_READERS == PROD_SHELL_READERS
-    assert len(PROD_SHELL_READERS) == 21
+def test_the_shared_table_holds_the_shell_readers_of_prod_and_mksh() -> None:
+    assert TABLES["wrapper_commands"].SHELL_READERS == SHELL_READERS
+    assert len(SHELL_READERS) == 22
 
 
 @pytest.mark.parametrize("guard", ["prod_guard", "opencode_server_guard"])

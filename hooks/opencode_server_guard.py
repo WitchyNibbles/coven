@@ -77,7 +77,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from functools import cached_property
 from pathlib import Path
-from typing import NoReturn, Self
+from typing import NoReturn, Protocol, Self
 
 # `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -638,64 +638,29 @@ RUNNER_ARGUMENTS = {
 }
 
 
-@dataclass(frozen=True)
-class Wrapper:
-    """How a command that runs another reads its words: options that take a value, and the
-    words that follow the options (timeout's duration)."""
+class _Syntax(Protocol):
+    """What this guard reads of a wrapper_commands.WrapperSyntax: the options that take a value,
+    the words that follow the options (timeout's duration), and whether assignments may come
+    next (`env A=1 cmd`)."""
 
-    valued: frozenset[str] = frozenset()
-    operands: int = 0
-    assignments: bool = False
+    @property
+    def valued(self) -> frozenset[str]: ...
+
+    @property
+    def operands(self) -> int: ...
+
+    @property
+    def assignments(self) -> bool: ...
 
 
-def _wrapper(valued: str = "", operands: int = 0, assignments: bool = False) -> Wrapper:
-    return Wrapper(frozenset(valued.split()), operands, assignments)
-
-
-# How the wrappers of wrapper_commands.WRAPPERS that this guard walks past read their options. A
-# wrapper that is not here (a shell, `su`, `script`, `tmux`...) is not walked past; its command
+# How the wrappers of wrapper_commands.WRAPPER_SYNTAX that this guard walks past read their
+# options. Any option not in `valued` is taken to be a flag, so the word after it is the command. A
+# wrapper that is not there (a shell, `su`, `script`, `tmux`...) is not walked past; its command
 # strings are read, and any word that names opencode after it is refused anyway.
-OPTION_SYNTAX = {
-    "env": _wrapper("-u --unset -C --chdir", assignments=True),
-    "exec": _wrapper("-a"),
-    "command": _wrapper(),
-    "builtin": _wrapper(),
-    "nice": _wrapper("-n --adjustment"),
-    "nohup": _wrapper(),
-    "time": _wrapper("-f -o --format --output"),
-    "timeout": _wrapper("-s -k --signal --kill-after", operands=1),
-    "sudo": _wrapper(
-        "-C -D -g -p -R -r -T -t -U -u --chdir --group --prompt --user", assignments=True
-    ),
-    "doas": _wrapper("-u -C"),
-    "stdbuf": _wrapper("-i -o -e"),
-    "setsid": _wrapper(),
-    "ionice": _wrapper("-c -n -p -P -u -t"),
-    "xargs": _wrapper("-a -E -I -L -n -P -s -d --arg-file --max-args --max-procs --delimiter"),
-    "watch": _wrapper("-n -d --interval"),
-    "unbuffer": _wrapper(),
-    "npx": _wrapper("-p --package -c --call"),
-    "bunx": _wrapper("-p --package"),
-    "pnpx": _wrapper("-p --package"),
-    "taskset": _wrapper(operands=1),
-    "chrt": _wrapper(operands=1),
-    "flock": _wrapper("-w -E -c --timeout --conflict-exit-code --command", operands=1),
-    "unshare": _wrapper("-S -G -R -w --root --wd --setuid --setgid --propagation --map-user"),
-    "setpriv": _wrapper(
-        "--reuid --regid --ruid --euid --rgid --egid --groups --inh-caps --bounding-set"
-        " --ambient-caps --securebits --pdeathsig --selinux-label --apparmor-profile"
-    ),
-    "runuser": _wrapper("-u -g -G -s -c -l --user --group --supp-group --shell --command"),
-    "strace": _wrapper("-e -o -p -s -u -E -a -I -P -S -X -b -O -U --env --output"),
-    "ltrace": _wrapper("-e -o -p -s -u -A -n -l --output"),
-    "parallel": _wrapper("-j -a -S -N -n -L -P --jobs --arg-file --sshlogin --max-args"),
-    "systemd-run": _wrapper(
-        "-p -u -E -M -G --property --unit --setenv --machine --slice --description --uid --gid"
-        " --working-directory --on-active --on-calendar"
-    ),
-    "busybox": _wrapper(),
-}
-RUNNER_OPTIONS = _wrapper("-p --package -c --call -C --prefix --workspace -w")
+OPTION_SYNTAX: Mapping[str, _Syntax] = wrapper_commands.WRAPPER_SYNTAX
+RUNNER_OPTIONS: _Syntax = wrapper_commands.WrapperSyntax(
+    valued=frozenset({"-p", "--package", "-c", "--call", "-C", "--prefix", "--workspace", "-w"})
+)
 # Launcher options known to take no value, so the word after one is the program; any other option
 # may take the next word as its value. `-n` only for poetry: `conda run -n <env>` takes one.
 LAUNCHER_FLAGS = frozenset(
@@ -844,7 +809,7 @@ def _commands(text: str) -> list[Argv]:
     return found
 
 
-def _skip_options(words: Sequence[str], start: int, wrapper: Wrapper) -> int:
+def _skip_options(words: Sequence[str], start: int, wrapper: _Syntax) -> int:
     index = start
     while index < len(words):
         word = words[index]
