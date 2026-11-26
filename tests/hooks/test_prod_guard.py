@@ -5421,7 +5421,7 @@ DOLLAR_LIST_WRITES: dict[str, str] = {
 
 
 @pytest.mark.parametrize("name", list(DOLLAR_LIST_WRITES))
-def test_a_write_to_the_user_folder_through_a_dollar_brace_list_is_refused(
+def test_a_write_to_the_user_folder_through_a_dollar_brace_comma_word_is_refused(
     run: Run, store: Path, name: str
 ) -> None:
     payload = in_session(bash(pinned(DOLLAR_LIST_WRITES[name])))
