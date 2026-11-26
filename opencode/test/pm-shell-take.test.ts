@@ -6,8 +6,9 @@ import type {
   SessionLike,
   ShellCreateEvent,
 } from "../src/context.ts";
-import { ROLE_ENV, resolveRole } from "../src/pm/role.ts";
+import { resolvePlaced } from "../src/pm/role.ts";
 import { ShellQueue, shellEnvHooks } from "../src/pm/shell-env.ts";
+import { ISOLATION, pmEnv } from "./pm-isolation-fixture.ts";
 import { sharedState } from "../src/pm/state.ts";
 
 const KEY = "GATEWAY_KEY";
@@ -25,6 +26,7 @@ function copies() {
     const hooks = shellEnvHooks({
       keyEnv: KEY,
       directory: "/loc",
+      isolation: ISOLATION,
       queue,
       taken,
       now: () => 1_000_000,
@@ -32,10 +34,16 @@ function copies() {
     return {
       ...hooks,
       // the plugin hands the hook the call's one role lookup; here it is made the same way
-      executeBefore: (event: ExecuteBeforeEvent) =>
-        hooks.executeBefore(event, () =>
-          resolveRole(event.sessionID, () => Promise.resolve(PM_SESSION)),
-        ),
+      executeBefore: (event: ExecuteBeforeEvent) => {
+        const placed = resolvePlaced(event.sessionID, () =>
+          Promise.resolve(PM_SESSION),
+        );
+        return hooks.executeBefore(
+          event,
+          async () => (await placed).info,
+          async () => (await placed).holder,
+        );
+      },
     };
   };
   return { first: make(), second: make() };
@@ -67,10 +75,10 @@ await test("two createBefore hooks on one event take one entry", async () => {
   const one = shellEvent({});
   first.createBefore(one);
   second.createBefore(one);
-  assert.deepEqual(one.env, { [ROLE_ENV]: "pm" });
+  assert.deepEqual(one.env, pmEnv());
   const next = shellEvent({});
   second.createBefore(next);
-  assert.deepEqual(next.env, { [ROLE_ENV]: "pm" });
+  assert.deepEqual(next.env, pmEnv());
   const last = shellEvent({});
   first.createBefore(last);
   assert.deepEqual(last.env, {});
@@ -133,7 +141,7 @@ await test("an empty workdir pairs on the location directory, as the guard reads
   await first.executeBefore({ ...call, input: { command: "ls", workdir: "" } });
   const event = shellEvent({});
   first.createBefore(event);
-  assert.deepEqual(event.env, { [ROLE_ENV]: "pm" });
+  assert.deepEqual(event.env, pmEnv());
 });
 
 await test("an empty workdir also pairs with a shell that starts with an empty cwd", async () => {
@@ -141,7 +149,7 @@ await test("an empty workdir also pairs with a shell that starts with an empty c
   await first.executeBefore({ ...call, input: { command: "ls", workdir: "" } });
   const event = { ...shellEvent({}), cwd: "" };
   first.createBefore(event);
-  assert.deepEqual(event.env, { [ROLE_ENV]: "pm" });
+  assert.deepEqual(event.env, pmEnv());
 });
 
 await test("an empty workdir call is taken once, whichever form its shell has", async () => {

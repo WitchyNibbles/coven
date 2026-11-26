@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
 
 import { covenSetup } from "../src/coven.ts";
@@ -22,10 +25,24 @@ import { exits, fakeSpawn } from "./guard-fake.ts";
 import { realPage } from "./pm-fake-session.ts";
 import type { Behaviour } from "./guard-fake.ts";
 
-/** The options setup always writes besides `covenRoot` and `keyEnv`; placeholder paths. */
+/** This checkout: the `covenRoot` whose `hooks/pm-shell-isolate.sh` exists, as a PM's shell needs. */
+export const COVEN_ROOT = resolve(import.meta.dirname, "../..");
+
+/**
+ * A profile folder with a serve folder in it, as the plugin finds one at start (it copies the
+ * wrapper there); removed when the test process exits.
+ */
+const PROFILE_ROOT = mkdtempSync(join(tmpdir(), "coven-test-profile-"));
+mkdirSync(join(PROFILE_ROOT, "state", "serve"), { recursive: true });
+process.once("exit", () => {
+  rmSync(PROFILE_ROOT, { recursive: true, force: true });
+});
+
+/** The options setup always writes besides `covenRoot` and `keyEnv`; the folders are real. */
 export const PROFILE_OPTIONS = {
-  profileDir: "/tmp/coven-test/profile",
-  serveDir: "/tmp/coven-test/profile/state/serve",
+  profileDir: PROFILE_ROOT,
+  serveDir: join(PROFILE_ROOT, "state", "serve"),
+  dataDir: join(PROFILE_ROOT, "data"),
   store: null,
   secretRules: [],
 };

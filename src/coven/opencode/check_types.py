@@ -13,6 +13,7 @@ from coven.opencode.serve import HOST, ServerInfo, read_password
 
 type Status = Literal["ok", "warn", "fail"]
 type Read = Callable[[Path, Mapping[str, str], Path, ServerOptions], ServerView]
+type Isolation = Callable[[Path, Mapping[str, str]], Outcome]
 
 RESET: Final = RESET_HINT
 SETUP: Final = "run coven opencode setup"
@@ -98,6 +99,7 @@ class Context:
     env: Mapping[str, str]
     binary: Path
     server: Server
+    isolation: Isolation
 
     def skip(self) -> Outcome:
         """The failure for a check that needs a profile when there is none."""

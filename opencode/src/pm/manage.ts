@@ -12,6 +12,7 @@ import type { PmRoot } from "./find.ts";
 import { sharedState } from "./state.ts";
 import { ToolError, asToolError, requireGm } from "./tools.ts";
 import type { ToolDeps } from "./tools.ts";
+import type { Swept } from "./trees.ts";
 
 const MINUTE_MS = 60_000;
 /** A child busy this long shows in the list, so the GM can see a PM that has gone quiet. */
@@ -266,11 +267,47 @@ export function pmResumeTool(deps: ToolDeps): ToolDefinition {
   };
 }
 
-export function pmStopTool(deps: ToolDeps): ToolDefinition {
+/** Kills the isolation trees of a PM's shells; the argument is the PM's session id. */
+export type TreeStopper = (sessionID: string) => Promise<Swept>;
+
+export interface StopDeps extends ToolDeps {
+  /** Without it (no isolation wired) a stop only interrupts the turn. */
+  trees?: TreeStopper;
+}
+
+/** What a stop adds to its text about the isolation trees it swept. */
+function sweptText({ killed, skipped, running }: Swept): string {
+  const stale = skipped > 0 ? `; skipped ${skipped} stale record(s)` : "";
+  const alive =
+    running > 0 ? `; ${running} tree(s) still running after SIGKILL` : "";
+  return `; killed ${killed} isolation tree(s)${stale}${alive}`;
+}
+
+/** The trees of the PM, after its turn was interrupted; a failure still says the PM was. */
+async function stopTrees(
+  deps: StopDeps,
+  target: SessionLike,
+  code: string,
+): Promise<string> {
+  if (deps.trees === undefined) {
+    return "";
+  }
+  try {
+    return sweptText(await deps.trees(target.id));
+  } catch (error) {
+    throw new ToolError(
+      `interrupted pm-${code} but could not stop its isolation trees: ${messageOf(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+export function pmStopTool(deps: StopDeps): ToolDefinition {
   return {
     name: "coven_pm_stop",
     description:
-      "Stops a PM by its code: interrupts its turn (which also ends a waiting ask) and, with " +
+      "Stops a PM by its code: interrupts its turn (which also ends a waiting ask), kills the " +
+      "isolated process trees of its shells (also a call that moved to the background) and, with " +
       "archive true, hides it from coven_pm_list (the session is not archived in OpenCode; " +
       "coven_pm_resume shows it again). No turn-end notice follows the stop.",
     input: {
@@ -299,8 +336,9 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
           stopped.delete(target.id);
           throw error;
         }
+        const swept = await stopTrees(deps, target, code);
         if (!archive) {
-          return { content: `stopped pm-${code}` };
+          return { content: `stopped pm-${code}${swept}` };
         }
         // `update` replaces the whole metadata: build it from the session as it is now
         const fresh = await deps.session.get({ sessionID: target.id });
@@ -309,7 +347,7 @@ export function pmStopTool(deps: ToolDeps): ToolDefinition {
           metadata: withCoven(fresh, { archived: true }),
         });
         return {
-          content: `stopped pm-${code}; hidden from coven_pm_list; the session is not archived in OpenCode`,
+          content: `stopped pm-${code}; hidden from coven_pm_list; the session is not archived in OpenCode${swept}`,
         };
       }),
   };

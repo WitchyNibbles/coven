@@ -49,6 +49,7 @@
         "keyEnv": "GATEWAY_KEY",
         "profileDir": "<P>",
         "serveDir": "<P>/state/serve",
+        "dataDir": "<P>/data",
         "store": "<STORE>",
         "secretRules": [
           {

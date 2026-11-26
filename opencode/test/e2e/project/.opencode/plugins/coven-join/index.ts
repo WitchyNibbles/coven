@@ -21,6 +21,7 @@ export default {
         keyEnv: "COVEN_E2E_KEY",
         profileDir: "/tmp/coven-test/profile",
         serveDir: "/tmp/coven-test/profile/state/serve",
+        dataDir: "/tmp/coven-test/profile/data",
         store: null,
         secretRules: [],
       },

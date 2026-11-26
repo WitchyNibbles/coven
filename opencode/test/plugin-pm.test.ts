@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import type { EvaluateEvent } from "../src/context.ts";
 import { ROLE_ENV } from "../src/pm/role.ts";
 import { sharedState } from "../src/pm/state.ts";
 import {
+  COVEN_ROOT,
   DIRECTORY,
   LEAD,
   PM,
@@ -18,7 +21,7 @@ import {
 import { toolEvent } from "./plugin-guards-fixture.ts";
 
 const COVEN = {
-  covenRoot: "/c",
+  covenRoot: COVEN_ROOT,
   keyEnv: "K",
   ...PROFILE_OPTIONS,
   toolChoiceAuto: [],
@@ -86,12 +89,78 @@ await test("a PM's shell gets the role variable and the GM's shell does not", as
     const event = {
       command: "ls",
       cwd: DIRECTORY,
+      shell: "/usr/bin/bash",
       env: { K: "secret", PATH: "/bin" } as Record<string, string>,
     };
     await shell.callback(event);
     assert.equal(event.env[ROLE_ENV], expected);
     assert.equal(event.env["K"], undefined);
   }
+});
+
+/** Runs one shell call of `sessionID` through the plugin's own hooks; the shell event afterwards. */
+async function shellOf(
+  p: Awaited<ReturnType<typeof booted>>,
+  sessionID: string,
+) {
+  const hook = p.toolHooks.find((entry) => entry.name === "execute.before");
+  const shell = p.shellHooks[0];
+  assert.ok(hook !== undefined && shell !== undefined);
+  await hook.callback(toolEvent(sessionID, { command: "ls" }));
+  const event = {
+    command: "ls",
+    cwd: DIRECTORY,
+    shell: "/usr/bin/bash",
+    env: { PATH: "/bin" } as Record<string, string>,
+  };
+  await shell.callback(event);
+  return event;
+}
+
+await test("a PM's shell runs through the copy in the serve folder, with the real shell and both hide paths", async () => {
+  const p = await booted();
+  const event = await shellOf(p, PM);
+  const copy = join(PROFILE_OPTIONS.serveDir, "isolate", "pm-shell-isolate.sh");
+  assert.equal(event.shell, copy);
+  assert.deepEqual(
+    readFileSync(copy),
+    readFileSync(join(COVEN_ROOT, "hooks", "pm-shell-isolate.sh")),
+  );
+  assert.equal(statSync(copy).mode & 0o777, 0o500);
+  assert.equal(event.env["COVEN_PM_REAL_SHELL"], "/usr/bin/bash");
+  assert.equal(
+    event.env["COVEN_PM_HIDE"],
+    `${join(PROFILE_OPTIONS.profileDir, "state", "serve")}:${join(PROFILE_OPTIONS.profileDir, "data")}`,
+  );
+  assert.equal(event.env[ROLE_ENV], "pm");
+});
+
+await test("a copy that fails refuses a PM's shell and not a GM's", async () => {
+  const dataDir = join(PROFILE_OPTIONS.profileDir, "data");
+  const missing = join(PROFILE_OPTIONS.profileDir, "no", "serve");
+  const p = await booted({ options: { ...COVEN, serveDir: missing, dataDir } });
+  await assert.rejects(
+    shellOf(p, PM),
+    /^Error: coven: PM shells run isolated and isolation is not available here: wrapper copy failed: .*ENOENT.*; ask the user$/,
+  );
+  const event = await shellOf(p, LEAD);
+  assert.equal(event.shell, "/usr/bin/bash");
+});
+
+await test("a GM's shell is left as it was", async () => {
+  const p = await booted();
+  const event = await shellOf(p, LEAD);
+  assert.equal(event.shell, "/usr/bin/bash");
+  assert.deepEqual(event.env, { PATH: "/bin" });
+});
+
+await test("with no wrapper at the coven root a PM's shell is refused and a GM's is not", async () => {
+  const p = await booted({ options: { ...COVEN, covenRoot: "/c" } });
+  await assert.rejects(shellOf(p, PM), {
+    message: `coven: PM shells run isolated and isolation is not available here: wrapper not found: /c/hooks/pm-shell-isolate.sh; ask the user`,
+  });
+  const event = await shellOf(p, LEAD);
+  assert.equal(event.shell, "/usr/bin/bash");
 });
 
 await test("a PM turn that ends without a message queues a notice into the GM", async () => {

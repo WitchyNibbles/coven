@@ -10,9 +10,10 @@ from typing import Final
 
 from coven.doctor import one_line
 from coven.errors import CovenError
-from coven.opencode import serve
+from coven.opencode import checks_isolation, serve
 from coven.opencode.canary import read_server
-from coven.opencode.check_types import Context, Live, Outcome, Read, Server
+from coven.opencode.check_types import Context, Isolation, Live, Outcome, Read, Server
+from coven.opencode.checks_isolation import isolation_check
 from coven.opencode.checks_runtime import (
     config_check,
     coven_root_check,
@@ -50,6 +51,7 @@ CHECKS: Final[tuple[tuple[str, Check], ...]] = (
     ("skills", skills_check),
     ("operations", operations_check),
     ("coven root", coven_root_check),
+    ("PM shell isolation", isolation_check),
     ("project config", project_config_check),
     ("superpowers", superpowers_check),
     ("limits", limits_check),
@@ -82,17 +84,29 @@ def _running(layout: Layout) -> Live | None:
     return Live(info, layout) if info else None
 
 
-def _context(layout: Layout, cwd: Path, base: Mapping[str, str], read: Read) -> Context:
+def _context(
+    layout: Layout, cwd: Path, base: Mapping[str, str], read: Read, isolation: Isolation
+) -> Context:
     profile, note = _profile(layout)
     env = run_env(profile, layout, base, offline=True) if profile else isolated_env(layout, base)
     binary = binary_path(layout)
     server = Server(read, binary, env, layout.config_dir, _running(layout))
-    return Context(layout, cwd, base, profile, note, env, binary, server)
+    return Context(layout, cwd, base, profile, note, env, binary, server, isolation)
 
 
-def run_doctor(layout: Layout, cwd: Path, *, read: Read = read_server) -> list[tuple[str, Outcome]]:
-    """Every check in order. Plugin and skills share one server read."""
-    ctx = _context(layout, cwd, os.environ, read)
+def run_doctor(
+    layout: Layout,
+    cwd: Path,
+    *,
+    read: Read = read_server,
+    isolation: Isolation | None = None,
+) -> list[tuple[str, Outcome]]:
+    """Every check in order. Plugin and skills share one server read.
+
+    `isolation` runs the PM shell wrapper; the default is looked up when doctor runs, not at import.
+    """
+    probe = isolation if isolation is not None else checks_isolation.probe_isolation
+    ctx = _context(layout, cwd, os.environ, read, probe)
     results: list[tuple[str, Outcome]] = []
     for name, check in CHECKS:
         outcome = _guarded(check, ctx)

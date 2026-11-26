@@ -24,7 +24,14 @@
 - On OpenCode 2.3.2 `coven_pm_stop` with `archive: true` hides a PM by a `coven.archived` metadata
   flag; the session is not archived in OpenCode. `coven_pm_list` with `archived: true` shows
   hidden PMs, and `coven_pm_resume` clears the flag.
-- `coven opencode doctor` adds the checks `python3`, `server`, `password` and `operations`.
+- `coven opencode doctor` adds the checks `python3`, `server`, `password`, `operations` and
+  `PM shell isolation`.
+- On OpenCode every shell command of a PM runs in new user, PID and mount namespaces: its `/proc`
+  shows only its own processes and the profile's serve and data folders are empty. Files, git and
+  the network work as before. Where namespaces are not available the PM's shell refuses and names
+  the missing piece; no setting turns isolation off, and `coven opencode doctor` reports the
+  check. `coven_pm_stop` also kills the isolation trees the PM's shells started. See
+  [opencode/README.md](opencode/README.md#hierarchy).
 - pm-permissions: a plain `git push` after `cd <dir> &&` is checked in `<dir>` alone, so a PM can
   push a worktree's branch from the main checkout; after `;`, `||` or `|`, and anywhere in a command
   with a parenthesis, the old directory is still checked.

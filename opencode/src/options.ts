@@ -10,6 +10,8 @@ export interface CovenOptions {
   profileDir: string;
   /** The folder of the server's port and password files. */
   serveDir: string;
+  /** The profile's data folder (`Layout.data`): the server's own database lives there. */
+  dataDir: string;
   /** The memory folder, or null when there is none (the key is still required). */
   store: string | null;
   /** The secret rules and the skills edit deny, as the generated config holds them. */
@@ -33,6 +35,7 @@ const KNOWN = new Set([
   "keyEnv",
   "profileDir",
   "serveDir",
+  "dataDir",
   "store",
   "secretRules",
   "toolChoiceAuto",
@@ -163,6 +166,7 @@ export function parseOptions(raw: unknown): CovenOptions {
     keyEnv: parseKeyEnv(fields["keyEnv"]),
     profileDir: parseDir(fields["profileDir"], "profileDir"),
     serveDir: parseDir(fields["serveDir"], "serveDir"),
+    dataDir: parseDir(fields["dataDir"], "dataDir"),
     store: parseFolder(fields["store"]),
     secretRules: parseRules(fields["secretRules"]),
     toolChoiceAuto: parseProviders(fields["toolChoiceAuto"]),

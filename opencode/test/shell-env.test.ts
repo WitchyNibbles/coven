@@ -39,6 +39,16 @@ async function throughPlugin(env: Record<string, string>) {
   return event;
 }
 
+await test("the wrapper's two test seams are removed from every shell", async () => {
+  const event = await throughPlugin({
+    COVEN_ISOLATE_SYS: "/x",
+    COVEN_ISOLATE_PATH: "/y",
+    PATH: "/bin",
+  });
+  assert.deepEqual(event.env, { PATH: "/bin" });
+  assert.equal(event.shell, "/bin/sh");
+});
+
 await test("the key variable and the server password are removed", async () => {
   const event = await throughPlugin({
     [KEY]: "k",

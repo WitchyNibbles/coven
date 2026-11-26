@@ -5,12 +5,12 @@ import { setImmediate as tick } from "node:timers/promises";
 import type { ExecuteBeforeEvent } from "../src/context.ts";
 import { exits } from "./guard-fake.ts";
 import type { Behaviour, SpawnCall } from "./guard-fake.ts";
-import { PROFILE_OPTIONS, bootCoven } from "./plugin-fixture.ts";
+import { COVEN_ROOT, PROFILE_OPTIONS, bootCoven } from "./plugin-fixture.ts";
 
 /** The helpers of the tests that drive the plugin's one `execute.before` hook. */
 
 export const COVEN = {
-  covenRoot: "/c",
+  covenRoot: COVEN_ROOT,
   keyEnv: "K",
   ...PROFILE_OPTIONS,
   toolChoiceAuto: [],

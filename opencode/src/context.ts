@@ -136,13 +136,16 @@ export interface ExecuteBeforeEvent {
 
 /**
  * 2.3.2 `shell.hook("create.before")`: runs before each shell command starts and carries no
- * session id (the event also has `timeout` and `shell`; the plugin reads neither). `command` is
- * the call's `command` and `cwd` its raw `workdir`, or the location directory when it had none
- * (Task 0, step 3). Edits to `env` reach the command; a throw stops it.
+ * session id (the event also has `timeout`, which the plugin does not read). `command` is the
+ * call's `command` and `cwd` its raw `workdir`, or the location directory when it had none
+ * (Task 0, step 3). `shell` is the shell OpenCode spawns as `<shell> -c <command>` (`/usr/bin/bash`
+ * by default); a PM's shell is pointed at the isolation wrapper. Edits to `env` and `shell` reach
+ * the command; a throw stops it.
  */
 export interface ShellCreateEvent {
   readonly command: string;
   readonly cwd: string;
+  shell?: string;
   env: Record<string, string>;
 }
 

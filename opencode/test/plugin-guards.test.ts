@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { ROLE_ENV } from "../src/pm/role.ts";
 import { exits } from "./guard-fake.ts";
 import {
+  COVEN,
   SCRIPTS_FOR_GM,
   SCRIPTS_FOR_PM,
   SERVER,
@@ -35,7 +36,7 @@ await test("order: deny-secrets, server guard, pm-permissions, prod guard for a 
         "--serve",
         PROFILE_OPTIONS.serveDir,
         "--coven-root",
-        "/c",
+        COVEN.covenRoot,
       ],
       ["--pre-tool-use"],
       ["--no-approvals"],
@@ -193,13 +194,14 @@ await test("a shell call looks its role up once, for the guards and for its shel
   const event = {
     command: "echo once",
     cwd: DIRECTORY,
+    shell: "/usr/bin/bash",
     env: {} as Record<string, string>,
   };
   await shell.callback(event);
   assert.equal(event.env[ROLE_ENV], "pm");
 });
 
-await test("a failed role lookup on a shell call still gives the shell a pm", async () => {
+await test("a failed role lookup on a shell call makes the shell a pm's, which is refused: no PM session to file its tree under", async () => {
   const { p, run } = await booted();
   p.sessions.set("ses_down", new Error("down"));
   await run(toolEvent("ses_down", { command: "echo down" }));
@@ -209,10 +211,14 @@ await test("a failed role lookup on a shell call still gives the shell a pm", as
   const event = {
     command: "echo down",
     cwd: DIRECTORY,
+    shell: "/usr/bin/bash",
     env: {} as Record<string, string>,
   };
-  await shell.callback(event);
-  assert.equal(event.env[ROLE_ENV], "pm");
+  await assert.rejects(
+    async () => shell.callback(event),
+    /the PM session of this shell could not be placed/,
+  );
+  assert.equal(event.shell, "/usr/bin/bash");
 });
 
 await test("the plugins the guard tests started stop", () => {

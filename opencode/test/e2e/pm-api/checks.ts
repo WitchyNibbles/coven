@@ -39,6 +39,7 @@ function said(out: ToolOut | undefined): string {
   return out?.content ?? out?.error ?? "no answer";
 }
 
+/** This probe builds the stop tool with no tree stopper, so the text has no tree count. */
 const STOPPED =
   "stopped pm-x; hidden from coven_pm_list; the session is not archived in OpenCode";
 

@@ -197,7 +197,8 @@ fetch switch (`OPENCODE_DISABLE_MODELS_FETCH`) and the one holding the key.
   polls up to 10 s, because 2.3.2 lists no plugin until they have loaded), `skills` (the same
   server lists only built-in skills and the profile's), `operations` (the server's API document
   has every operation coven calls, so a runtime bump that drops one fails here and not in a PM),
-  `coven root` (the plugin's root still holds `hooks/deny_secrets.py`) and `project config` (a
+  `coven root` (the plugin's root still holds `hooks/deny_secrets.py`), `PM shell isolation`
+  (a PM's shell can start its namespaces here; see [Hierarchy](#hierarchy)) and `project config` (a
   warning for a repo config that is ignored here), `superpowers` (a warning when a
   `superpowers-<x>` skill is missing from the profile) and `limits` (a warning naming the litellm
   models that have no `--limit`).
@@ -241,7 +242,10 @@ PM can claim.
   The tool adds the `[from gm]` or `[from pm-<code>]` frame.
 - `coven_pm_resume {code, text}`: shows a hidden PM again and queues it a turn that starts with
   `RESUMED by gm`.
-- `coven_pm_stop {code, archive?}`: interrupts the PM's turn, which also ends a waiting ask.
+- `coven_pm_stop {code, archive?}`: interrupts the PM's turn, which also ends a waiting ask, and
+  kills the isolation trees its shells started (see "Isolated PM shells" below). Its text ends
+  `; killed N isolation tree(s)`, then `; skipped M stale record(s)` and
+  `; K tree(s) still running after SIGKILL` when those counts are above zero.
 
 `coven_pm_launch`, `coven_pm_list`, `coven_pm_resume` and `coven_pm_stop` refuse any session but
 the GM. `coven_gm_claim` refuses a child session and a PM, so a session that is not the GM yet can
@@ -290,6 +294,26 @@ role, and none is a sandbox.
   A `guard.json` that is in the store's working tree but not committed makes the guard refuse
   every Bash and MCP call of a PM until it is committed. Name your live systems first (see
   [Production guard](../README.md#production-guard)).
+
+**Isolated PM shells.** Every shell command of a PM tree runs in new user, PID and mount
+namespaces, through `unshare` on Linux. Its `/proc` shows only its own processes, and the profile's
+serve and data folders are empty tmpfs mounts, so the server's password, port file and environment
+are not there to read, however a command hides the path. Files, git, `gh` and the network work as
+before: there is no network namespace, so a PM still pushes and opens PRs. The GM's shells and your
+own `!` shells are not isolated.
+
+Where namespaces are not available, a PM's shell refuses and never runs unisolated. No setting turns
+isolation off. The refusal reads:
+
+    coven: PM shells run isolated and isolation is not available here: <missing piece>; ask the user
+
+The missing piece is `unshare` not found, util-linux older than 2.38, user namespaces off, AppArmor
+blocking them, or the error `unshare` gave. `coven opencode doctor` shows the same check as
+`PM shell isolation: ok` or `not available: <piece>`, a failed check.
+
+Some limits are listed in [docs/known-gaps.md](../docs/known-gaps.md#opencode): non-shell tools run
+in the server process, and the role queue has a mixed race (a GM shell started in the same instant as
+a PM's shell with the same command and folder can run isolated once).
 
 **Production steps.** The manager on OpenCode follows only the No guard flow of its skill. Every
 `PROD-STEP` goes to the user with the exact commands. On a yes the GM runs them itself, in its own

@@ -135,6 +135,16 @@ await test("scrub removes password and key, keeps PATH and HOME", () => {
   assert.deepEqual(env, { PATH: "/bin", HOME: "/h" });
 });
 
+await test("scrub removes the wrapper's two test seams", () => {
+  const env: Record<string, string | undefined> = {
+    COVEN_ISOLATE_SYS: "/fake/sys",
+    COVEN_ISOLATE_PATH: "/fake/bin",
+    PATH: "/bin",
+  };
+  scrubEnv(env, KEY);
+  assert.deepEqual(env, { PATH: "/bin" });
+});
+
 await test("scrub leaves near misses alone", () => {
   const env: Record<string, string | undefined> = {
     OPENCODE_SERVER_USERNAME: "opencode",
