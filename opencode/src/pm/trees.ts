@@ -5,7 +5,7 @@ import {
   readFileSync,
   readlinkSync,
 } from "node:fs";
-import { readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { readdir, readFile, rm, rmdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 /**
@@ -25,6 +25,10 @@ const KILL_CHILD_FLAG = "--kill-child";
 const START_AFTER_STATE = 18;
 const GONE_CHECKS = 20;
 const GONE_CHECK_MS = 50;
+/** The wrapper's temp record (`mktemp .record.XXXXXX`) and how old one is left before it is cleared. */
+const TEMP_RECORD = /^\.record\.[A-Za-z0-9]+$/;
+const TEMP_RECORD_MAX_AGE_MS = 60_000;
+const PIDS_ENV = "COVEN_PM_PIDS";
 
 export function isPlainName(name: string): boolean {
   return PLAIN_NAME.test(name);
@@ -56,6 +60,8 @@ export interface Proc {
   stat(pid: number): string | undefined;
   exe(pid: number): string | undefined;
   cmdline(pid: number): string[] | undefined;
+  /** The `NAME=value` entries of the process's environment as it was when it started. */
+  environ(pid: number): string[] | undefined;
 }
 
 export interface TreeHost {
@@ -63,13 +69,17 @@ export interface TreeHost {
   /** SIGKILL; throws like `process.kill` (`ESRCH` when the process is gone). */
   kill(pid: number): void;
   wait(ms?: number): Promise<void>;
+  /** Milliseconds since the epoch, to age a temp record. */
+  now(): number;
 }
 
 export interface Swept {
-  /** Isolation trees a SIGKILL was sent to. */
+  /** Isolation trees a SIGKILL ended: their pid was gone after the wait. */
   killed: number;
-  /** Records whose pid is no longer, or is not any more, the wrapper's unshare. */
+  /** Records whose pid is not, or is not any more, this PM's wrapper unshare. */
   skipped: number;
+  /** Trees that still ran after the SIGKILL and the wait; their records stay. */
+  running: number;
 }
 
 interface Stat {
@@ -107,8 +117,18 @@ function isGone(proc: Proc, pid: number): boolean {
 
 type Verdict = "gone" | "stale" | "ours" | "other";
 
-/** What a record's pid is now: the process that wrote it, another one, or gone. */
-function judge(proc: Proc, pid: number, recorded: string): Verdict {
+/**
+ * What a record's pid is now: gone, `stale` (another process has the pid), `ours` (the wrapper's
+ * outer unshare of the PM whose pid folder is `folder`) or `other` (the same start time, but not
+ * that: not an unshare with `--kill-child`, or one whose environment does not hold this PM's
+ * folder as a whole entry, or one that cannot be read).
+ */
+function judge(
+  proc: Proc,
+  pid: number,
+  recorded: string,
+  folder: string,
+): Verdict {
   const stat = proc.stat(pid);
   if (stat === undefined) {
     return "gone";
@@ -121,10 +141,12 @@ function judge(proc: Proc, pid: number, recorded: string): Verdict {
     return "stale";
   }
   const exe = proc.exe(pid);
-  const isUnshare = exe !== undefined && basename(exe) === UNSHARE;
-  return isUnshare && proc.cmdline(pid)?.includes(KILL_CHILD_FLAG) === true
-    ? "ours"
-    : "other";
+  const isOurs =
+    exe !== undefined &&
+    basename(exe) === UNSHARE &&
+    proc.cmdline(pid)?.includes(KILL_CHILD_FLAG) === true &&
+    proc.environ(pid)?.includes(`${PIDS_ENV}=${folder}`) === true;
+  return isOurs ? "ours" : "other";
 }
 
 function isMissing(error: unknown, code: string): boolean {
@@ -147,10 +169,13 @@ async function waitUntilGone(host: TreeHost, pid: number): Promise<boolean> {
 
 /**
  * Kills the trees of the records in one PM's pid folder. A record is killed only when its pid
- * still has the recorded start time, runs an `unshare` binary and has `--kill-child` in its
- * command line; a reused pid is never killed. Records of processes that are gone are removed, so
- * are the records of a reused pid (counted as skipped); a record that is not ours stays. The
- * folder is removed when it ends empty.
+ * still has the recorded start time, runs an `unshare` binary, has `--kill-child` in its command
+ * line and carries this PM's folder in its environment (`COVEN_PM_PIDS`): a reused pid, or another
+ * PM's unshare, is never killed. Records of processes that are gone are removed, so are the
+ * records of a reused pid (counted as skipped); a record that is not ours stays (counted as
+ * skipped), and so does the record of a tree that still ran after the SIGKILL and the wait
+ * (counted as running). A temp record the wrapper left over is removed once it is old. The folder
+ * is removed when it ends empty.
  */
 export async function sweepTrees(
   folder: string,
@@ -161,32 +186,60 @@ export async function sweepTrees(
     names = await readdir(folder);
   } catch (error) {
     if (isMissing(error, "ENOENT")) {
-      return { killed: 0, skipped: 0 };
+      return { killed: 0, skipped: 0, running: 0 };
     }
     throw error;
   }
-  const swept: Swept = { killed: 0, skipped: 0 };
-  for (const name of names.filter((each) => PID_NAME.test(each))) {
+  const swept: Swept = { killed: 0, skipped: 0, running: 0 };
+  for (const name of names) {
     const path = join(folder, name);
-    const pid = Number(name);
-    const verdict = judge(host.proc, pid, await recordedStart(path));
-    if (verdict === "other") {
-      swept.skipped += 1;
-    } else if (verdict === "stale") {
-      swept.skipped += 1;
-      await rm(path, { force: true });
-    } else if (verdict === "gone") {
-      await rm(path, { force: true });
-    } else {
-      const result = await killTree(host, pid);
-      swept.killed += result === "missing" ? 0 : 1;
-      if (result !== "alive") {
-        await rm(path, { force: true });
-      }
+    if (TEMP_RECORD.test(name)) {
+      await removeIfOld(path, host.now());
+    } else if (PID_NAME.test(name)) {
+      await sweepRecord(path, Number(name), folder, host, swept);
     }
   }
   await removeIfEmpty(folder);
   return swept;
+}
+
+async function sweepRecord(
+  path: string,
+  pid: number,
+  folder: string,
+  host: TreeHost,
+  swept: Swept,
+): Promise<void> {
+  const verdict = judge(host.proc, pid, await recordedStart(path), folder);
+  if (verdict === "other") {
+    swept.skipped += 1;
+    return;
+  }
+  if (verdict === "stale") {
+    swept.skipped += 1;
+  }
+  if (verdict === "ours") {
+    const result = await killTree(host, pid);
+    if (result === "alive") {
+      swept.running += 1;
+      return;
+    }
+    swept.killed += result === "gone" ? 1 : 0;
+  }
+  await rm(path, { force: true });
+}
+
+/** Removes a leftover temp record that is older than `TEMP_RECORD_MAX_AGE_MS`. */
+async function removeIfOld(path: string, now: number): Promise<void> {
+  try {
+    if (now - (await stat(path)).mtimeMs > TEMP_RECORD_MAX_AGE_MS) {
+      await rm(path, { force: true });
+    }
+  } catch (error) {
+    if (!isMissing(error, "ENOENT")) {
+      throw error;
+    }
+  }
 }
 
 /**
@@ -233,6 +286,12 @@ export function systemHost(): TreeHost {
       stat: (pid) =>
         readOrUndefined(() => readFileSync(`/proc/${pid}/stat`, "utf8")),
       exe: (pid) => readOrUndefined(() => readlinkSync(`/proc/${pid}/exe`)),
+      environ: (pid) =>
+        readOrUndefined(() =>
+          readFileSync(`/proc/${pid}/environ`, "utf8")
+            .split("\0")
+            .filter((entry) => entry !== ""),
+        ),
       cmdline: (pid) =>
         readOrUndefined(() =>
           readFileSync(`/proc/${pid}/cmdline`, "utf8")
@@ -241,6 +300,7 @@ export function systemHost(): TreeHost {
         ),
     },
     kill: (pid) => process.kill(pid, "SIGKILL"),
+    now: () => Date.now(),
     wait: (ms = GONE_CHECK_MS) =>
       new Promise((resolve) => {
         setTimeout(resolve, ms);
@@ -256,5 +316,5 @@ export function stopTreesIn(
   return (sessionID) =>
     isPlainName(sessionID)
       ? sweepTrees(join(pidsDir, sessionID), host)
-      : Promise.resolve({ killed: 0, skipped: 0 });
+      : Promise.resolve({ killed: 0, skipped: 0, running: 0 });
 }

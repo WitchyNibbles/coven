@@ -276,9 +276,11 @@ export interface StopDeps extends ToolDeps {
 }
 
 /** What a stop adds to its text about the isolation trees it swept. */
-function sweptText({ killed, skipped }: Swept): string {
+function sweptText({ killed, skipped, running }: Swept): string {
   const stale = skipped > 0 ? `; skipped ${skipped} stale record(s)` : "";
-  return `; killed ${killed} isolation tree(s)${stale}`;
+  const alive =
+    running > 0 ? `; ${running} tree(s) still running after SIGKILL` : "";
+  return `; killed ${killed} isolation tree(s)${stale}${alive}`;
 }
 
 /** The trees of the PM, after its turn was interrupted; a failure still says the PM was. */

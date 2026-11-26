@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,7 +29,18 @@ interface Fake {
   stat: Map<number, string>;
   exe: Map<number, string>;
   cmdline: Map<number, string[]>;
+  /** The environ entries by pid; a pid not in the map has the PM's own (`hostOf` fills it in). */
+  environ: Map<number, string[] | undefined>;
   killed: number[];
+}
+
+/** The time the fake host says it is; a record's age is counted from it. */
+const NOW_MS = 1_700_000_000_000;
+
+/** Makes a file `seconds` old as of `NOW_MS`. */
+function setAge(path: string, seconds: number): void {
+  const when = new Date(NOW_MS - seconds * 1000);
+  utimesSync(path, when, when);
 }
 
 /** A `/proc/<pid>/stat` line: the comm may hold spaces and parentheses, field 22 is `start`. */
@@ -59,6 +71,7 @@ function table(entries: [number, string][] = []): Fake {
     stat: new Map(),
     exe: new Map(),
     cmdline: new Map(),
+    environ: new Map(),
     killed: [],
   };
   for (const [pid, start] of entries) {
@@ -69,14 +82,20 @@ function table(entries: [number, string][] = []): Fake {
   return fake;
 }
 
-function hostOf(fake: Fake, dies = true): TreeHost {
+/** The host over `fake`, for the PM whose pid folder is `folder` (its shells carry it in their environ). */
+function hostOf(fake: Fake, folder: string, dies = true): TreeHost {
   const proc: Proc = {
     stat: (pid) => fake.stat.get(pid),
     exe: (pid) => fake.exe.get(pid),
     cmdline: (pid) => fake.cmdline.get(pid),
+    environ: (pid) =>
+      fake.environ.has(pid)
+        ? fake.environ.get(pid)
+        : ["PATH=/bin", `COVEN_PM_PIDS=${folder}`],
   };
   return {
     proc,
+    now: () => NOW_MS,
     kill: (pid) => {
       fake.killed.push(pid);
       if (dies) {
@@ -108,8 +127,8 @@ await test("startTimeOf reads field 22 and survives spaces and parentheses in th
 await test("a record whose process matches is killed with SIGKILL, then removed with its folder", async () => {
   const fake = table([[4242, "777"]]);
   const folder = folderWith([["4242", "777\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 1, skipped: 0 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 1, skipped: 0, running: 0 });
   assert.deepEqual(fake.killed, [4242]);
   assert.equal(existsSync(folder), false);
 });
@@ -117,8 +136,8 @@ await test("a record whose process matches is killed with SIGKILL, then removed 
 await test("a reused pid (another start time) is never killed; the stale record is removed and counted", async () => {
   const fake = table([[4242, "888"]]);
   const folder = folderWith([["4242", "777\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 0, skipped: 1 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
   assert.deepEqual(fake.killed, []);
   assert.equal(existsSync(folder), false);
 });
@@ -127,8 +146,8 @@ await test("a process whose exe is not an unshare is not killed and its record s
   const fake = table([[4242, "777"]]);
   fake.exe.set(4242, "/usr/bin/sleep");
   const folder = folderWith([["4242", "777\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 0, skipped: 1 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
   assert.deepEqual(fake.killed, []);
   assert.deepEqual(readdirSync(folder), ["4242"]);
 });
@@ -137,8 +156,8 @@ await test("an exe that cannot be read is not killed either", async () => {
   const fake = table([[4242, "777"]]);
   fake.exe.delete(4242);
   const folder = folderWith([["4242", "777\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 0, skipped: 1 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
   assert.deepEqual(fake.killed, []);
 });
 
@@ -146,8 +165,8 @@ await test("an unshare whose command line has no --kill-child is not killed", as
   const fake = table([[4242, "777"]]);
   fake.cmdline.set(4242, ["unshare", "--user", "--mount", "sh"]);
   const folder = folderWith([["4242", "777\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 0, skipped: 1 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
   assert.deepEqual(fake.killed, []);
   assert.deepEqual(readdirSync(folder), ["4242"]);
 });
@@ -159,8 +178,8 @@ await test("a gone process and a zombie are pruned, not killed and not counted",
     ["5000", "9\n"],
     ["5001", "10\n"],
   ]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 0, skipped: 0 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 0, running: 0 });
   assert.deepEqual(fake.killed, []);
   assert.equal(existsSync(folder), false);
 });
@@ -178,29 +197,30 @@ await test("each record is judged alone and the folder stays while one record do
     ["3", "33\n"],
     ["4", "44\n"],
   ]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 1, skipped: 2 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 1, skipped: 2, running: 0 });
   assert.deepEqual(fake.killed, [1]);
   assert.deepEqual(readdirSync(folder), ["3"]);
 });
 
-await test("a kill that does not end the process counts, and the record is kept for the next stop", async () => {
+await test("a kill that does not end the process is counted as still running, not killed, and the record is kept", async () => {
   const fake = table([[4242, "777"]]);
   const folder = folderWith([["4242", "777\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake, false));
-  assert.deepEqual(swept, { killed: 1, skipped: 0 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder, false));
+  assert.deepEqual(swept, { killed: 0, skipped: 0, running: 1 });
+  assert.deepEqual(fake.killed, [4242]);
   assert.deepEqual(readdirSync(folder), ["4242"]);
 });
 
 await test("a kill that finds the process gone (ESRCH) is not counted and the record is removed", async () => {
   const fake = table([[4242, "777"]]);
   const folder = folderWith([["4242", "777\n"]]);
-  const host = hostOf(fake);
+  const host = hostOf(fake, folder);
   host.kill = () => {
     throw Object.assign(new Error("no such process"), { code: "ESRCH" });
   };
   const swept = await sweepTrees(folder, host);
-  assert.deepEqual(swept, { killed: 0, skipped: 0 });
+  assert.deepEqual(swept, { killed: 0, skipped: 0, running: 0 });
   assert.equal(existsSync(folder), false);
 });
 
@@ -210,21 +230,79 @@ await test("names that are not a pid are left alone; a folder that is not there 
     [".record.AbC123", "5\n"],
     ["notes", "x"],
   ]);
-  assert.deepEqual(await sweepTrees(folder, hostOf(fake)), {
+  assert.deepEqual(await sweepTrees(folder, hostOf(fake, folder)), {
     killed: 0,
     skipped: 0,
+    running: 0,
   });
   assert.deepEqual(readdirSync(folder).sort(), [".record.AbC123", "notes"]);
   assert.deepEqual(
-    await sweepTrees(join(folder, "nope", "nope"), hostOf(fake)),
-    { killed: 0, skipped: 0 },
+    await sweepTrees(join(folder, "nope", "nope"), hostOf(fake, folder)),
+    { killed: 0, skipped: 0, running: 0 },
   );
+});
+
+await test("a leftover temp record older than 60 s is removed, so the folder goes; a fresh one stays", async () => {
+  const fake = table();
+  const folder = folderWith([
+    [".record.OLD123", "5\n"],
+    [".record.NEW456", "6\n"],
+  ]);
+  setAge(join(folder, ".record.OLD123"), 61);
+  setAge(join(folder, ".record.NEW456"), 5);
+  assert.deepEqual(await sweepTrees(folder, hostOf(fake, folder)), {
+    killed: 0,
+    skipped: 0,
+    running: 0,
+  });
+  assert.deepEqual(readdirSync(folder), [".record.NEW456"]);
+  setAge(join(folder, ".record.NEW456"), 61);
+  await sweepTrees(folder, hostOf(fake, folder));
+  assert.equal(existsSync(folder), false);
+});
+
+await test("another PM's unshare (same start time, exe and flags, another folder in its environ) is not killed and its record stays", async () => {
+  const fake = table([[4242, "777"]]);
+  const folder = folderWith([["4242", "777\n"]]);
+  fake.environ.set(4242, ["COVEN_PM_PIDS=/serve/isolate/pids/ses_other"]);
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
+  assert.deepEqual(fake.killed, []);
+  assert.deepEqual(readdirSync(folder), ["4242"]);
+});
+
+await test("the folder must match as a whole entry: a longer path, a prefix, a different name and an unreadable environ are all refused", async () => {
+  for (const environ of [
+    (folder: string) => [`COVEN_PM_PIDS=${folder}2`],
+    (folder: string) => [`COVEN_PM_PIDS=${folder.slice(0, -1)}`],
+    (folder: string) => [`X_COVEN_PM_PIDS=${folder}`],
+    (folder: string) => [`COVEN_PM_PIDS=${folder}\nX=1`],
+    (folder: string) => [`COVEN_PM_PIDS= ${folder}`],
+    () => [],
+    () => undefined,
+  ]) {
+    const fake = table([[4242, "777"]]);
+    const folder = folderWith([["4242", "777\n"]]);
+    fake.environ.set(4242, environ(folder));
+    const swept = await sweepTrees(folder, hostOf(fake, folder));
+    assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
+    assert.deepEqual(fake.killed, []);
+    assert.deepEqual(readdirSync(folder), ["4242"]);
+  }
+});
+
+await test("the right entry is found among others, wherever it sits in the environ", async () => {
+  const fake = table([[4242, "777"]]);
+  const folder = folderWith([["4242", "777\n"]]);
+  fake.environ.set(4242, ["A=1", `COVEN_PM_PIDS=${folder}`, "B=2"]);
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 1, skipped: 0, running: 0 });
 });
 
 await test("a record whose content is not a start time counts as stale", async () => {
   const fake = table([[4242, "777"]]);
   const folder = folderWith([["4242", "not a number\n"]]);
-  const swept = await sweepTrees(folder, hostOf(fake));
-  assert.deepEqual(swept, { killed: 0, skipped: 1 });
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
   assert.deepEqual(fake.killed, []);
 });
