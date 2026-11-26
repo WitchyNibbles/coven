@@ -38,10 +38,19 @@ but breaks the role pairing of `shell-env.ts`, so it is not used.
 2. In `createBefore`, after the queue says the shell is a PM's, coven keeps the original
    `event.shell` in the shell's env, puts the folders to hide in the env, and sets `event.shell` to the
    wrapper.
-3. The wrapper checks what it needs, then runs
-   `unshare --user --map-root-user --pid --fork --mount --mount-proc`, mounts an empty tmpfs over each
+3. The wrapper puts the caller's PATH aside and runs on a trusted PATH
+   (`/usr/sbin:/usr/bin:/sbin:/bin`), so a PM cannot put an `unshare` of its own ahead of the system's
+   and switch isolation off for later calls; it resolves every tool there, by absolute path for
+   `unshare`. It checks what it needs, then runs a preflight, the same `unshare` flags on `true`
+   with stderr captured, to name the cause when unshare fails. Then it `exec`s
+   `unshare --user --map-root-user --pid --fork --kill-child --mount --mount-proc` (`--kill-child`, so
+   that killing the process OpenCode spawned also kills the namespace's processes). Inside, the first
+   process of the namespace traps TERM, INT and HUP and kills the rest, mounts an empty tmpfs over each
    folder to hide that exists, drops back to the caller's uid and gid with a nested
-   `unshare --user --map-user=<uid> --map-group=<gid>`, and execs the real shell with `"$@"`.
+   `unshare --user --map-user=<uid> --map-group=<gid>` (tried first on `true`, so its failure is
+   reported), and runs the real shell with `"$@"` and the caller's PATH. `COVEN_ISOLATE_SYS` and
+   `COVEN_ISOLATE_PATH` are test seams read from the environment only; the plugin deletes both from a
+   PM shell's env.
 4. Mounts made in the outer namespace are locked for the inner one: the PM's process cannot unmount
    the tmpfs or the new `/proc`.
 

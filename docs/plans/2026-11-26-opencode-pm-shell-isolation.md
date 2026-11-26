@@ -47,12 +47,16 @@ plugin's `shell.create.before` points a PM's shell at it; the doctor runs it onc
 **Interfaces:**
 - Produces: `hooks/pm-shell-isolate.sh -c <command>`; reads env `COVEN_PM_REAL_SHELL` (absolute path)
   and `COVEN_PM_HIDE` (folders, `:`-separated); `COVEN_ISOLATE_SYS` (test-only root for the `/proc/sys`
-  reads, default `/proc/sys`) is the one test seam and cannot turn isolation off.
+  reads, default `/proc/sys`) and `COVEN_ISOLATE_PATH` (test-only trusted PATH the wrapper runs on,
+  default `/usr/sbin:/usr/bin:/sbin:/bin`) are the test seams; neither can turn isolation off. They are
+  read from the environment only, so Task 2 deletes both names from a PM shell's env. The wrapper never
+  resolves a tool from the caller's PATH and gives the caller's PATH back only to the real shell.
 - Exit: the real shell's exit code; on refusal 126 with the spec's one stderr line.
 
 - [ ] Step 1: tests with a fake `unshare` on PATH (records its argv, can fail with a given stderr) and a
   temp `/proc/sys` tree: the outer argv is exactly
-  `unshare --user --map-root-user --pid --fork --mount --mount-proc <inner>`; inside, a tmpfs mount per
+  `unshare --user --map-root-user --pid --fork --kill-child --mount --mount-proc <inner>` (Ruling 2:
+  `--kill-child`, a preflight of the same flags on `true` first, then an `exec`); inside, a tmpfs mount per
   existing hide folder, then `unshare --user --map-user=<uid> --map-group=<gid>` and the real shell with
   `-c <command>` byte for byte (a command with quotes, `$`, a newline). One test per missing piece and
   its message; missing `COVEN_PM_REAL_SHELL` or `COVEN_PM_HIDE` refuses. A test that runs the real
@@ -77,7 +81,8 @@ plugin's `shell.create.before` points a PM's shell at it; the doctor runs it onc
 
 - [ ] Step 1: tests: PM shell gets the wrapper and both env values; GM shell and a shell with no queue
   entry keep `event.shell` and get neither value; a missing wrapper refuses a PM's shell and not a GM's;
-  the role variable is still set on a PM's shell. Find where the plugin knows the profile's serve and data
+  the role variable is still set on a PM's shell; delete `COVEN_ISOLATE_SYS` and `COVEN_ISOLATE_PATH`
+  from a PM shell's env; pin the hide paths (the PM cannot change them). Find where the plugin knows the profile's serve and data
   folders (search `opencode/src` and `src/coven/opencode` for the serve folder name) and use that, never a
   hardcoded home path.
 - [ ] Step 2: fail, implement, pass; `cd opencode && node --test`; fast check on the test file.
