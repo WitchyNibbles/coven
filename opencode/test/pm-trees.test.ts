@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -150,6 +151,35 @@ await test("a process whose exe is not an unshare is not killed and its record s
   assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
   assert.deepEqual(fake.killed, []);
   assert.deepEqual(readdirSync(folder), ["4242"]);
+});
+
+await test("an unshare whose binary was replaced while it runs (exe ends in ' (deleted)') is still killed", async () => {
+  const fake = table([[4242, "777"]]);
+  fake.exe.set(4242, "/usr/bin/unshare (deleted)");
+  const folder = folderWith([["4242", "777\n"]]);
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 1, skipped: 0, running: 0 });
+  assert.deepEqual(fake.killed, [4242]);
+});
+
+await test("a binary that only looks like unshare with a suffix is not killed", async () => {
+  const fake = table([[4242, "777"]]);
+  fake.exe.set(4242, "/usr/bin/unshare-evil (deleted)");
+  const folder = folderWith([["4242", "777\n"]]);
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 0, skipped: 1, running: 0 });
+  assert.deepEqual(fake.killed, []);
+});
+
+await test("a record that is gone between the listing and the read (another stop took it) is pruned, not raised", async () => {
+  const fake = table([[4242, "777"]]);
+  const folder = folderWith([["4242", "777\n"]]);
+  // listed by readdir, but reading it fails with ENOENT: a link to nothing stands for the race
+  symlinkSync(join(folder, "nowhere"), join(folder, "5000"));
+  const swept = await sweepTrees(folder, hostOf(fake, folder));
+  assert.deepEqual(swept, { killed: 1, skipped: 0, running: 0 });
+  assert.deepEqual(fake.killed, [4242]);
+  assert.equal(existsSync(folder), false);
 });
 
 await test("an exe that cannot be read is not killed either", async () => {

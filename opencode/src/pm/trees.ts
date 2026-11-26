@@ -148,18 +148,29 @@ function isPmUnshare(proc: Proc, pid: number, folder: string): boolean {
   const exe = proc.exe(pid);
   return (
     exe !== undefined &&
-    basename(exe) === UNSHARE &&
+    basename(exe.replace(DELETED_SUFFIX, "")) === UNSHARE &&
     proc.cmdline(pid)?.includes(KILL_CHILD_FLAG) === true &&
     proc.environ(pid)?.includes(`${PIDS_ENV}=${folder}`) === true
   );
 }
 
+/** What the kernel appends to the exe link of a process whose binary was replaced while it runs. */
+const DELETED_SUFFIX = / \(deleted\)$/;
+
 function isMissing(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === code;
 }
 
-async function recordedStart(path: string): Promise<string> {
-  return (await readFile(path, "utf8")).trim();
+/** The start time a record holds; `undefined` when another stop took the record meanwhile. */
+async function recordedStart(path: string): Promise<string | undefined> {
+  try {
+    return (await readFile(path, "utf8")).trim();
+  } catch (error) {
+    if (isMissing(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function waitUntilGone(host: TreeHost, pid: number): Promise<boolean> {
@@ -215,7 +226,12 @@ async function sweepRecord(
   host: TreeHost,
   swept: Swept,
 ): Promise<void> {
-  const verdict = judge(host.proc, pid, await recordedStart(path), folder);
+  const recorded = await recordedStart(path);
+  if (recorded === undefined) {
+    await rm(path, { force: true });
+    return;
+  }
+  const verdict = judge(host.proc, pid, recorded, folder);
   if (verdict === "other") {
     swept.skipped += 1;
     return;
