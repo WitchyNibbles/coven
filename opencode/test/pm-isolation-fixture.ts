@@ -6,6 +6,7 @@ export const ISOLATION: PmIsolation = {
   wrapper: "/cv/hooks/pm-shell-isolate.sh",
   hide: "/p/state/serve:/p/data",
   found: true,
+  problem: undefined,
 };
 
 /** The shell the `shellEvent` helpers give an event; the wrapper keeps it in the env. */

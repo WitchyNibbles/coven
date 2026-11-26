@@ -73,11 +73,15 @@ plugin's `shell.create.before` points a PM's shell at it; the doctor runs it onc
 - Test: `opencode/test/pm-shell-env.test.ts` (or the file that tests `shellEnvHooks` now)
 
 **Interfaces:**
-- Consumes: Task 1's wrapper path (`<covenRoot>/hooks/pm-shell-isolate.sh`) and env names.
+- Consumes: Task 1's wrapper (`<covenRoot>/hooks/pm-shell-isolate.sh`) and env names.
+- At plugin start (`pmIsolation`) the wrapper is copied to `<serveDir>/isolate/pm-shell-isolate.sh`
+  (folder 0700, file 0500, overwritten each start), so a PM cannot edit what its later shells run
+  (Ruling 4). The `serveDir` and `dataDir` plugin options are written by `plugin_options` from
+  `Layout.serve_dir` and `Layout.data` (Ruling 5); a hide path that contains `:` is refused.
 - `createBefore`: when the role is `pm`, set `env.COVEN_PM_REAL_SHELL = event.shell`,
-  `env.COVEN_PM_HIDE = <serve folder>:<data folder>` of the profile the plugin runs in, and
-  `event.shell = <wrapper>`. A wrapper that is not an executable file at plugin start makes every PM
-  shell throw (refused) with the spec's message and `wrapper not found: <path>`.
+  `env.COVEN_PM_HIDE = <serveDir>:<dataDir>`, and `event.shell = <the copy>`. A source that is not an
+  executable file makes every PM shell throw (refused) with the spec's message and
+  `wrapper not found: <path>`; a copy that fails does the same with `wrapper copy failed: <why>`.
 
 - [ ] Step 1: tests: PM shell gets the wrapper and both env values; GM shell and a shell with no queue
   entry keep `event.shell` and get neither value; a missing wrapper refuses a PM's shell and not a GM's;

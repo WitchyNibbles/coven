@@ -34,10 +34,15 @@ non-zero stops the command (`Exit code: N` in the result), and a missing executa
 The default `event.shell` is `/usr/bin/bash`. Rewriting `command` in `tool.execute.before` also works
 but breaks the role pairing of `shell-env.ts`, so it is not used.
 
-1. coven ships `hooks/pm-shell-isolate.sh` (POSIX sh).
+1. coven ships `hooks/pm-shell-isolate.sh` (POSIX sh). At plugin start the plugin copies it to
+   `<serveDir>/isolate/pm-shell-isolate.sh` (folder 0700, file 0500, overwritten on each start): a PM
+   could edit the source in its own checkout and so switch isolation off for its later shells, but
+   the serve folder is an empty tmpfs inside a PM's namespace, so the copy is out of its reach. If the
+   copy fails (no serve folder, a write error) PM shells are refused with `wrapper copy failed: <why>`.
 2. In `createBefore`, after the queue says the shell is a PM's, coven keeps the original
    `event.shell` in the shell's env, puts the folders to hide in the env, and sets `event.shell` to the
-   wrapper.
+   copy. The folders are the plugin's `serveDir` and `dataDir` options, which setup writes from the
+   profile `Layout` (`serve_dir` and `data`).
 3. The wrapper puts the caller's PATH aside and runs on a trusted PATH
    (`/usr/sbin:/usr/bin:/sbin:/bin`), so a PM cannot put an `unshare` of its own ahead of the system's
    and switch isolation off for later calls; it resolves every tool there, by absolute path for

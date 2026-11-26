@@ -150,12 +150,13 @@ await test("a pm's own values for the isolation names are replaced", async () =>
   assert.deepEqual(event.env, pmEnv());
 });
 
-await test("a pm's shell is refused when the wrapper was not found, a gm's is not", async () => {
+await test("a pm's shell is refused with the reason isolation gave, a gm's is not", async () => {
   const w = world(
     { ses_pm: PM_SESSION, ses_gm: GM_SESSION },
     {
       ...ISOLATION,
       found: false,
+      problem: `wrapper copy failed: ${ISOLATION.wrapper} is gone`,
     },
   );
   await w.executeBefore(execEvent("ses_pm", { command: "ls" }));
@@ -163,7 +164,7 @@ await test("a pm's shell is refused when the wrapper was not found, a gm's is no
   const event = shellEvent({}, "ls", "/loc");
   assert.throws(
     () => w.createBefore(event),
-    refusal(`wrapper not found: ${ISOLATION.wrapper}`),
+    refusal(`wrapper copy failed: ${ISOLATION.wrapper} is gone`),
   );
   assert.equal(event.shell, "/bin/sh");
   const gm = shellEvent({ PATH: "/bin" }, "pwd", "/loc");

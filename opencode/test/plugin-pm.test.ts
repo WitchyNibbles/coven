@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import type { EvaluateEvent } from "../src/context.ts";
@@ -115,16 +117,34 @@ async function shellOf(
   return event;
 }
 
-await test("a PM's shell runs through the wrapper, with the real shell and both hide paths pinned", async () => {
+await test("a PM's shell runs through the copy in the serve folder, with the real shell and both hide paths", async () => {
   const p = await booted();
   const event = await shellOf(p, PM);
-  assert.equal(event.shell, `${COVEN_ROOT}/hooks/pm-shell-isolate.sh`);
+  const copy = join(PROFILE_OPTIONS.serveDir, "isolate", "pm-shell-isolate.sh");
+  assert.equal(event.shell, copy);
+  assert.deepEqual(
+    readFileSync(copy),
+    readFileSync(join(COVEN_ROOT, "hooks", "pm-shell-isolate.sh")),
+  );
+  assert.equal(statSync(copy).mode & 0o777, 0o500);
   assert.equal(event.env["COVEN_PM_REAL_SHELL"], "/usr/bin/bash");
   assert.equal(
     event.env["COVEN_PM_HIDE"],
-    "/tmp/coven-test/profile/state/serve:/tmp/coven-test/profile/data",
+    `${join(PROFILE_OPTIONS.profileDir, "state", "serve")}:${join(PROFILE_OPTIONS.profileDir, "data")}`,
   );
   assert.equal(event.env[ROLE_ENV], "pm");
+});
+
+await test("a copy that fails refuses a PM's shell and not a GM's", async () => {
+  const dataDir = join(PROFILE_OPTIONS.profileDir, "data");
+  const missing = join(PROFILE_OPTIONS.profileDir, "no", "serve");
+  const p = await booted({ options: { ...COVEN, serveDir: missing, dataDir } });
+  await assert.rejects(
+    shellOf(p, PM),
+    /^Error: coven: PM shells run isolated and isolation is not available here: wrapper copy failed: .*ENOENT.*; ask the user$/,
+  );
+  const event = await shellOf(p, LEAD);
+  assert.equal(event.shell, "/usr/bin/bash");
 });
 
 await test("a GM's shell is left as it was", async () => {

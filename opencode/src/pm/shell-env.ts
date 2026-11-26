@@ -1,8 +1,18 @@
-import { accessSync, constants, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 
 import type { ExecuteBeforeEvent, ShellCreateEvent } from "../context.ts";
-import { isPlainObject } from "../join/fields.ts";
+import { isPlainObject, messageOf } from "../join/fields.ts";
 import type { CovenOptions } from "../options.ts";
 import { givenWorkdir } from "../workdir.ts";
 import { ROLE_ENV } from "./role.ts";
@@ -17,6 +27,8 @@ const WRAPPER_SEAMS = ["COVEN_ISOLATE_SYS", "COVEN_ISOLATE_PATH"];
 const REAL_SHELL_ENV = "COVEN_PM_REAL_SHELL";
 const HIDE_ENV = "COVEN_PM_HIDE";
 const WRAPPER_NAME = "pm-shell-isolate.sh";
+/** The folder of the serve folder that holds the wrapper's copy. */
+const COPY_DIR = "isolate";
 const SECRET_NAME = /^OPENCODE(_.*)?_(PASSWORD|TOKEN|KEY)$/;
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["shell", "bash"]);
 /** The role a shell gets when its recorded calls disagree: the strictest. */
@@ -121,26 +133,38 @@ export function scrubEnv(
 
 /** What a PM's shell needs to run through the wrapper, worked out once at plugin start. */
 export interface PmIsolation {
-  /** `<covenRoot>/hooks/pm-shell-isolate.sh`. */
+  /**
+   * The wrapper a PM's shell runs: the copy at `<serveDir>/isolate/pm-shell-isolate.sh`. A PM
+   * cannot reach the copy (the serve folder is an empty tmpfs in its namespace), and the source in
+   * `<covenRoot>/hooks` is a file a PM could edit in its own checkout.
+   */
   wrapper: string;
   /** The profile's serve folder and data folder, absolute and `:`-joined. */
   hide: string;
-  /** Whether `wrapper` is an executable file; when not, every PM shell is refused. */
+  /** Whether the wrapper is ready; when not, every PM shell is refused with `problem`. */
   found: boolean;
+  /** Why `found` is false, as the refusal names it. */
+  problem: string | undefined;
 }
 
 /**
- * The wrapper's path and the folders it hides: the plugin's `serveDir` and `dataDir` options,
- * which setup writes from the Python `Layout`.
+ * The wrapper a PM's shell runs and the folders it hides: the plugin's `serveDir` and `dataDir`
+ * options, which setup writes from the Python `Layout`. The wrapper is copied from
+ * `<covenRoot>/hooks` into the serve folder, over what an earlier start left there.
  */
 export function pmIsolation(
   options: Pick<CovenOptions, "covenRoot" | "serveDir" | "dataDir">,
 ): PmIsolation {
-  const wrapper = join(options.covenRoot, "hooks", WRAPPER_NAME);
+  const source = join(options.covenRoot, "hooks", WRAPPER_NAME);
+  const wrapper = join(options.serveDir, COPY_DIR, WRAPPER_NAME);
+  const problem = isExecutableFile(source)
+    ? copyProblem(source, wrapper)
+    : `wrapper not found: ${source}`;
   return {
     wrapper,
     hide: [options.serveDir, options.dataDir].join(":"),
-    found: isExecutableFile(wrapper),
+    found: problem === undefined,
+    problem,
   };
 }
 
@@ -156,6 +180,38 @@ function isExecutableFile(path: string): boolean {
   }
 }
 
+/** `undefined` when the copy was made, else why not. */
+function copyProblem(source: string, copy: string): string | undefined {
+  try {
+    copyWrapper(source, copy);
+    return undefined;
+  } catch (error) {
+    return `wrapper copy failed: ${messageOf(error)}`;
+  }
+}
+
+/**
+ * Copies the wrapper to `copy`: its folder 0700, the file 0500, an old file removed first (the
+ * file is created, never opened through a link a leftover could be).
+ */
+function copyWrapper(source: string, copy: string): void {
+  const folder = dirname(copy);
+  try {
+    mkdirSync(folder, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
+  }
+  if (!lstatSync(folder).isDirectory()) {
+    throw new Error(`${folder} is not a folder`);
+  }
+  chmodSync(folder, 0o700);
+  rmSync(copy, { force: true });
+  writeFileSync(copy, readFileSync(source), { mode: 0o700, flag: "wx" });
+  chmodSync(copy, 0o500);
+}
+
 /** The refusal a throw from `createBefore` shows: the wrapper's own line, with the cause. */
 function isolationRefusal(piece: string): Error {
   return new Error(
@@ -166,7 +222,7 @@ function isolationRefusal(piece: string): Error {
 /** Points a PM's shell at the wrapper; throws, and leaves the event as it is, when it cannot. */
 function isolate(event: ShellCreateEvent, isolation: PmIsolation): void {
   if (!isolation.found) {
-    throw isolationRefusal(`wrapper not found: ${isolation.wrapper}`);
+    throw isolationRefusal(isolation.problem ?? "the wrapper is not ready");
   }
   const { shell } = event;
   if (shell === undefined || !isAbsolute(shell)) {
