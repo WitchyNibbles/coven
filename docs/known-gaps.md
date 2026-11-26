@@ -299,6 +299,38 @@ store and the approvals in it.
   fallback does not run (it needs the launcher's exit 86). Python 3.4 to 3.11 reach the fallback.
 - The user's own terminal, outside Claude Code, is never guarded.
 
+## Guards: the shared lexing layer
+
+pm-permissions, the production guard and the OpenCode server guard share one lexer cache, one brace
+expander, one `SHELL_READERS` list and one wrapper table (`hooks/wrapper_commands.py`). That is
+phase 1. The rest of the unification is phase 2 (task opencode-m2/6b), not built:
+
+- Each guard still builds its own shell tree and its own Moves analysis (what a command writes,
+  where it runs). The guards can still disagree on a command that none of the shared pieces covers.
+- Each guard keeps its own capability tables per program (what a program may read, write or run).
+  They are not one table.
+- Each guard is its own hook entry and reads the Bash text on its own.
+- pm-permissions keeps its own `_Scanner` and, on its approval path, a plain `shlex` split.
+- The OpenCode server guard keeps its `Argv` reader and the `_crude` fallback it uses when `Argv`
+  cannot read a text.
+- The production guard keeps its regex splitters beside the lexer.
+
+Holes that were there before phase 1 and are still open (each is pinned in
+`tests/hooks/guard_corpus.py`, so a change that closes one shows as a reviewed diff):
+
+- The production guard allows a claude start piped into `eval`, `make -f -`, `su -s`, `sudo -s`,
+  `doas -s`, `script` or `screen -`. It refuses the same text piped into `sh`, `parallel` and the
+  other shells. `mksh -c` and `pnpx` are closed.
+- pm-permissions says nothing about a push piped into `doas`, `script` or `screen -`, where it
+  refuses one piped into `sh`, `su` or `sudo`.
+- deny-secrets does no brace expansion: `cat .{en,x}v` (a secret file's name built by braces) is
+  allowed.
+- The OpenCode server guard walks past `parallel`, `sudo` and `doas` as wrappers, so a body piped
+  into one of them (`echo 'opencode db' | sudo -s`) is not read as shell text.
+- The wrapper table's entries for `strace`, `ltrace`, `parallel`, `doas`, `busybox`, `unbuffer`,
+  `bunx` and `pnpx` come from upstream pages or help text, because these programs' man pages were
+  not on the machine that wrote them. The other entries cite a man page or upstream source.
+
 ## coven memory adopt
 
 - A hand-written `INDEX.md` is rebuilt; the store's history and the backup keep the old one.

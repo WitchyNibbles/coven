@@ -38,6 +38,31 @@
 - The manager, and the routing on Claude Code and OpenCode, keep replies to the user in the language
   they write in, also after a compaction or a resume; briefs and messages to agents stay English.
   The handoff and the PM brief name the user's language.
+- pm-permissions, the production guard and the OpenCode server guard now share their lexing code.
+  `shell_words` keeps one token stream per command text for the length of a hook call, so the
+  production guard lexes a command 3 to 5 times where it did up to 22. One brace expander, one
+  `SHELL_READERS` list (the shells and programs that run text they are given) and one wrapper table
+  (names, valued options, flags) in `hooks/wrapper_commands.py` replace the copies each guard kept.
+  A new test, `tests/hooks/test_guard_corpus.py`, runs over 900 commands through every guard that
+  reads Bash and pins each verdict.
+- The shared code takes the stricter of the copies, so some commands the guards allowed are now
+  refused:
+  - OpenCode server guard, braces: ranges (`{a..z}`), steps (`{a..z..2}`), zero padding and lists
+    that hold a brace are expanded before the check, so `ho{m..m}e` reads as `home`. A word that
+    makes more than 64 words, has more than 64 braces or holds a range with a variable is refused.
+    It used to expand 256 words and read the rest as written.
+  - OpenCode server guard, shell text: a body sent to `eval`, `make`, `su`, `script`, `screen` or
+    `mksh` by a pipe, a here-string, a heredoc or a process substitution is read as shell text, as
+    it already was for `sh` and `bash`.
+  - OpenCode server guard, wrapper options: a guarded word given as the value of a wrapper's option
+    (`chrt -D opencode db`, `flock --wait opencode db`, `sudo -u opencode ls`) is refused, and so is
+    a command with more than 16 valued wrapper options.
+  - pm-permissions: a push, merge or `gh` call behind `npx`, `bunx`, `pnpx`, `tmux`, `screen`,
+    `setpriv`, `hush` or `mksh` is refused, and so is one piped into `hush` or `tmux`.
+  - Production guard: a claude start behind `pnpx`, `mksh -o x -c`, `make -C`, `trap`, `nsenter`,
+    `chroot`, `nocache`, `faketime`, `firejail`, `sg`, `numactl`, `cgexec`, `proxychains`,
+    `torsocks`, `pkexec` or `ssh` with options is refused; the wrapper table now knows them.
+- No command that was refused before is allowed now.
 
 ## 0.2.0 (2026-11-25)
 
