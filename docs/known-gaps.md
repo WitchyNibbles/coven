@@ -380,9 +380,18 @@ What `coven opencode` does not do, or does not know. The install steps are in
   OpenCode. `coven_pm_list` with `archived: true` shows hidden PMs and PMs archived in OpenCode,
   and a resume clears the flag. A PM archived in OpenCode itself is not resumed: unarchive it there
   before a resume.
-- OS isolation of PM shells (their own PID and mount namespaces) is a planned follow-up, not
-  built. Until then the guards and the shell scrub are best effort: a script that builds the path
-  of `/proc/<pid>/environ` at run time can still read the server's environment.
+- OS isolation of PM shells (their own user, PID and mount namespaces) is built. Its limits:
+  - There is no network namespace: a PM's shell reaches the network, which is how it pushes.
+  - Non-shell tools (file tools, MCP) run in the server process, outside the namespaces.
+  - The role queue has a mixed race: a GM shell started in the same instant as a PM's shell, with
+    the same command and folder, can run isolated once. Two such PM shells can file a tree under
+    the other PM.
+  - OpenCode 2.3.2 moves a timed-out shell to the background and does not kill it. Its tree lives
+    until `coven_pm_stop` of that PM.
+  - Trees started before the plugin wrote pid records have no record and are not reached by a stop.
+  - Linux only: on macOS a PM's shell refuses, and the doctor says so.
+  - A stop checks a pid and then kills it in two steps (Node has no pidfd), so the check-then-kill
+    is not atomic.
 - The copied superpowers skills keep Claude Code's tool names in their text.
 - Superpowers skills come from the v7.0.2 clone that `coven opencode install` fetches with `git`,
   or from Claude Code's superpowers plugin. With neither, a step that loads one is skipped. Only

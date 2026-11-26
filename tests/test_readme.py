@@ -421,9 +421,22 @@ def test_known_gaps_says_what_archive_does_on_opencode_2_3_2() -> None:
         assert needle in archive, needle
 
 
-def test_known_gaps_says_os_isolation_of_pm_shells_is_a_follow_up() -> None:
+def test_known_gaps_lists_the_limits_of_pm_shell_isolation() -> None:
     isolation = bullet_about("OS isolation")
-    for needle in ("PID and mount namespaces", "planned follow-up", "not built"):
+    assert "planned follow-up" not in isolation
+    assert "not built" not in isolation
+    for needle in (
+        "PID and mount namespaces",
+        "There is no network namespace",
+        "Non-shell tools",
+        "server process",
+        "mixed race",
+        "moves a timed-out shell to the background",
+        "until `coven_pm_stop` of that PM",
+        "have no record and are not reached by a stop",
+        "Linux only",
+        "check-then-kill is not atomic",
+    ):
         assert needle in isolation, needle
 
 
@@ -482,6 +495,30 @@ def test_the_hierarchy_section_says_what_the_production_guard_does_without_targe
         assert needle in body, needle
 
 
+def test_the_hierarchy_section_says_how_pm_shells_are_isolated() -> None:
+    body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Hierarchy"))
+    assert "a stop only interrupts" not in body
+    for needle in (
+        "new user, PID and mount namespaces",
+        "empty tmpfs",
+        "The GM's shells and your own `!` shells are not isolated",
+        "git, `gh` and the network work as before",
+        "No setting turns isolation off",
+        "coven: PM shells run isolated and isolation is not available here: "
+        "<missing piece>; ask the user",
+        "`PM shell isolation: ok`",
+        "`not available: <piece>`",
+        "`coven_pm_stop {code, archive?}`: interrupts the PM's turn, which also ends a waiting ask,",
+        "kills the isolation trees its shells started",
+        "; killed N isolation tree(s)",
+        "; skipped M stale record(s)",
+        "; M tree(s) still running after SIGKILL",
+        "mixed race",
+        "docs/known-gaps.md#opencode",
+    ):
+        assert needle in body, needle
+
+
 def test_the_hierarchy_section_lists_the_gm_only_tools() -> None:
     body = flat(section(OPENCODE_README.read_text(encoding="utf-8"), "Hierarchy"))
     assert "Every tool but `coven_send` refuses" not in body
@@ -508,6 +545,9 @@ def test_the_changelog_lists_the_opencode_hierarchy_under_unreleased() -> None:
         "server guard",
         "deny-only",
         "opencode/README.md#hierarchy",
+        "PID and mount namespaces",
+        "`coven_pm_stop` also kills",
+        "`PM shell isolation`",
     ):
         assert needle in entry, needle
     released = text.split("## 0.2.0 (2026-11-25)", 1)[1]
