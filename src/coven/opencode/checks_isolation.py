@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
 import tempfile
 from collections.abc import Mapping
@@ -46,23 +48,39 @@ def probe_isolation(wrapper: Path, base: Mapping[str, str], timeout: float = TIM
     with tempfile.TemporaryDirectory(prefix="coven-isolation-") as hide:
         env["COVEN_PM_HIDE"] = hide
         try:
-            done = subprocess.run(
-                [str(wrapper), "-c", "true"],
-                env=env,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=timeout,
-                check=False,
-            )
+            code, stderr = _run(wrapper, env, timeout)
         except subprocess.TimeoutExpired:
             return _not_available(f"timed out after {timeout:g} s")
         except OSError as error:
             return _not_available(one_line(f"cannot run {wrapper}: {error}"))
-    if done.returncode == 0:
+    if code == 0:
         return Outcome("ok", "ok")
-    return _not_available(_missing_piece(done.stderr, done.returncode))
+    return _not_available(_missing_piece(stderr, code))
+
+
+def _run(wrapper: Path, env: Mapping[str, str], timeout: float) -> tuple[int, str]:
+    """The exit code and stderr of `wrapper -c true`, run in a group of its own.
+
+    On a timeout the whole group is killed, so a child the wrapper started does not outlive it.
+    """
+    with subprocess.Popen(
+        [str(wrapper), "-c", "true"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        start_new_session=True,
+    ) as process:
+        try:
+            _, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise
+        return process.returncode, stderr
 
 
 def isolation_check(ctx: Context) -> Outcome:

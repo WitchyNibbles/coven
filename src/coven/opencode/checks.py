@@ -105,7 +105,8 @@ def run_doctor(
 
     `isolation` runs the PM shell wrapper; the default is looked up when doctor runs, not at import.
     """
-    ctx = _context(layout, cwd, os.environ, read, isolation or checks_isolation.probe_isolation)
+    probe = isolation if isolation is not None else checks_isolation.probe_isolation
+    ctx = _context(layout, cwd, os.environ, read, probe)
     results: list[tuple[str, Outcome]] = []
     for name, check in CHECKS:
         outcome = _guarded(check, ctx)

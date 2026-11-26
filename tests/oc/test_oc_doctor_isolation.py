@@ -184,6 +184,27 @@ def test_a_wrapper_that_hangs_times_out(tmp_path: Path):
     assert found == Outcome("fail", "not available: timed out after 0.3 s")
 
 
+def alive(pid: int) -> bool:
+    """Whether the process runs: a zombie waiting to be reaped by init is gone."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return state != "Z"
+
+
+def test_a_timeout_kills_the_children_the_wrapper_started(tmp_path: Path):
+    pid_file = tmp_path / "child.pid"
+    wrapper = script(tmp_path / "wrapper.sh", f"sleep 30 &\necho $! > {pid_file}\nwait")
+    assert probe_isolation(wrapper, {}, timeout=0.5).detail.startswith("not available: timed out")
+    child = int(pid_file.read_text())
+    try:
+        assert not alive(child)
+    finally:
+        if alive(child):
+            os.kill(child, 9)
+
+
 def test_a_missing_wrapper_is_not_found(tmp_path: Path):
     wrapper = tmp_path / "absent.sh"
     assert probe_isolation(wrapper, {}) == Outcome(
