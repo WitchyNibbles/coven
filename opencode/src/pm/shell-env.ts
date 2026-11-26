@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   accessSync,
   chmodSync,
@@ -5,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -221,8 +223,9 @@ function copyProblem(source: string, copy: string): string | undefined {
 }
 
 /**
- * Copies the wrapper to `copy`: its folder 0700, the file 0500, an old file removed first (the
- * file is created, never opened through a link a leftover could be).
+ * Copies the wrapper to `copy`: its folder 0700, the file 0500. The new file is created (never
+ * opened through a link) under a temp name and renamed over the copy, so the copy is never missing
+ * or half written; when the copy cannot be made, the old one stays.
  */
 function copyWrapper(source: string, copy: string): void {
   const folder = dirname(copy);
@@ -237,9 +240,16 @@ function copyWrapper(source: string, copy: string): void {
     throw new Error(`${folder} is not a folder`);
   }
   chmodSync(folder, 0o700);
-  rmSync(copy, { force: true });
-  writeFileSync(copy, readFileSync(source), { mode: 0o700, flag: "wx" });
-  chmodSync(copy, 0o500);
+  // whole before it has its name: a temp file in the same folder, then a rename over the copy
+  // (which replaces a link planted at the copy and never follows it)
+  const content = readFileSync(source);
+  const temp = `${copy}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temp, content, { mode: 0o500, flag: "wx" });
+    renameSync(temp, copy);
+  } finally {
+    rmSync(temp, { force: true });
+  }
 }
 
 /** The refusal a throw from `createBefore` shows: the wrapper's own line, with the cause. */

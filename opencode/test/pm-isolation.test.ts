@@ -121,6 +121,29 @@ await test("a copy that was left changed or loose is replaced", () => {
   assert.equal(mode(dirname(wrapper)), 0o700);
 });
 
+await test("the copy is made whole before it has its name: a copy that cannot be made leaves the old one and no temp file", () => {
+  if (process.getuid?.() === 0) {
+    return; // root reads a file it has no read bit on, so the copy would not fail
+  }
+  const w = world();
+  const { wrapper } = pmIsolation(w.options);
+  writeFileSync(w.source, "#!/bin/sh\necho changed\n");
+  chmodSync(w.source, 0o111); // executable (so it is found) but not readable
+  const found = pmIsolation(w.options);
+  assert.equal(found.found, false);
+  assert.match(found.problem ?? "", /^wrapper copy failed: /);
+  assert.equal(readFileSync(wrapper, "utf8"), SCRIPT);
+  assert.equal(mode(wrapper), 0o500);
+  assert.deepEqual(readdirSync(dirname(wrapper)), [WRAPPER_NAME]);
+  chmodSync(w.source, 0o755);
+  assert.equal(pmIsolation(w.options).found, true);
+  assert.equal(readFileSync(wrapper, "utf8"), "#!/bin/sh\necho changed\n");
+  assert.deepEqual(
+    readdirSync(dirname(wrapper)).filter((name) => name !== WRAPPER_NAME),
+    [],
+  );
+});
+
 await test("the coven checkout's own wrapper is copied byte for byte", () => {
   const w = world();
   const covenRoot = resolve(import.meta.dirname, "../..");
