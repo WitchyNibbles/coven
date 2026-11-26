@@ -20,6 +20,9 @@ export interface RoleInfo {
  */
 export type RoleLookup = () => Promise<RoleInfo | undefined>;
 
+/** The session that holds the role of the session a tool call belongs to, from the same lookup. */
+export type HolderLookup = () => Promise<string | undefined>;
+
 const ROLES: ReadonlySet<unknown> = new Set<Role>(["gm", "pm", "former-gm"]);
 
 function isRole(value: unknown): value is Role {
@@ -59,32 +62,53 @@ export async function resolveRole(
   sessionID: string,
   get: (id: string) => Promise<SessionLike | undefined>,
 ): Promise<RoleInfo | undefined> {
+  return (await resolvePlaced(sessionID, get)).info;
+}
+
+/** A role and the session that holds it (a PM tree's root, for a PM's child). */
+export interface Placed {
+  info: RoleInfo | undefined;
+  /** The id of the session whose own metadata holds the role; `undefined` with no role or a failed lookup. */
+  holder: string | undefined;
+}
+
+const UNPLACED: Placed = { info: FAIL_CLOSED, holder: undefined };
+
+/**
+ * `resolveRole` and where the role was found: the same walk up the parents, which also says which
+ * session holds it. A PM's shell files its isolation tree under that session, the one
+ * `coven_pm_stop` is given. A failed lookup is a PM that is placed nowhere.
+ */
+export async function resolvePlaced(
+  sessionID: string,
+  get: (id: string) => Promise<SessionLike | undefined>,
+): Promise<Placed> {
   const seen = new Set<string>();
   let next: string | undefined = sessionID;
   while (next !== undefined) {
     if (seen.has(next) || seen.size >= MAX_HOPS) {
-      return FAIL_CLOSED;
+      return UNPLACED;
     }
     seen.add(next);
     let session: SessionLike | undefined;
     try {
       session = await get(next);
     } catch {
-      return FAIL_CLOSED;
+      return UNPLACED;
     }
     if (session === undefined) {
-      return FAIL_CLOSED;
+      return UNPLACED;
     }
     const found = ownRole(session);
     if (found === "unreadable") {
-      return FAIL_CLOSED;
+      return UNPLACED;
     }
     if (found !== "none") {
-      return found;
+      return { info: found, holder: next };
     }
     next = session.parentID ?? undefined;
   }
-  return undefined;
+  return { info: undefined, holder: undefined };
 }
 
 /** True for a session with no parent (a missing or null `parentID`): a lead session, not a child. */

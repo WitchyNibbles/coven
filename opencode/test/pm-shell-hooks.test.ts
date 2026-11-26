@@ -6,7 +6,7 @@ import type {
   SessionLike,
   ShellCreateEvent,
 } from "../src/context.ts";
-import { ROLE_ENV, resolveRole } from "../src/pm/role.ts";
+import { ROLE_ENV, resolvePlaced } from "../src/pm/role.ts";
 import { ShellQueue, shellEnvHooks } from "../src/pm/shell-env.ts";
 import type { PmIsolation } from "../src/pm/shell-env.ts";
 import { ISOLATION, pmEnv } from "./pm-isolation-fixture.ts";
@@ -61,8 +61,14 @@ function world(
     queue,
     ...hooks,
     // the plugin hands the hook the call's one role lookup; here it is made the same way
-    executeBefore: (event: ExecuteBeforeEvent) =>
-      hooks.executeBefore(event, () => resolveRole(event.sessionID, get)),
+    executeBefore: (event: ExecuteBeforeEvent) => {
+      const placed = resolvePlaced(event.sessionID, get);
+      return hooks.executeBefore(
+        event,
+        async () => (await placed).info,
+        async () => (await placed).holder,
+      );
+    },
   };
 }
 
@@ -222,12 +228,16 @@ await test("a shell of a session with no role gets no ROLE_ENV", async () => {
   assert.deepEqual(event.env, { PATH: "/bin" });
 });
 
-await test("a shell whose role lookup fails gets ROLE_ENV", async () => {
+await test("a shell whose role lookup fails is refused: its PM is not known, so a stop could not reach it", async () => {
   const w = world({ ses_x: new Error("down") });
   await w.executeBefore(execEvent("ses_x", { command: "ls" }));
   const event = shellEvent({}, "ls", "/loc");
-  w.createBefore(event);
-  assert.deepEqual(event.env, pmEnv());
+  assert.throws(
+    () => w.createBefore(event),
+    refusal("the PM session of this shell could not be placed"),
+  );
+  assert.equal(event.shell, "/bin/sh");
+  assert.deepEqual(event.env, {});
 });
 
 await test("a shell with no workdir pairs on the location directory", async () => {

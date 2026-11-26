@@ -70,6 +70,18 @@ await test("the data folder is the option as given, not derived from anything", 
   assert.equal(found.hide, "/s/serve:/elsewhere/data");
 });
 
+await test("the pid records go under the serve folder's isolate folder, pinned", () => {
+  const found = pmIsolation({
+    covenRoot: "/c",
+    serveDir: "/tmp/coven-test/profile/state/serve",
+    dataDir: "/tmp/coven-test/profile/data",
+  });
+  assert.equal(
+    found.pidsDir,
+    "/tmp/coven-test/profile/state/serve/isolate/pids",
+  );
+});
+
 await test("the wrapper a PM's shell runs is a copy in the serve folder", () => {
   const w = world();
   const found = pmIsolation(w.options);

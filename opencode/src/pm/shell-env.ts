@@ -16,7 +16,8 @@ import { isPlainObject, messageOf } from "../join/fields.ts";
 import type { CovenOptions } from "../options.ts";
 import { givenWorkdir } from "../workdir.ts";
 import { ROLE_ENV } from "./role.ts";
-import type { Role, RoleLookup } from "./role.ts";
+import type { HolderLookup, Role, RoleLookup } from "./role.ts";
+import { isPlainName } from "./trees.ts";
 
 /** How long a recorded call waits for its shell to start. */
 const EXPIRY_MS = 30_000;
@@ -26,9 +27,16 @@ const PROFILE_PASSWORD_ENV = "OPENCODE_PASSWORD";
 const WRAPPER_SEAMS = ["COVEN_ISOLATE_SYS", "COVEN_ISOLATE_PATH"];
 const REAL_SHELL_ENV = "COVEN_PM_REAL_SHELL";
 const HIDE_ENV = "COVEN_PM_HIDE";
+/** The PM session a shell belongs to and the folder of its wrapper's pid records. */
+const SESSION_ENV = "COVEN_PM_SESSION";
+const PIDS_ENV = "COVEN_PM_PIDS";
+/** The isolation names a caller's value is never kept for: the plugin sets what a PM's shell gets. */
+const ISOLATION_ENV = [REAL_SHELL_ENV, HIDE_ENV, SESSION_ENV, PIDS_ENV];
 const WRAPPER_NAME = "pm-shell-isolate.sh";
 /** The folder of the serve folder that holds the wrapper's copy. */
 const COPY_DIR = "isolate";
+/** The folder of `COPY_DIR` that holds one folder of pid records per PM. */
+const PIDS_DIR = "pids";
 const SECRET_NAME = /^OPENCODE(_.*)?_(PASSWORD|TOKEN|KEY)$/;
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["shell", "bash"]);
 /** The role a shell gets when its recorded calls disagree: the strictest. */
@@ -36,6 +44,8 @@ const MIXED: Role = "pm";
 
 export interface ShellCall {
   role: Role | undefined;
+  /** The session that holds the role (a PM tree's root): the PM a stop of this shell is asked for. */
+  holder?: string | undefined;
   command: string;
   cwd: string;
   /** A second `cwd` string the call's shell may start under: an empty `workdir` has two. */
@@ -49,6 +59,7 @@ interface Spend {
 
 interface Entry {
   role: Role | undefined;
+  holder: string | undefined;
   at: number;
   spend: Spend;
 }
@@ -66,7 +77,7 @@ export class ShellQueue {
     for (const cwd of new Set([call.cwd, call.alsoCwd ?? call.cwd])) {
       const key = keyOf(call.command, cwd);
       const live = this.live(key, now);
-      live.push({ role: call.role, at: now, spend });
+      live.push({ role: call.role, holder: call.holder, at: now, spend });
       this.entries.set(key, live);
     }
   }
@@ -78,9 +89,22 @@ export class ShellQueue {
    * `undefined` when no call is waiting or the call had no role.
    */
   take(command: string, cwd: string, now: number): Role | undefined {
+    return this.takePlaced(command, cwd, now).role;
+  }
+
+  /**
+   * `take`, and the session that holds the role. With mixed calls the shell is a PM's and belongs
+   * to the oldest waiting PM call.
+   */
+  takePlaced(
+    command: string,
+    cwd: string,
+    now: number,
+  ): { role: Role | undefined; holder: string | undefined } {
     const key = keyOf(command, cwd);
     const live = this.live(key, now);
     const mixed = new Set(live.map((entry) => entry.role)).size > 1;
+    const owner = mixed ? live.find((entry) => entry.role === MIXED) : live[0];
     const taken = mixed ? takeNonPm(live) : live.shift();
     if (taken !== undefined) {
       taken.spend.spent = true;
@@ -90,7 +114,7 @@ export class ShellQueue {
     } else {
       this.entries.set(key, live);
     }
-    return mixed ? MIXED : taken?.role;
+    return { role: mixed ? MIXED : taken?.role, holder: owner?.holder };
   }
 
   private live(key: string, now: number): Entry[] {
@@ -141,6 +165,8 @@ export interface PmIsolation {
   wrapper: string;
   /** The profile's serve folder and data folder, absolute and `:`-joined. */
   hide: string;
+  /** The folder of the PM folders that hold the wrapper's pid records: `<serveDir>/isolate/pids`. */
+  pidsDir: string;
   /** Whether the wrapper is ready; when not, every PM shell is refused with `problem`. */
   found: boolean;
   /** Why `found` is false, as the refusal names it. */
@@ -166,6 +192,7 @@ export function pmIsolation(
   return {
     wrapper,
     hide: folders.join(":"),
+    pidsDir: join(options.serveDir, COPY_DIR, PIDS_DIR),
     found: problem === undefined,
     problem,
   };
@@ -222,8 +249,44 @@ function isolationRefusal(piece: string): Error {
   );
 }
 
-/** Points a PM's shell at the wrapper; throws, and leaves the event as it is, when it cannot. */
-function isolate(event: ShellCreateEvent, isolation: PmIsolation): void {
+/**
+ * Makes the folder of a PM's pid records (0700) and returns its path. A link or a file in the
+ * place of a folder is an error, never followed.
+ */
+function pidFolder(pidsDir: string, session: string): string {
+  const folder = join(pidsDir, session);
+  try {
+    mkdirSync(pidsDir, { recursive: true, mode: 0o700 });
+    try {
+      mkdirSync(folder, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+    for (const path of [pidsDir, folder]) {
+      if (!lstatSync(path).isDirectory()) {
+        throw new Error(`${path} is not a folder`);
+      }
+      chmodSync(path, 0o700);
+    }
+  } catch (error) {
+    throw isolationRefusal(
+      `cannot make the pid folder ${folder}: ${messageOf(error)}`,
+    );
+  }
+  return folder;
+}
+
+/**
+ * Points a PM's shell at the wrapper and at the folder of its PM's pid records; throws, and
+ * leaves the event as it is, when it cannot. `holder` is the PM session `coven_pm_stop` is given.
+ */
+function isolate(
+  event: ShellCreateEvent,
+  isolation: PmIsolation,
+  holder: string | undefined,
+): void {
   if (!isolation.found) {
     throw isolationRefusal(isolation.problem ?? "the wrapper is not ready");
   }
@@ -233,8 +296,19 @@ function isolate(event: ShellCreateEvent, isolation: PmIsolation): void {
       `the shell is not an absolute path (${shell === undefined || shell === "" ? "none" : shell})`,
     );
   }
+  if (holder === undefined) {
+    throw isolationRefusal("the PM session of this shell could not be placed");
+  }
+  if (!isPlainName(holder)) {
+    throw isolationRefusal(
+      `the PM session id ${JSON.stringify(holder)} is not a plain name`,
+    );
+  }
+  const folder = pidFolder(isolation.pidsDir, holder);
   event.env[REAL_SHELL_ENV] = shell;
   event.env[HIDE_ENV] = isolation.hide;
+  event.env[SESSION_ENV] = holder;
+  event.env[PIDS_ENV] = folder;
   event.shell = isolation.wrapper;
 }
 
@@ -285,16 +359,23 @@ function shellCall(
  * store's pre-commit hook refuses a commit whenever it is set, and the GM writes the store.
  */
 export function shellEnvHooks(deps: ShellEnvDeps): {
-  executeBefore(event: ExecuteBeforeEvent, role: RoleLookup): Promise<void>;
+  executeBefore(
+    event: ExecuteBeforeEvent,
+    role: RoleLookup,
+    holder: HolderLookup,
+  ): Promise<void>;
   createBefore(event: ShellCreateEvent): void;
 } {
   return {
-    async executeBefore(event, role) {
+    async executeBefore(event, role, holder) {
       const call = shellCall(event, deps.directory);
       if (call === undefined) {
         return;
       }
-      deps.queue.record({ role: (await role())?.role, ...call }, deps.now());
+      deps.queue.record(
+        { role: (await role())?.role, holder: await holder(), ...call },
+        deps.now(),
+      );
     },
     createBefore(event) {
       scrubEnv(event.env, deps.keyEnv);
@@ -302,10 +383,19 @@ export function shellEnvHooks(deps: ShellEnvDeps): {
         return;
       }
       deps.taken.add(event);
-      const role = deps.queue.take(event.command, event.cwd, deps.now());
+      const { role, holder } = deps.queue.takePlaced(
+        event.command,
+        event.cwd,
+        deps.now(),
+      );
       if (role === "pm") {
-        isolate(event, deps.isolation);
+        isolate(event, deps.isolation, holder);
         event.env[ROLE_ENV] = role;
+      } else {
+        // the names are the plugin's alone: a caller's value for them is not kept
+        for (const name of ISOLATION_ENV) {
+          delete event.env[name];
+        }
       }
     },
   };

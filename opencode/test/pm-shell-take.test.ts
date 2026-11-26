@@ -6,7 +6,7 @@ import type {
   SessionLike,
   ShellCreateEvent,
 } from "../src/context.ts";
-import { resolveRole } from "../src/pm/role.ts";
+import { resolvePlaced } from "../src/pm/role.ts";
 import { ShellQueue, shellEnvHooks } from "../src/pm/shell-env.ts";
 import { ISOLATION, pmEnv } from "./pm-isolation-fixture.ts";
 import { sharedState } from "../src/pm/state.ts";
@@ -34,10 +34,16 @@ function copies() {
     return {
       ...hooks,
       // the plugin hands the hook the call's one role lookup; here it is made the same way
-      executeBefore: (event: ExecuteBeforeEvent) =>
-        hooks.executeBefore(event, () =>
-          resolveRole(event.sessionID, () => Promise.resolve(PM_SESSION)),
-        ),
+      executeBefore: (event: ExecuteBeforeEvent) => {
+        const placed = resolvePlaced(event.sessionID, () =>
+          Promise.resolve(PM_SESSION),
+        );
+        return hooks.executeBefore(
+          event,
+          async () => (await placed).info,
+          async () => (await placed).holder,
+        );
+      },
     };
   };
   return { first: make(), second: make() };

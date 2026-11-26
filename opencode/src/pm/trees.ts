@@ -1,0 +1,233 @@
+import { readFileSync, readlinkSync } from "node:fs";
+import { readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { basename, join } from "node:path";
+
+/**
+ * Stops the isolation trees of a PM. The wrapper (`hooks/pm-shell-isolate.sh`) leaves one record
+ * per shell in the PM's pid folder: a file named for the pid of the outer `unshare`, holding the
+ * process start time. A stop kills the `unshare` of each record whose process is still the one
+ * that wrote it; `--kill-child` then takes the whole namespace down, including a call that
+ * OpenCode moved to the background.
+ */
+
+/** A session id that is safe as a folder name: no separator, no leading dot. */
+const PLAIN_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
+const PID_NAME = /^[0-9]+$/;
+const UNSHARE = "unshare";
+const KILL_CHILD_FLAG = "--kill-child";
+/** Fields between the state (field 3) and the start time (field 22) of `/proc/<pid>/stat`. */
+const START_AFTER_STATE = 18;
+const GONE_CHECKS = 20;
+const GONE_CHECK_MS = 50;
+
+export function isPlainName(name: string): boolean {
+  return PLAIN_NAME.test(name);
+}
+
+/** What `/proc/<pid>` says about a process; each is `undefined` when it cannot be read. */
+export interface Proc {
+  stat(pid: number): string | undefined;
+  exe(pid: number): string | undefined;
+  cmdline(pid: number): string[] | undefined;
+}
+
+export interface TreeHost {
+  proc: Proc;
+  /** SIGKILL; throws like `process.kill` (`ESRCH` when the process is gone). */
+  kill(pid: number): void;
+  wait(ms?: number): Promise<void>;
+}
+
+export interface Swept {
+  /** Isolation trees a SIGKILL was sent to. */
+  killed: number;
+  /** Records whose pid is no longer, or is not any more, the wrapper's unshare. */
+  skipped: number;
+}
+
+interface Stat {
+  state: string;
+  start: string;
+}
+
+/**
+ * The state and start time of a `/proc/<pid>/stat` line. The command name (field 2) may hold
+ * spaces and parentheses, so the fields are counted after the last closing parenthesis.
+ */
+function parseStat(stat: string): Stat | undefined {
+  const closing = stat.lastIndexOf(")");
+  if (closing < 0) {
+    return undefined;
+  }
+  const fields = stat
+    .slice(closing + 1)
+    .trim()
+    .split(/\s+/);
+  const state = fields[0];
+  const start = fields[START_AFTER_STATE + 1];
+  return state && start && PID_NAME.test(start) ? { state, start } : undefined;
+}
+
+export function startTimeOf(stat: string): string | undefined {
+  return parseStat(stat)?.start;
+}
+
+/** Whether the process is gone: not there, or a zombie that only waits to be reaped. */
+function isGone(proc: Proc, pid: number): boolean {
+  const stat = proc.stat(pid);
+  return stat === undefined || parseStat(stat)?.state === "Z";
+}
+
+type Verdict = "gone" | "stale" | "ours" | "other";
+
+/** What a record's pid is now: the process that wrote it, another one, or gone. */
+function judge(proc: Proc, pid: number, recorded: string): Verdict {
+  const stat = proc.stat(pid);
+  if (stat === undefined) {
+    return "gone";
+  }
+  const found = parseStat(stat);
+  if (found?.state === "Z") {
+    return "gone";
+  }
+  if (found === undefined || found.start !== recorded) {
+    return "stale";
+  }
+  const exe = proc.exe(pid);
+  const isUnshare = exe !== undefined && basename(exe) === UNSHARE;
+  return isUnshare && proc.cmdline(pid)?.includes(KILL_CHILD_FLAG) === true
+    ? "ours"
+    : "other";
+}
+
+function isMissing(error: unknown, code: string): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === code;
+}
+
+async function recordedStart(path: string): Promise<string> {
+  return (await readFile(path, "utf8")).trim();
+}
+
+async function waitUntilGone(host: TreeHost, pid: number): Promise<boolean> {
+  for (let check = 0; check < GONE_CHECKS; check += 1) {
+    if (isGone(host.proc, pid)) {
+      return true;
+    }
+    await host.wait(GONE_CHECK_MS);
+  }
+  return isGone(host.proc, pid);
+}
+
+/**
+ * Kills the trees of the records in one PM's pid folder. A record is killed only when its pid
+ * still has the recorded start time, runs an `unshare` binary and has `--kill-child` in its
+ * command line; a reused pid is never killed. Records of processes that are gone are removed, so
+ * are the records of a reused pid (counted as skipped); a record that is not ours stays. The
+ * folder is removed when it ends empty.
+ */
+export async function sweepTrees(
+  folder: string,
+  host: TreeHost,
+): Promise<Swept> {
+  let names: string[];
+  try {
+    names = await readdir(folder);
+  } catch (error) {
+    if (isMissing(error, "ENOENT")) {
+      return { killed: 0, skipped: 0 };
+    }
+    throw error;
+  }
+  const swept: Swept = { killed: 0, skipped: 0 };
+  for (const name of names.filter((each) => PID_NAME.test(each))) {
+    const path = join(folder, name);
+    const pid = Number(name);
+    const verdict = judge(host.proc, pid, await recordedStart(path));
+    if (verdict === "other") {
+      swept.skipped += 1;
+    } else if (verdict === "stale") {
+      swept.skipped += 1;
+      await rm(path, { force: true });
+    } else if (verdict === "gone") {
+      await rm(path, { force: true });
+    } else {
+      const result = await killTree(host, pid);
+      swept.killed += result === "missing" ? 0 : 1;
+      if (result !== "alive") {
+        await rm(path, { force: true });
+      }
+    }
+  }
+  await removeIfEmpty(folder);
+  return swept;
+}
+
+/**
+ * Sends SIGKILL and says what followed: `missing` (the process was gone before the signal),
+ * `gone` (it went within the wait) or `alive` (it is still there; its record is kept).
+ */
+async function killTree(
+  host: TreeHost,
+  pid: number,
+): Promise<"missing" | "gone" | "alive"> {
+  try {
+    host.kill(pid);
+  } catch (error) {
+    if (isMissing(error, "ESRCH")) {
+      return "missing";
+    }
+    throw error;
+  }
+  return (await waitUntilGone(host, pid)) ? "gone" : "alive";
+}
+
+async function removeIfEmpty(folder: string): Promise<void> {
+  try {
+    await rmdir(folder);
+  } catch (error) {
+    if (!isMissing(error, "ENOTEMPTY") && !isMissing(error, "ENOENT")) {
+      throw error;
+    }
+  }
+}
+
+function readOrUndefined<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/** The running system: `/proc` and `process.kill`. */
+export function systemHost(): TreeHost {
+  return {
+    proc: {
+      stat: (pid) =>
+        readOrUndefined(() => readFileSync(`/proc/${pid}/stat`, "utf8")),
+      exe: (pid) => readOrUndefined(() => readlinkSync(`/proc/${pid}/exe`)),
+      cmdline: (pid) =>
+        readOrUndefined(() =>
+          readFileSync(`/proc/${pid}/cmdline`, "utf8")
+            .split("\0")
+            .filter((arg) => arg !== ""),
+        ),
+    },
+    kill: (pid) => process.kill(pid, "SIGKILL"),
+    wait: (ms = GONE_CHECK_MS) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+  };
+}
+
+/** Stops the trees of the PM session `sessionID`, whose records are in `<pidsDir>/<sessionID>`. */
+export function stopTreesIn(
+  pidsDir: string,
+  host: TreeHost = systemHost(),
+): (sessionID: string) => Promise<Swept> {
+  return (sessionID) =>
+    isPlainName(sessionID)
+      ? sweepTrees(join(pidsDir, sessionID), host)
+      : Promise.resolve({ killed: 0, skipped: 0 });
+}

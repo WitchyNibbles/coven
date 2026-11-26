@@ -14,12 +14,13 @@ import { askToDeny } from "./asks.ts";
 import { pmLaunchTool } from "./launch.ts";
 import { pmListTool, pmResumeTool, pmStopTool } from "./manage.ts";
 import { NoticeTracker } from "./notices.ts";
-import { resolveRole } from "./role.ts";
-import type { RoleInfo, RoleLookup } from "./role.ts";
+import { resolvePlaced, resolveRole } from "./role.ts";
+import type { RoleLookup } from "./role.ts";
 import { pmIsolation, shellEnvHooks } from "./shell-env.ts";
 import { sharedState } from "./state.ts";
 import { serverStatus } from "./status.ts";
 import { gmClaimTool, sendTool } from "./tools.ts";
+import { stopTreesIn } from "./trees.ts";
 
 export interface PmDeps {
   now: () => number;
@@ -57,8 +58,8 @@ function dispose(registration: unknown): void {
 }
 
 /** A lookup that runs on first use and gives every later caller the same promise. */
-function once(make: () => Promise<RoleInfo | undefined>): RoleLookup {
-  let lookup: Promise<RoleInfo | undefined> | undefined;
+function once<T>(make: () => Promise<T>): () => Promise<T> {
+  let lookup: Promise<T> | undefined;
   return () => (lookup ??= make());
 }
 
@@ -78,10 +79,11 @@ export async function pmSetup(
   const lastText = (id: string) => host.lastAssistantText(id);
   const toolDeps = { session: ctx.session, resolve: resolveRole };
   const state = sharedState();
+  const isolation = pmIsolation(options);
   const shell = shellEnvHooks({
     keyEnv: options.keyEnv,
     directory: ctx.location.directory,
-    isolation: pmIsolation(options),
+    isolation,
     queue: state.queue,
     taken: state.taken,
     now: deps.now,
@@ -107,13 +109,17 @@ export async function pmSetup(
     );
     editor.add(pmListTool({ ...toolDeps, status }));
     editor.add(pmResumeTool(toolDeps));
-    editor.add(pmStopTool(toolDeps));
+    editor.add(
+      pmStopTool({ ...toolDeps, trees: stopTreesIn(isolation.pidsDir) }),
+    );
   });
   const guard = await ctx.tool.hook("execute.before", async (event) => {
     // looked up when a hook first asks, so a call no hook needs a role for makes no lookup
-    const role = once(() => resolveRole(event.sessionID, get));
+    const placed = once(() => resolvePlaced(event.sessionID, get));
+    const role = async () => (await placed()).info;
+    const holder = async () => (await placed()).holder;
     await deps.beforeTool(event, role);
-    await shell.executeBefore(event, role);
+    await shell.executeBefore(event, role, holder);
   });
   const stop = new AbortController();
   const registrations: unknown[] = [];
