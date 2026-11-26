@@ -32,6 +32,12 @@
   the missing piece; no setting turns isolation off, and `coven opencode doctor` reports the
   check. `coven_pm_stop` also kills the isolation trees the PM's shells started. See
   [opencode/README.md](opencode/README.md#hierarchy).
+- pm-permissions: a plain `git push` after `cd <dir> &&` is checked in `<dir>` alone, so a PM can
+  push a worktree's branch from the main checkout; after `;`, `||` or `|`, and anywhere in a command
+  with a parenthesis, the old directory is still checked.
+- The manager, and the routing on Claude Code and OpenCode, keep replies to the user in the language
+  they write in, also after a compaction or a resume; briefs and messages to agents stay English.
+  The handoff and the PM brief name the user's language.
 
 ## 0.2.0 (2026-11-25)
 

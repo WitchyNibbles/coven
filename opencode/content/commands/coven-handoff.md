@@ -20,6 +20,8 @@ uncommitted file blocks every later sync of the store). Tell the user the file p
 one-line prompt to start the next session with. A session opened in that project will see the
 newest handoff in its "Shared memory" block.
 
+Name the language the user writes in, so the next session replies in it from its first line.
+
 Include a "suggested skills" section in the document, naming which skills the next agent should
 call the `skill` tool for.
 
