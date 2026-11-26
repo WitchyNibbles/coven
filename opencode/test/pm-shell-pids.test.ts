@@ -191,7 +191,7 @@ await test("values a caller set for the two names are stripped: from a GM's shel
   assert.equal(pmEvent.env[PIDS_ENV], join(isolation.pidsDir, "ses_pm"));
 });
 
-await test("a shell with no queue entry gets neither name and makes no folder", async () => {
+await test("a shell with no queue entry gets neither name and makes no folder", () => {
   const isolation = isolationIn();
   const w = rig({}, isolation);
   const event = shell({ PATH: "/bin" });

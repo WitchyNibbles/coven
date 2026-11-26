@@ -17,7 +17,7 @@ import type { CovenOptions } from "../options.ts";
 import { givenWorkdir } from "../workdir.ts";
 import { ROLE_ENV } from "./role.ts";
 import type { HolderLookup, Role, RoleLookup } from "./role.ts";
-import { isPlainName } from "./trees.ts";
+import { isPlainName, makePidFolder } from "./trees.ts";
 
 /** How long a recorded call waits for its shell to start. */
 const EXPIRY_MS = 30_000;
@@ -250,35 +250,6 @@ function isolationRefusal(piece: string): Error {
 }
 
 /**
- * Makes the folder of a PM's pid records (0700) and returns its path. A link or a file in the
- * place of a folder is an error, never followed.
- */
-function pidFolder(pidsDir: string, session: string): string {
-  const folder = join(pidsDir, session);
-  try {
-    mkdirSync(pidsDir, { recursive: true, mode: 0o700 });
-    try {
-      mkdirSync(folder, { mode: 0o700 });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
-    }
-    for (const path of [pidsDir, folder]) {
-      if (!lstatSync(path).isDirectory()) {
-        throw new Error(`${path} is not a folder`);
-      }
-      chmodSync(path, 0o700);
-    }
-  } catch (error) {
-    throw isolationRefusal(
-      `cannot make the pid folder ${folder}: ${messageOf(error)}`,
-    );
-  }
-  return folder;
-}
-
-/**
  * Points a PM's shell at the wrapper and at the folder of its PM's pid records; throws, and
  * leaves the event as it is, when it cannot. `holder` is the PM session `coven_pm_stop` is given.
  */
@@ -304,7 +275,14 @@ function isolate(
       `the PM session id ${JSON.stringify(holder)} is not a plain name`,
     );
   }
-  const folder = pidFolder(isolation.pidsDir, holder);
+  const folder = join(isolation.pidsDir, holder);
+  try {
+    makePidFolder(isolation.pidsDir, folder);
+  } catch (error) {
+    throw isolationRefusal(
+      `cannot make the pid folder ${folder}: ${messageOf(error)}`,
+    );
+  }
   event.env[REAL_SHELL_ENV] = shell;
   event.env[HIDE_ENV] = isolation.hide;
   event.env[SESSION_ENV] = holder;

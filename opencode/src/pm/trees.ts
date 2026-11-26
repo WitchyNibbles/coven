@@ -1,4 +1,10 @@
-import { readFileSync, readlinkSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+} from "node:fs";
 import { readdir, readFile, rm, rmdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 
@@ -22,6 +28,27 @@ const GONE_CHECK_MS = 50;
 
 export function isPlainName(name: string): boolean {
   return PLAIN_NAME.test(name);
+}
+
+/**
+ * Makes a PM's pid folder (0700) under `pidsDir`; throws when it cannot. A link or a file in the
+ * place of either folder is an error, never followed.
+ */
+export function makePidFolder(pidsDir: string, folder: string): void {
+  mkdirSync(pidsDir, { recursive: true, mode: 0o700 });
+  try {
+    mkdirSync(folder, { mode: 0o700 });
+  } catch (error) {
+    if (!isMissing(error, "EEXIST")) {
+      throw error;
+    }
+  }
+  for (const path of [pidsDir, folder]) {
+    if (!lstatSync(path).isDirectory()) {
+      throw new Error(`${path} is not a folder`);
+    }
+    chmodSync(path, 0o700);
+  }
 }
 
 /** What `/proc/<pid>` says about a process; each is `undefined` when it cannot be read. */
