@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -692,6 +693,44 @@ def test_a_command_nested_too_deeply_is_refused(world: World) -> None:
     for _ in range(12):
         command = "bash -c " + json.dumps(command)
     assert world.call("Bash", "command", command)
+
+
+# A wrapper option that takes a value is read once more as a flag (`Argv.loose_readings`), a full
+# check of the command each: the readings are capped, so a long line is decided fast.
+VALUED_OPTIONS = {"sudo": "sudo " + "-u x " * 50, "flock": "flock " + "-w 1 " * 50}
+DECISION_SECONDS = 2.0  # the guard's own timeout is 5 s
+
+
+@pytest.mark.parametrize("wrapper", VALUED_OPTIONS)
+def test_a_line_with_many_valued_options_is_refused_fast(world: World, wrapper: str) -> None:
+    line = VALUED_OPTIONS[wrapper] + ("lock " if wrapper == "flock" else "") + "ls"
+    started = time.monotonic()
+    refusal = world.call("Bash", "command", line)
+    assert time.monotonic() - started < DECISION_SECONDS
+    assert refusal
+    assert "more than 16 wrapper options that take a value" in refusal
+
+
+@pytest.mark.parametrize("wrapper", VALUED_OPTIONS)
+def test_a_line_with_many_valued_options_still_refuses_opencode_fast(
+    world: World, wrapper: str
+) -> None:
+    line = VALUED_OPTIONS[wrapper] + ("lock " if wrapper == "flock" else "") + "opencode db"
+    started = time.monotonic()
+    assert world.call("Bash", "command", line)
+    assert time.monotonic() - started < DECISION_SECONDS
+
+
+def test_a_line_with_the_most_valued_options_is_still_read_and_allowed(world: World) -> None:
+    assert world.call("Bash", "command", "sudo " + "-u x " * 16 + "ls") is None
+    assert world.call("Bash", "command", "sudo " + "-u x " * 17 + "ls")
+
+
+def test_valued_options_are_counted_for_each_command_of_a_line(world: World) -> None:
+    line = "; ".join(["sudo " + "-u x " * 16 + "ls"] * 40)
+    started = time.monotonic()
+    assert world.call("Bash", "command", line) is None
+    assert time.monotonic() - started < DECISION_SECONDS
 
 
 DATA_AND_ANCESTORS_REFUSED = [

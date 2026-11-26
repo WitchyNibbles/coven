@@ -92,6 +92,7 @@ POINTER = f"this is coven's own server; ask the GM with a QUESTION (its tools: {
 MAX_NESTING = 8
 MAX_GLOB_MATCHES = 2000
 MAX_UNWRAP = 16
+MAX_LOOSE_READINGS = 16  # each reading is a full check of the command: a line has a few
 
 
 class Mode(Enum):
@@ -625,13 +626,18 @@ class Argv:
         value is a bare word, with that option taken as a flag: the value (and the words after
         it) are then the command. A program may not take a value there (`chrt -D opencode db`:
         the man page says a nanosecond count), and the table follows the program; this guard
-        checks both readings, so what it refused as the command before it refuses still."""
+        checks both readings, so what it refused as the command before it refuses still. More than
+        MAX_LOOSE_READINGS of them are refused: every reading is a check of the whole command."""
         walk = self._unwrapping
-        return tuple(
-            replace(self, loose=frozenset({position}))
-            for position in walk.valued
-            if not walk.words[position + 1].startswith("-")
-        )
+        positions = [
+            position for position in walk.valued if not walk.words[position + 1].startswith("-")
+        ]
+        if len(positions) > MAX_LOOSE_READINGS:
+            raise RefusedError(
+                f"a command with more than {MAX_LOOSE_READINGS} wrapper options that take a value"
+                " cannot be checked"
+            )
+        return tuple(replace(self, loose=frozenset({position})) for position in positions)
 
 
 SEPARATORS = re.compile(r"(\|\||&&|\||;|&|\n)")
@@ -1543,7 +1549,8 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
     if in_coven and not _coven_checkout_allows(command, commands, cwd, scope):
         raise RefusedError(COVEN_CHECKOUT_RULE)
     for argv in commands:
-        for reading in (argv, *argv.loose_readings):
+        check_command(argv, names, here)
+        for reading in argv.loose_readings:
             check_command(reading, names, here)
     view = View(
         scope,
