@@ -880,6 +880,13 @@ def test_a_dos_short_name_of_a_secret_is_blocked_as_a_read_search_or_glob_path(c
     assert call("Glob", pattern="*", path=target).returncode == 2, target
 
 
+def test_braces_in_a_search_glob_are_not_expanded_a_known_gap(call):
+    """The brace word `.{en,x}v` is refused in Bash (the corpus pins that), but Grep's `glob` and
+    Glob's `pattern` are not expanded: both are allowed, as at c202ca4. Slice 2 may close this."""
+    assert call("Grep", pattern="KEY", glob=".{en,x}v").returncode == 0
+    assert call("Glob", pattern=".{en,x}v").returncode == 0
+
+
 @pytest.mark.parametrize("tool", WRITERS)
 def test_a_target_under_a_directory_named_home_variable_is_checked_unexpanded(
     home, project, write, tool

@@ -11,7 +11,8 @@ says nothing about a command with no push, merge, send-pack or gh word in it). T
      script, screen, make or eval; pm reads a push piped into doas, script or screen, or into a
      wrapper around one of them (`doas su`); deny_secrets reads brace words as their expansions;
      opencode reads a body piped into sudo, doas or parallel
-  none  no task may move it
+  none  no task may move it; the `gap-` entries pin holes slice 1 leaves open (each was allowed at
+     c202ca4 and is now): a later slice that closes one moves its entry toward refuse
 Phase 1's tags (3, 4 and 5) are gone: every entry they named is at its end state.
 A task that moves one edits the expected value in this file and lists the flip in `flips.md`.
 
@@ -1738,4 +1739,42 @@ ENTRIES = (
     Entry("b-hole-plain-txt", "cat {a,b}.txt", (A, N, A, A)),
     Entry("b-hole-past-cap-env", "cat .{e,x}{n,x}{v,x}{,a}{,a}{,a}{,a}", (R, N, A, R), "h"),
     Entry("b-hole-at-cap-env", "cat .{e,x}{n,x}{v,x}{,a}{,a}{,a}", (R, N, A, A), "h"),
+    # --- holes slice 1 leaves open (the same at c202ca4): pinned so a later slice must move them
+    Entry("gap-oc-paren-sh", "echo 'opencode db' | (sh)", (A, N, A, A), "none"),
+    Entry("gap-oc-paren-sudo-s", "echo 'opencode db' | (sudo -s)", (A, N, A, A), "none"),
+    Entry("gap-oc-if-sh", "echo 'opencode db' | if true; then sh; fi", (A, N, A, A), "none"),
+    Entry("gap-pm-runuser", "echo 'git push -f origin main' | runuser x", (A, N, A, A), "none"),
+    Entry(
+        "gap-pm-busybox-login",
+        "echo 'git push -f origin main' | busybox login",
+        (A, N, A, A),
+        "none",
+    ),
+    Entry("gap-deny-quote-split", 'cat .e"n"v', (A, N, A, A), "none"),
+    Entry("gap-deny-quote-brace", 'cat .{"en",x}v', (A, N, A, A), "none"),
+    Entry("gap-deny-splice", "cat .e${y}nv", (A, N, A, A), "none"),
+    Entry("gap-deny-ssh-quote-split", 'cat ~/.s"s"h/id_rsa', (A, N, A, A), "none"),
+    Entry(
+        "gap-prod-script-qc-sh",
+        "echo 'claude -p hi' | script -qc sh /dev/null",
+        (A, N, A, R),
+        "none",
+    ),
+    Entry("gap-prod-sh-c-sh", "echo 'claude -p hi' | sh -c sh", (A, N, A, R), "none"),
+    Entry("gap-prod-subst-sh", "echo 'claude -p hi' | $(echo sh)", (A, N, A, R), "none"),
+    Entry("gap-prod-eval-cat", 'eval "$(cat)" < x.txt; echo claude -p hi', (A, N, A, R), "none"),
+    Entry("gap-prod-chroot", "echo 'claude -p hi' | chroot /r", (A, N, A, A), "none"),
+    Entry("gap-oc-chroot", "echo 'opencode db' | chroot /r", (A, N, A, A), "none"),
+    Entry("gap-prod-unshare", "echo 'claude -p hi' | unshare", (A, N, A, A), "none"),
+    Entry("gap-oc-unshare", "echo 'opencode db' | unshare", (A, N, A, A), "none"),
+    Entry("gap-prod-pkexec", "echo 'claude -p hi' | pkexec", (A, N, A, A), "none"),
+    Entry("gap-oc-pkexec", "echo 'opencode db' | pkexec", (A, N, A, A), "none"),
+    Entry("gap-prod-firejail", "echo 'claude -p hi' | firejail", (A, N, A, A), "none"),
+    Entry("gap-oc-firejail", "echo 'opencode db' | firejail", (A, N, A, A), "none"),
+    Entry("gap-prod-sg", "echo 'claude -p hi' | sg grp", (A, N, A, A), "none"),
+    Entry("gap-oc-sg", "echo 'opencode db' | sg grp", (A, N, A, A), "none"),
+    Entry("gap-prod-nsenter", "echo 'claude -p hi' | nsenter -t 1 -m", (A, N, A, A), "none"),
+    Entry("gap-oc-nsenter", "echo 'opencode db' | nsenter -t 1 -m", (A, N, A, A), "none"),
+    Entry("gap-prod-runuser", "echo 'claude -p hi' | runuser x", (A, N, A, A), "none"),
+    Entry("gap-oc-runuser", "echo 'opencode db' | runuser x", (A, N, A, A), "none"),
 )
