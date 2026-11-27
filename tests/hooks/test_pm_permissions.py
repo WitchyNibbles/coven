@@ -3889,6 +3889,43 @@ def test_a_pipe_into_a_wrapper_with_a_shell_command_is_guarded(repo, command):
     assert_guarded(command, repo)
 
 
+# The command a wrapper runs is read as a receiver too: it reads the pipe as shell text when it
+# starts a shell, a stdin script or a makefile, however many wrappers come first.
+PIPES_INTO_A_WRAPPER_AROUND_A_READER = [
+    "echo 'git push -f origin main' | doas su",
+    "echo 'git push -f origin main' | doas script",
+    "echo 'git push -f origin main' | doas screen -",
+    "echo 'git push -f origin main' | doas sudo -s",
+    "echo 'git push -f origin main' | setsid doas -s",
+    "echo 'git push -f origin main' | stdbuf -oL su",
+    "echo 'git push -f origin main' | flock f make -f -",
+    "echo 'git push -f origin main' | ionice -c 2 script",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPER_AROUND_A_READER)
+def test_a_pipe_into_a_wrapper_around_a_reader_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+def test_a_pipe_into_wrappers_nested_past_the_cap_is_guarded(repo):
+    nested = "echo 'git push -f origin main' | " + "doas " * (pm.MAX_NESTING + 2) + "cat"
+    assert_guarded(nested, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'git push -f origin main' | doas -u x cat",
+        "echo 'git push -f origin main' | nice -n 5 cat",
+        "echo 'git push -f origin main' | doas doas cat",
+        "stdbuf -oL cat <<EOF\ngit push -f origin main\nEOF",
+    ],
+)
+def test_a_pipe_into_a_wrapper_around_a_reader_of_data_keeps_its_verdict(repo, command):
+    assert_unguarded(command, repo)
+
+
 # The approval path (PermissionRequest) is not the guard: it refuses these texts by its own rules,
 # for its own reasons, and the guard's new reading does not change what it says.
 APPROVAL_PATH_REASONS = [

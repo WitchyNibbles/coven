@@ -2022,9 +2022,16 @@ def _reads_commands(words: Sequence[str], receiver: str, depth: int = 0) -> bool
         return _make_reads_its_makefile(_unwrapped(words).command)
     if receiver not in EXEC_WRAPPERS:
         return False
-    return any(os.path.basename(word) in WORD_READERS for word in words) or (
-        _exec_wrapper_has_no_command(_unwrapped(words).command, receiver)
-    )
+    if any(os.path.basename(word) in WORD_READERS for word in words):
+        return True
+    command = _unwrapped(words).command
+    if _exec_wrapper_has_no_command(command, receiver):
+        return True
+    inner = _exec_wrapper_command(command, receiver)
+    if not inner:
+        return False
+    # The command it runs reads the pipe as well (`doas su`); past MAX_NESTING, refuse.
+    return depth >= MAX_NESTING or _reads_commands(inner, _receiver(inner), depth + 1)
 
 
 def _has_command_string(command: Sequence[str]) -> bool:
@@ -2049,6 +2056,16 @@ def _exec_wrapper_has_no_command(command: Sequence[str], name: str) -> bool:
         start = _wrapped_start(syntax, command, 1)
         return start is None or start >= len(command)
     return True
+
+
+def _exec_wrapper_command(command: Sequence[str], name: str) -> list[str]:
+    """The words of the command an exec wrapper the guard does not walk runs, as far as its
+    options can be followed; empty for a wrapper that takes a command string or has no table."""
+    syntax = SCREEN_SYNTAX if name == "screen" else wrapper_commands.WRAPPER_SYNTAX.get(name)
+    if name in COMMAND_STRING_ONLY or syntax is None:
+        return []
+    start = _wrapped_start(syntax, command, 1)
+    return [] if start is None else list(command[start:])
 
 
 def _parallel_runs_its_input(command: Sequence[str]) -> bool:

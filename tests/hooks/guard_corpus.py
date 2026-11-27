@@ -8,8 +8,9 @@ says nothing about a command with no push, merge, send-pack or gh word in it). T
 
 `flips` is the task expected to move an entry's verdict (and only toward refuse):
   h  slice 1 of phase 2, the four open holes: prod reads a claude start piped into sudo, doas, su,
-     script, screen, make or eval; pm reads a push piped into doas, script or screen; deny_secrets
-     reads brace words as their expansions; opencode reads a body piped into sudo, doas or parallel
+     script, screen, make or eval; pm reads a push piped into doas, script or screen, or into a
+     wrapper around one of them (`doas su`); deny_secrets reads brace words as their expansions;
+     opencode reads a body piped into sudo, doas or parallel
   none  no task may move it
 Phase 1's tags (3, 4 and 5) are gone: every entry they named is at its end state.
 A task that moves one edits the expected value in this file and lists the flip in `flips.md`.
@@ -1718,6 +1719,19 @@ ENTRIES = (
         "focus5-text-screen-command",
         "echo 'git push -f origin main' | screen -dmS x ls",
         (A, N, A, R),
+    ),
+    Entry("nested-doas-su-push", "echo 'git push -f origin main' | doas su", (A, R, A, R), "h"),
+    Entry(
+        "nested-doas-sudo-s-push",
+        "echo 'git push -f origin main' | doas sudo -s",
+        (A, R, A, R),
+        "h",
+    ),
+    Entry(
+        "nested-flock-make-push",
+        "echo 'git push -f origin main' | flock f make -f -",
+        (A, R, A, R),
+        "h",
     ),
     Entry("b-hole-env-name", "cat .{en,x}v", (R, N, A, A), "h"),
     Entry("b-hole-ssh-key", "cat ~/.s{s,x}h/id_rsa", (R, N, A, A), "h"),
