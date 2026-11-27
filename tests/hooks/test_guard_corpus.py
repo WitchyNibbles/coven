@@ -14,8 +14,9 @@ Anything else (another exit code, or a refusal that is a crash or a payload it c
 the run.
 
 A verdict that moved fails with the command, the guard, and the expected and actual values. The
-`flips` field of an entry names the plan task (3, 4 or 5) expected to move it, or `h` (slice 1 of
-phase 2: the four open holes, tasks 2 to 5 of its plan); `none` means no task may. An entry changes its expected value only for a listed flip, and never from refuse to allow.
+`flips` field of an entry is `h` when a task of slice 1 of phase 2 (the four open holes) is
+expected to move it, and `none` when no task may. An entry changes its expected value only for a
+listed flip, and never from refuse to allow.
 
 The runners, the context and the guards' fixtures are `conftest.py`'s, built from `corpus_harness.py`.
 """
