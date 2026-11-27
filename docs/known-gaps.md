@@ -340,9 +340,10 @@ Holes that were there before slice 1 and are the same on main (c202ca4):
   `runuser x`, programs that start a shell when they are given no command.
 - pm-permissions, guard mode: a wrapper the guard does not walk but has an option table for (the
   `WRAPPER_SYNTAX` entries `doas`, `setsid`, `flock`, `ionice` and the like) is read through that
-  table. A table that misses a valued option of its wrapper counts that option's value as the
-  wrapper's command, so the guard judges the wrong word as the receiver. A wrapper with no table
-  at all is refused whatever follows it.
+  table. An option the table does not know stops the reading and is refused. A table whose
+  operand count is off, or that lists an option as valued when it is not, makes the guard judge
+  the wrong word as the receiver: `| runuser x` and `| busybox login` are allowed, also behind
+  `doas`. A wrapper with no table at all is refused whatever follows it.
 - The OpenCode server guard has no deadline of its own. A long chain of `screen -X` words makes
   its reading slow, and the time grows with the square of the length: about 15 s at 1,000 words
   and 65 s at 2,000, on the same code at c202ca4 and now. The plugin's 5 s timeout
