@@ -873,6 +873,9 @@ ENTRIES = (
     Entry("braces-range-one-letter-literal", "rm -rf <home>/.{c..c}laude/skills", (A, N, R, R)),
     Entry("braces-slash-dots-literal", "rm -rf <home>/{/../}claude/skills", (A, N, R, R)),
     Entry("braces-four-dots-literal", "rm -rf <home>/{....}claude/skills", (A, N, R, R)),
+    # A range next to a list: the word is read as before too, lists expanded and ranges kept.
+    Entry("braces-range-and-list-home", "rm -rf <home>/{a..b}x/{c,d}", (A, N, R, R)),
+    Entry("braces-range-and-list-claude", "rm -rf <home>/.{c..c}claudex/{c,d}", (A, N, R, R)),
     Entry("wrap-ionice-push", "ionice -c 3 git push -f origin main", (A, R, A, A)),
     Entry("wrap-ionice-opencode", "ionice -c 3 opencode db", (A, N, A, R)),
     Entry("wrap-ionice-claude", "ionice -c 3 claude -p hi", (A, N, R, A)),

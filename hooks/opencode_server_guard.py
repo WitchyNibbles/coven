@@ -93,6 +93,7 @@ MAX_NESTING = 8
 MAX_GLOB_MATCHES = 2000
 MAX_UNWRAP = 16
 MAX_LOOSE_READINGS = 16  # each reading is a full check of the command: a line has a few
+LIST_WORDS = 256  # _list_words keeps the bound the guard's list-only expansion had
 
 
 class Mode(Enum):
@@ -346,17 +347,32 @@ def _brace_words(word: str, *, one_word: bool = False) -> list[str]:
     return made
 
 
+def _list_words(word: str) -> list[str]:
+    """`word` with only its brace lists expanded and its ranges kept as written, at most
+    LIST_WORDS words, the rest as written: how the guard read a word before it expanded ranges."""
+    pending = [word]
+    done: list[str] = []
+    while pending and len(done) + len(pending) <= LIST_WORDS:
+        current = pending.pop()
+        match = BRACE_LIST.search(current)
+        if match is None:
+            done.append(current)
+            continue
+        for choice in match.group(0)[1:-1].split(","):
+            pending.append(current[: match.start()] + choice + current[match.end() :])
+    return done + pending
+
+
 def _words_of(quoting: Quoting) -> list[str]:
     """Every word, brace expansion of a word and part of a word (`--opt=/x`, `A=/x:/y`) of the
-    text under each of its variants, without repeats. The word as written is read too, with its
-    parts when it holds no brace list: a range the guard expands (`.{c..c}laude`) may be one the
-    shell keeps literal (`{....}`), and the parts of the literal word (`<home>/.`, `laude/skills`)
-    were read before ranges were expanded. A brace list is read as the words it makes."""
+    text under each of its variants, without repeats. Each word is read two ways: as bash expands
+    it (_brace_words) and as the guard read it before it expanded ranges (_list_words), so a range
+    the guard expands but the shell keeps (`{....}`) and the parts of a word read before
+    (`<home>/.` in `<home>/.{c..c}laude`) are both checked."""
     found: dict[str, None] = {}
     for variant in quoting.variants:
         for chunk in WORD_BREAKS.split(variant):
-            literal = [] if BRACE_LIST.search(chunk) else [chunk]
-            for word in [*literal, *_brace_words(chunk)] if chunk else []:
+            for word in [*_list_words(chunk), *_brace_words(chunk)] if chunk else []:
                 found[word] = None
                 found.update(dict.fromkeys(part for part in PART_BREAKS.split(word) if part))
     return list(found)

@@ -51,8 +51,8 @@
     that hold a brace are expanded before the check, so `ho{m..m}e` reads as `home`. A word that
     makes more than 64 words, has more than 64 braces or holds a range with a variable is refused.
     It used to expand 256 words and read the rest as written. A letter range has one ASCII letter at
-    each end; `{....}` and `{/../}` stay as written, as in bash, and a word with a range is read as
-    written too.
+    each end; `{....}` and `{/../}` stay as written, as in bash. Each word is also read as before,
+    with its lists expanded and its ranges kept as written.
   - OpenCode server guard, shell text: a body sent to `eval`, `make`, `su`, `script`, `screen` or
     `mksh` by a pipe, a here-string, a heredoc or a process substitution is read as shell text, as
     it already was for `sh` and `bash`.
