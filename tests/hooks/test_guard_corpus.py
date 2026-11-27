@@ -14,7 +14,7 @@ Anything else (another exit code, or a refusal that is a crash or a payload it c
 the run.
 
 A verdict that moved fails with the command, the guard, and the expected and actual values. The
-`flips` field of an entry is `h` when a task of slice 1 of phase 2 (the four open holes) is
+`flips` field of an entry is `s2` when a task of slice 2 of phase 2 (one reads-its-input test) is
 expected to move it, and `none` when no task may. An entry changes its expected value only for a
 listed flip, and never from refuse to allow.
 
