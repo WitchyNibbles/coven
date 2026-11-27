@@ -1315,6 +1315,22 @@ def test_a_crash_under_the_wrapper_exits_2(
     assert "coven: prod-guard failed (exit 1); blocking" in proc.stderr
 
 
+def test_a_wrapper_commands_without_the_shared_reads_its_input_test_blocks(
+    run_hook: Run, store: Path, tmp_path: Path, this_python: dict[str, str]
+) -> None:
+    """prod reads `runs_stdin_as_commands` when it loads: a `wrapper_commands` that lacks it (an
+    older copy beside a newer hook) fails the load, and the wrapper exits 2."""
+    broken = tmp_path / "hooks"
+    shutil.copytree(HOOKS, broken, ignore=shutil.ignore_patterns("__pycache__"))
+    with (broken / "wrapper_commands.py").open("a") as handle:
+        handle.write("\ndel runs_stdin_as_commands\n")
+    proc = run_hook(
+        broken / "fail-closed.sh", bash("ls"), this_python, args=(str(broken / "prod_guard.py"),)
+    )
+    assert proc.returncode == 2
+    assert "coven: prod-guard failed (exit 1); blocking" in proc.stderr
+
+
 def test_the_real_hook_runs_through_the_wrapper(
     run_hook: Run, store: Path, this_python: dict[str, str]
 ) -> None:
@@ -2531,6 +2547,69 @@ def test_pm_cannot_feed_claude_to_a_reader_that_runs_stdin(
     assert proc.returncode == 2
     assert "cannot start claude sessions" in proc.stderr
     assert run(bash(command)).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'claude -p hi' | doas -n ls",  # `-n` is no option the shared table can follow
+        "echo 'claude -p hi' | doas -u root -n ls",
+        "echo 'claude -p hi' | nice -5 sh",  # the numeric option is read: the command is sh
+        "echo 'claude -p hi' | script -c sh",
+        "echo 'claude -p hi' | script -qc sh /dev/null",
+        "echo 'claude -p hi' | su -c sh",
+        "echo 'claude -p hi' | runuser x",
+        "echo 'claude -p hi' | runuser -u x ls",  # runuser has no command string
+        "echo 'claude -p hi' | sh -c sh",
+        "echo 'claude -p hi' | sudo -h h ls",
+    ],
+)
+def test_pm_cannot_feed_claude_to_what_the_shared_test_reads_as_a_reader(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot start claude sessions" in proc.stderr
+    assert run(bash(command)).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'claude -p hi' | nice -5 cat",
+        "echo 'claude -p hi' | nice -n 5 cat",
+        "echo 'claude -p hi' | sudo -u me ls",
+        "echo 'claude -p hi' | doas -u x cat",
+        "echo 'claude -p hi' | screen -dmS x ls",
+        "echo 'claude -p hi' | su -c ls",
+        "echo 'claude -p hi' | script -qc ls /dev/null",
+        "echo 'claude -p hi' | sh -c ls",
+        "echo 'claude -p hi' | runuser -c ls x",
+    ],
+)
+def test_pm_may_feed_claude_to_a_receiver_with_a_command(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("tail", "refusal"),
+    [("ssh prod ls", "a shell runs what its input holds"), ("coven setup", "cannot run coven")],
+)
+@pytest.mark.parametrize("reader", ["doas -n ls", "nice -5 sh", "runuser x", "sh -c sh"])
+def test_the_other_stdin_rules_ask_the_shared_test_too(
+    run: Run, store: Path, tail: str, refusal: str, reader: str
+) -> None:
+    """The remote-host and store-writer rules read a receiver as the claude rule does."""
+    assert_pm_refused_gm_not(run, f"echo '{tail}' | {reader}", refusal)
+
+
+def test_bare_parallel_stays_prod_policy(run: Run, store: Path) -> None:
+    """The shared test reads `parallel -j2 echo` as a command; prod's bare-parallel rule is its own."""
+    assert run(bash("echo 'claude -p hi' | parallel"), role="pm").returncode == 2
+    assert run(bash("echo 'claude -p hi' | parallel -j2 echo"), role="pm").returncode == 2
 
 
 @pytest.mark.parametrize(

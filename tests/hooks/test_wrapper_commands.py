@@ -466,18 +466,15 @@ def test_doas_is_its_wrapper_entry_with_no_flags() -> None:
     assert table.READER_SYNTAX["doas"].flags == frozenset()
 
 
-def test_screen_is_the_letters_pm_and_prod_both_had() -> None:
+def test_screen_is_the_letters_pm_had() -> None:
     screen = table.READER_SYNTAX["screen"]
     assert (screen.flags, screen.valued) == (pm.SCREEN_SYNTAX.flags, pm.SCREEN_SYNTAX.valued)
-    old = prod.STDIN_READER_OPTIONS["screen"]
-    assert (screen.flags, screen.valued) == (old.flags, old.valued)
 
 
 def test_the_small_tables_are_the_ones_the_guards_had() -> None:
-    assert table.STDIN_PATHS == pm.STDIN_PATHS == prod.STDIN_PATHS
-    assert (
-        table.MAKE_GLUED_FILE.pattern == pm.MAKE_GLUED_FILE.pattern == prod.MAKE_GLUED_FILE.pattern
-    )
+    """pm keeps its copies until it switches over; prod reads the shared ones."""
+    assert table.STDIN_PATHS == pm.STDIN_PATHS
+    assert table.MAKE_GLUED_FILE.pattern == pm.MAKE_GLUED_FILE.pattern
     assert table.INPUT_SOURCES == pm.PARALLEL_SOURCES == prod.INPUT_SOURCES
     assert table.COMMAND_STRING_OPTIONS == {"-c", "--command", "--session-command"}
 
