@@ -325,7 +325,8 @@ ENTRIES = (
     Entry(
         "9i-heredoc-ssh-push",
         "ssh example.invalid <<'EOF'\ngit push -f origin main\nEOF",
-        (A, N, A, A),
+        (A, R, A, A),
+        "h",
     ),
     Entry(
         "9i-heredoc-sqlite3-opencode",
@@ -733,7 +734,7 @@ ENTRIES = (
     Entry("readers-sudo-push", "echo 'git push -f origin main' | sudo -s", (A, R, A, R), "h"),
     Entry("readers-doas-opencode", "echo 'opencode db' | doas -s", (A, N, A, R), "h"),
     Entry("readers-doas-claude", "echo 'claude -p hi' | doas -s", (A, N, A, R), "h"),
-    Entry("readers-doas-push", "echo 'git push -f origin main' | doas -s", (A, N, A, R), "h"),
+    Entry("readers-doas-push", "echo 'git push -f origin main' | doas -s", (A, R, A, R), "h"),
     Entry(
         "readers-script-opencode", "echo 'opencode db' | script -q /dev/null", (A, N, A, R), "none"
     ),
@@ -741,12 +742,12 @@ ENTRIES = (
     Entry(
         "readers-script-push",
         "echo 'git push -f origin main' | script -q /dev/null",
-        (A, N, A, R),
+        (A, R, A, R),
         "h",
     ),
     Entry("readers-screen-opencode", "echo 'opencode db' | screen -", (A, N, A, R), "none"),
     Entry("readers-screen-claude", "echo 'claude -p hi' | screen -", (A, N, A, R), "h"),
-    Entry("readers-screen-push", "echo 'git push -f origin main' | screen -", (A, N, A, R), "h"),
+    Entry("readers-screen-push", "echo 'git push -f origin main' | screen -", (A, R, A, R), "h"),
     Entry("readers-tmux-opencode", "echo 'opencode db' | tmux source -", (A, N, A, R)),
     Entry("readers-tmux-claude", "echo 'claude -p hi' | tmux source -", (A, N, A, R)),
     Entry(

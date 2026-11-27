@@ -3830,6 +3830,72 @@ def test_a_pipe_into_a_wrapped_shell_is_guarded(repo, command):
     assert_guarded(command, repo)
 
 
+# An exec wrapper the guard does not walk (doas, script, screen) with no command of its own runs
+# the shell text it reads: a push or merge piped into it runs.
+PIPES_INTO_A_WRAPPER_WITH_NO_COMMAND = [
+    "echo 'git push -f origin main' | doas -s",
+    "echo 'git push -f origin main' | script -q /dev/null",
+    "echo 'git push -f origin main' | screen -",
+    "echo 'git push -f origin main' | screen",
+    "echo 'gh pr merge 1' | doas -u me -s",
+    "echo 'git merge topic' | script -q /dev/null",
+    "echo 'git push -f origin main' | su",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPER_WITH_NO_COMMAND)
+def test_a_pipe_into_an_exec_wrapper_with_no_command_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# A command after the wrapper's options is judged as it is today: a shell among the words guards,
+# any other command does not.
+PIPES_INTO_A_WRAPPER_WITH_A_COMMAND = [
+    "echo 'git push -f origin main' | doas -u me ls",
+    "echo 'git push -f origin main' | script -q -c ls /dev/null",
+    "echo 'git push -f origin main' | screen -dmS x ls",
+    "echo 'git push -f origin main' | nice -n 5 cat",
+    "echo 'git push -f origin main' | timeout 9 cat",
+    "echo 'git push -f origin main' | sudo -u me ls",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPER_WITH_A_COMMAND)
+def test_a_pipe_into_a_wrapper_with_a_command_keeps_its_verdict(repo, command):
+    assert_unguarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'git push -f origin main' | doas -u me bash",
+        "echo 'git push -f origin main' | script -q -c bash /dev/null",
+        "echo 'git push -f origin main' | screen -dmS x sh",
+    ],
+)
+def test_a_pipe_into_a_wrapper_with_a_shell_command_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# The approval path (PermissionRequest) is not the guard: it refuses these texts by its own rules,
+# for its own reasons, and the guard's new reading does not change what it says.
+APPROVAL_PATH_REASONS = [
+    ("echo 'git push -f origin main' | doas -s", "is not allowed in an automatically approved"),
+    ("echo 'git push -f origin main' | script -q /dev/null", "is not allowed in an automatically"),
+    ("echo 'git push -f origin main' | screen -", "is not allowed in an automatically approved"),
+    ("git push origin feature | doas -s", "a pipe into doas is not approved automatically"),
+    ("git push origin feature | script -q /dev/null", "a pipe into script is not approved"),
+    ("git push origin feature | screen -", "a pipe into screen is not approved automatically"),
+]
+
+
+@pytest.mark.parametrize(("command", "reason"), APPROVAL_PATH_REASONS)
+def test_the_approval_path_verdict_on_a_pipe_into_an_exec_wrapper_is_unchanged(
+    repo, command, reason
+):
+    assert reason in denied(command, repo)
+
+
 # find runs the command after an exec action, up to its `;` or `{} +`: only that command counts.
 FIND_SEARCHES = [
     "find . -name '*.py' -exec grep -l merge {} +",
