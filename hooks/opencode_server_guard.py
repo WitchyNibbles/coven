@@ -1330,6 +1330,13 @@ def _opencode_problem(words: Sequence[str], command: Sequence[str], cwd: Path) -
         )
 
 
+def _check_piped_without_command(argv: Argv) -> None:
+    """`echo x | sudo -s`: the walk leaves no command, so the wrapper runs the piped text as shell,
+    and that text is not known."""
+    if argv.piped and _runs_stdin_as_shell(argv):
+        raise RefusedError("a pipe into a shell cannot be checked")
+
+
 def check_command(argv: Argv, names: Names, cwd: Path) -> None:
     words = [names.expand(word) for word in argv.words]
     command = [names.expand(word) for word in argv.command]
@@ -1338,8 +1345,7 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
             "a variable that makes git or man run a command is closed to OpenCode sessions"
         )
     if not command:
-        if argv.piped and _runs_stdin_as_shell(argv):
-            raise RefusedError("a pipe into a shell cannot be checked")
+        _check_piped_without_command(argv)
         return
     program = command[0]
     if "$(" in program or "`" in program or _runs_unknown_variable(words, command, names):
