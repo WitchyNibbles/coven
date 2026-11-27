@@ -2488,6 +2488,103 @@ def test_pm_may_feed_a_shell_without_claude(run: Run, store: Path, command: str)
     assert proc.returncode == 0, proc.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'claude -p hi' | sudo -s",
+        "echo 'claude -p hi' | sudo -i",
+        "echo 'claude -p hi' | sudo -u me -s",
+        "echo 'claude -p hi' | sudo",
+        "echo 'claude -p hi' | doas -s",
+        "echo 'claude -p hi' | doas",
+        "echo 'claude -p hi' | su",
+        "echo 'claude -p hi' | su -s /bin/sh me",
+        "echo 'claude -p hi' | su - me",
+        "echo 'claude -p hi' | script -q /dev/null",
+        "echo 'claude -p hi' | script",
+        "echo 'claude -p hi' | screen -",
+        "echo 'claude -p hi' | screen",
+        "echo 'claude -p hi' | make -f -",
+        "echo 'claude -p hi' | make --file=-",
+        "echo 'claude -p hi' | make -f/dev/stdin",
+        "printf 'claude -p hi\\n' | make -f -",
+        "echo 'claude -p hi' | eval",
+        "echo 'claude -p hi' | eval \"$(cat)\"",
+        "echo 'claude -p hi' | nice -n 5 sudo -s",
+        "echo 'claude -p hi' | env -i su",
+        "echo 'claude -p hi' | sudo su",
+        "echo 'claude -p hi' | sudo --weird-option -s",
+        "echo 'claude -p hi' | sudo -u me",
+        "echo 'claude -p hi' |& sudo -s",
+        "echo 'claude -p hi' > >(sudo -s)",
+        "sudo -s <<< 'claude -p hi'",
+        "su <<< 'claude -p hi'",
+        "make -f - <<< 'claude -p hi'",
+        "sudo -s <<'EOF'\nclaude -p hi\nEOF",
+        "sudo -s < start.txt; echo claude",
+    ],
+)
+def test_pm_cannot_feed_claude_to_a_reader_that_runs_stdin(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 2
+    assert "cannot start claude sessions" in proc.stderr
+    assert run(bash(command)).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'claude -p hi' | sudo -s ls",
+        "echo 'claude -p hi' | sudo -u me ls",
+        "echo 'claude -p hi' | sudo -u me -i cat",
+        "echo 'claude -p hi' | doas -u x cat",
+        "echo 'claude -p hi' | doas -s ls",
+        "echo 'claude -p hi' | su -c ls",
+        "echo 'claude -p hi' | su -lc ls me",
+        "echo 'claude -p hi' | script -q -c ls /dev/null",
+        "echo 'claude -p hi' | screen -dmS x ls",
+        "echo 'claude -p hi' | make -s",
+        "echo 'claude -p hi' | make",
+        "echo 'claude -p hi' | make -f Makefile",
+        "echo 'claude -p hi' | nice -n 5 cat",
+        "echo 'claude -p hi' | env -i cat",
+        "echo x | sudo -s",
+        "echo x | eval",
+        "echo x | make -f -",
+        "sudo -s; echo claude",
+        "echo 'claude -p hi'; sudo -s",
+    ],
+    ids=[
+        "sudo-s-command",
+        "sudo-user-command",
+        "sudo-user-i-command",
+        "doas-user-command",
+        "doas-s-command",
+        "su-command-string",
+        "su-bundled-command-string",
+        "script-command-string",
+        "screen-detached-command",
+        "make-without-file",
+        "make-bare",
+        "make-named-file",
+        "nice-command",
+        "env-command",
+        "no-claude-sudo",
+        "no-claude-eval",
+        "no-claude-make",
+        "not-piped-sudo",
+        "text-before-sudo",
+    ],
+)
+def test_pm_may_feed_claude_to_a_wrapper_with_a_command(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- non-literal hosts ---
 
 EDGE_GUARD = {

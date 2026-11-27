@@ -314,6 +314,43 @@ COMMAND_PARTS = re.compile(f"({COMMAND_SPLIT.pattern})")
 STDIN_REDIRECT = re.compile(r"0?<")
 STDIN_FILES = ("/dev/stdin", "/dev/fd/", "/proc/self/fd/")
 SOURCES = frozenset({"source", "."})
+
+
+class _Options(NamedTuple):
+    """How a stdin reader's options read: the ones that take no value, the ones that take one, and
+    whether `NAME=value` words may follow them."""
+
+    flags: frozenset[str]
+    valued: frozenset[str]
+    assignments: bool = False
+
+
+# Programs that run what stdin holds as shell text when their options leave no command to run:
+# sudo and doas (`-s`, `-i`, or nothing after the options), su and script (no command string),
+# screen (`-` or nothing after the options), make (`-f -` only, as pm's `_make_reads_its_makefile`)
+# and eval (`| eval "$(cat)"`; `eval` alone reads no stdin, and refusing it is the stricter side).
+# The options of sudo and doas are wrapper_commands.WRAPPER_SYNTAX's; an option a table does not
+# list cannot be followed, and counts as no command.
+_SYNTAX = _WRAPPER_COMMANDS.WRAPPER_SYNTAX
+SUDO_SHELL_OPTIONS = frozenset({"-s", "-i", "--shell", "--login"})
+STDIN_READER_OPTIONS: Mapping[str, _Options] = {
+    "sudo": _Options(
+        _SYNTAX["sudo"].flags | SUDO_SHELL_OPTIONS, _SYNTAX["sudo"].valued, assignments=True
+    ),
+    # doas(1): [-Lns] [-C config] [-u user]; the shared table lists its valued options only.
+    "doas": _Options(frozenset({"-L", "-n", "-s"}), _SYNTAX["doas"].valued),
+    # screen(1), as pm_permissions reads it; a lone `-` reads the commands from stdin.
+    "screen": _Options(
+        frozenset({"-", *(f"-{letter}" for letter in "aAdDfFilLmMOqQrRUvVxZ")}),
+        frozenset(f"-{letter}" for letter in "cehpsStTX"),
+    ),
+}
+COMMAND_STRING_READERS = frozenset({"su", "script"})  # run a command only when given a string
+COMMAND_STRING_OPTIONS = frozenset({"--command", "--session-command"})  # beside `-c`, `-qc`
+MAKE, EVAL = "make", "eval"
+STDIN_PATHS = frozenset({"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"})
+MAKE_GLUED_FILE = re.compile(r"-[A-Za-z]*f(?P<path>.+)")  # `-f-`, `-sf/dev/stdin`
+STDIN_READERS = frozenset({*STDIN_READER_OPTIONS, *COMMAND_STRING_READERS, MAKE, EVAL})
 INPUT_RUNNERS = frozenset({"xargs", "parallel"})
 PARALLEL = "parallel"
 ENV, SPLIT_LETTER, SPLIT_STRING = "env", "S", "split-string"  # `env -S 'cmd args'`
@@ -1317,10 +1354,117 @@ def _shell_reads_stdin(rest: Sequence[str]) -> bool:
     return True
 
 
+def _is_fed(words: Sequence[str], fed: bool) -> bool:
+    """Whether a command with `words` has stdin given to it: by a pipe (`fed`) or a redirect."""
+    return fed or any(STDIN_REDIRECT.match(word) for word in words)
+
+
 def _feeds_shell(rest: Sequence[str], fed: bool) -> bool:
     """Whether a shell given the words `rest`, and maybe fed by a pipe, runs what stdin holds."""
-    given = fed or any(STDIN_REDIRECT.match(word) for word in rest)
-    return given and _shell_reads_stdin(rest)
+    return _is_fed(rest, fed) and _shell_reads_stdin(rest)
+
+
+def _option_width(options: _Options, word: str) -> int | None:
+    """How many words the option `word` takes (itself and its value), or None when `options` do
+    not list it."""
+    name, equals, _ = word.partition("=")
+    if word.startswith("--"):
+        if name in options.flags:
+            return 1
+        return (1 if equals else 2) if name in options.valued else None
+    for position, letter in enumerate(word[1:], start=1):
+        if f"-{letter}" in options.valued:
+            return 1 if word[position + 1 :] else 2
+        if f"-{letter}" not in options.flags:
+            return None
+    return 1
+
+
+def _has_command(options: _Options, words: Sequence[str], start: int) -> bool:
+    """Whether the words of a wrapper, from `start` (just after its name), hold a command after its
+    options. An option the table does not list, and a stdin redirect before any word, leave none:
+    the stricter side. It reads only up to the command, so a line of wrappers stays linear."""
+    index = start
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if word in options.flags:
+            index += 1
+        elif word.startswith("-") and word != "-":
+            width = _option_width(options, word)
+            if width is None:
+                return False
+            index += width
+        else:
+            break
+    while index < len(words):
+        word = words[index]
+        if STDIN_REDIRECT.match(word):
+            return False
+        if REDIRECT.match(word):  # `>out`, or a bare `>` and its target
+            index += 2 if REDIRECT_OPERATOR.fullmatch(word) else 1
+        elif options.assignments and ASSIGNMENT.match(word):
+            index += 1
+        else:
+            return True
+    return False
+
+
+def _has_command_string(rest: Sequence[str]) -> bool:
+    """Whether the words of `su` or `script` give it a command string (`-c`, `-qc`, `--command`)."""
+    return any(
+        word.partition("=")[0] in COMMAND_STRING_OPTIONS
+        or (word.startswith("-") and not word.startswith("--") and "c" in word)
+        for word in rest
+    )
+
+
+def _make_reads_stdin_file(rest: Sequence[str]) -> bool:
+    """Whether make's words name stdin as its makefile, as pm's `_make_reads_its_makefile`: a
+    stdin path as a word, after `=` (`--file=-`), or glued on (`-f-`, `-sf/dev/stdin`)."""
+    for word in rest:
+        if word.startswith("--"):
+            path = word.partition("=")[2]
+        else:
+            glued = MAKE_GLUED_FILE.fullmatch(word)
+            path = glued["path"] if glued else ""
+        if word in STDIN_PATHS or path in STDIN_PATHS:
+            return True
+    return False
+
+
+def _runs_stdin_as_commands(name: str, words: Sequence[str], start: int) -> bool:
+    """Whether the program `name`, given the words from `start` on, runs what stdin holds as shell
+    text: sudo, doas and screen when no command follows their options, su and script when they
+    have no command string, make when it reads its makefile from stdin, and eval."""
+    if name == EVAL:
+        return True
+    if name == MAKE:
+        return _make_reads_stdin_file(words[start:])
+    if name in COMMAND_STRING_READERS:
+        return not _has_command_string(words[start:])
+    return not _has_command(STDIN_READER_OPTIONS[name], words, start)
+
+
+def _feeds_a_stdin_reader(words: Sequence[str], head: _Head, fed: bool) -> bool:
+    """Whether a program in the head of a simple command runs what stdin holds as shell text, and
+    stdin is given to the command. A wrapper's options are read to the command it runs
+    (`sudo -s ls` runs `ls`), and the walk goes on to a reader that command is (`sudo su`).
+    Only the first su, script or make is read: it holds the words of any later one, and reading
+    each would be quadratic."""
+    if not _is_fed(words, fed):
+        return False
+    seen: set[str] = set()
+    for index in head.indices:
+        name = _basename(words[index])
+        if name not in STDIN_READERS or (name in seen and name not in STDIN_READER_OPTIONS):
+            continue
+        seen.add(name)
+        if _runs_stdin_as_commands(name, words, index + 1):
+            return True
+    return False
 
 
 def _sources_stdin(rest: Sequence[str]) -> bool:
@@ -1348,6 +1492,8 @@ def _runs_stdin(segment: str, fed: bool) -> bool:
     names = [_basename(words[index]) for index in head.indices]
     shell = next((i for i, name in zip(head.indices, names, strict=True) if name in SHELLS), None)
     if shell is not None and _feeds_shell(words[shell + 1 :], fed):
+        return True
+    if _feeds_a_stdin_reader(words, head, fed):
         return True
     if names and names[-1] in SOURCES and _sources_stdin(words[head.indices[-1] + 1 :]):
         return True
