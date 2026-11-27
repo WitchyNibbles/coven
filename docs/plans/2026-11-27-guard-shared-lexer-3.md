@@ -75,7 +75,13 @@ test"), used by Tasks 3-5.
   the first word after the options, or None when an option is not in the table (moved from pm's
   `_option_words` / `_wrapped_start`, numeric options included).
 - `READER_SYNTAX: Mapping[str, WrapperSyntax]`: sudo (its table plus `-s -i --shell --login` as
-  flags), doas (`-L -n -s` flags, `-u -C` valued), screen (pm's and prod's letters, identical).
+  flags), doas (its `WRAPPER_SYNTAX` entry as it is: `-u -C` valued, no flags, so `doas -n ls` is
+  no command, Review Focus 2), screen (pm's and prod's letters, identical). Where a reader's option
+  is a flag but a guard reads it as no command today, the table follows the stricter guard.
+  `READER_SYNTAX` serves only `runs_stdin_as_commands`; pm's and prod's walks keep their own
+  tables.
+- A shell given `-c` whose string's first word is a shell reads stdin (`| sh -c sh`), as a
+  command string does for su, runuser and script.
 - `STDIN_PATHS`, `MAKE_GLUED_FILE`, `INPUT_SOURCES`, `COMMAND_STRING_OPTIONS` (`-c`, `--command`,
   `--session-command`, glued `-<flags>c`).
 - `runs_stdin_as_commands(words: Sequence[str]) -> bool`, as the spec's design note for slice 2.
