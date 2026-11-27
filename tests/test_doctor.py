@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from isolation import SCRATCH_HOME
 from memory.memory_support import neutral_hook
 from pm.fixtures import SLEEP_CLI, fake_claude
 from support import commit_all, git
@@ -1030,3 +1031,12 @@ def test_a_refusal_log_fifo_does_not_hang_doctor(world):
     worker.start()
     worker.join(10)
     assert done, "doctor is stuck reading a FIFO"
+
+
+def test_the_config_helper_refuses_a_home_that_is_not_the_marked_scratch_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SCRATCH_HOME)
+    with pytest.raises(RuntimeError, match="scratch home"):
+        write_config(memory_path="/store")
+    assert not (Path(os.environ["HOME"]) / ".config").exists()

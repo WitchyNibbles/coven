@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from isolation import SCRATCH_HOME
 from support import REPO, commit_all, git
 
 from coven import cli, guard
@@ -708,3 +709,12 @@ def test_loading_the_hook_restores_the_bytecode_flag_and_sys_path(
         assert sys.path == before
     finally:
         guard.load_guard.cache_clear()
+
+
+def test_the_config_helper_refuses_a_home_that_is_not_the_marked_scratch_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SCRATCH_HOME)
+    with pytest.raises(RuntimeError, match="scratch home"):
+        write_config("{}")
+    assert not (Path(os.environ["HOME"]) / ".config").exists()

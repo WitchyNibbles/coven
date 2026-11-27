@@ -10,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from isolation import SCRATCH_HOME
 from support import load_module
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
@@ -218,3 +219,12 @@ def test_importing_it_and_reading_the_config_loads_none_of_the_heavy_modules() -
     loaded = new_modules("import guard_config; guard_config.guard_is_off()")
     assert "guard_config" in loaded
     assert not loaded & set(HEAVY), sorted(loaded & set(HEAVY))
+
+
+def test_the_config_helper_refuses_a_home_that_is_not_the_marked_scratch_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SCRATCH_HOME)
+    with pytest.raises(RuntimeError, match="scratch home"):
+        write_config("{}")
+    assert not (Path(os.environ["HOME"]) / ".config").exists()

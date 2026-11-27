@@ -18,6 +18,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from isolation import SCRATCH_HOME
 from support import load_module
 
 from coven import cli, paths
@@ -7342,3 +7343,12 @@ def test_no_approvals_never_reads_a_corrupt_approvals_folder(run: Run, example_s
     assert proc.returncode == 2
     assert "'example-db' is production" in proc.stderr
     assert OPENCODE_REFUSAL in proc.stderr
+
+
+def test_the_config_helper_refuses_a_home_that_is_not_the_marked_scratch_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SCRATCH_HOME)
+    with pytest.raises(RuntimeError, match="scratch home"):
+        write_config("{}")
+    assert not (Path(os.environ["HOME"]) / ".config").exists()

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from isolation import SCRATCH_HOME
 from support import REPO, git, neutral_hook
 
 from coven import approve, cli, guard
@@ -1182,3 +1183,12 @@ def test_a_guard_that_cannot_load_is_an_error_not_a_traceback(
         guard.load_guard.cache_clear()
     assert str(broken) in message
     assert approval_files(store) == []
+
+
+def test_the_config_helper_refuses_a_home_that_is_not_the_marked_scratch_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SCRATCH_HOME)
+    with pytest.raises(RuntimeError, match="scratch home"):
+        configure(Path("/store"))
+    assert not (Path(os.environ["HOME"]) / ".config").exists()
