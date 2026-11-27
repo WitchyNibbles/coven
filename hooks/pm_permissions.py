@@ -1799,6 +1799,17 @@ class WrapperSyntax(Protocol):
     def numeric(self) -> bool: ...
 
 
+@dataclass(frozen=True)
+class ExecSyntax:
+    """A wrapper's options, written here for one the shared table does not hold."""
+
+    flags: frozenset[str] = frozenset()
+    valued: frozenset[str] = frozenset()
+    operands: int = 0
+    assignments: bool = False
+    numeric: bool = False
+
+
 # The wrappers whose options the guard follows to the command they run (wrapper_commands.WALKED:
 # their tables list every option). An option not listed (`env -S`, `sudo -s`, `sudo -h`) is not
 # followed, and the wrapper's words are checked for a push, merge, send-pack or gh word instead
@@ -1810,6 +1821,15 @@ NUMERIC_OPTION: re.Pattern[str] = wrapper_commands.NUMERIC_OPTION
 # GNU parallel's options, to find the command it adds what it reads to. An option not listed means
 # the guard cannot tell where that command is.
 PARALLEL_SYNTAX: WrapperSyntax = wrapper_commands.WRAPPER_SYNTAX["parallel"]
+# screen's options (screen(1)), to find the command it runs (`screen -dmS name cmd`); a lone `-`
+# reads the commands from stdin, so it is no command.
+SCREEN_SYNTAX: WrapperSyntax = ExecSyntax(
+    flags=frozenset({"-", *(f"-{letter}" for letter in "aAdDfFilLmMOqQrRUvVxZ")}),
+    valued=frozenset(f"-{letter}" for letter in "cehpsStTX"),
+)
+# The wrappers that run a command only when given one as a string (`su -c`, `script -c`), and
+# otherwise start a shell that reads their stdin.
+COMMAND_STRING_ONLY = frozenset({"su", "script"})
 # The words after which parallel's arguments come, not its command.
 PARALLEL_SOURCES = frozenset({":::", "::::", ":::+", "::::+"})
 # The paths a command reads its stdin from, and make's short options with a file glued on.
@@ -2000,9 +2020,52 @@ def _reads_commands(words: Sequence[str], receiver: str, depth: int = 0) -> bool
         return _parallel_runs_its_input(_unwrapped(words).command)
     if receiver == "make":
         return _make_reads_its_makefile(_unwrapped(words).command)
-    return receiver in EXEC_WRAPPERS and any(
-        os.path.basename(word) in WORD_READERS for word in words
+    if receiver not in EXEC_WRAPPERS:
+        return False
+    if any(os.path.basename(word) in WORD_READERS for word in words):
+        return True
+    command = _unwrapped(words).command
+    if _exec_wrapper_has_no_command(command, receiver):
+        return True
+    inner = _exec_wrapper_command(command, receiver)
+    if not inner:
+        return False
+    # The command it runs reads the pipe as well (`doas su`); past MAX_NESTING, refuse.
+    return depth >= MAX_NESTING or _reads_commands(inner, _receiver(inner), depth + 1)
+
+
+def _has_command_string(command: Sequence[str]) -> bool:
+    """Whether a wrapper's options give it a command string (`-c`, `-qc`, `--command`)."""
+    return any(
+        word.partition("=")[0] == "--command"
+        or (word.startswith("-") and not word.startswith("--") and "c" in word)
+        for word in command[1:]
     )
+
+
+def _exec_wrapper_has_no_command(command: Sequence[str], name: str) -> bool:
+    """Whether an exec wrapper the guard does not walk runs no command of its own, so it starts a
+    shell that reads its stdin (`doas -s`, `script -q /dev/null`, `screen -`). The stricter side:
+    options the guard cannot follow count as no command. A wrapper with no table of its options
+    (`ssh -p 22 host`, `nsenter -t 1 -m`, `chroot --userspec a:b /r`) may start one whatever its
+    words say, so it reads its stdin."""
+    if name in COMMAND_STRING_ONLY:
+        return not _has_command_string(command)
+    syntax = SCREEN_SYNTAX if name == "screen" else wrapper_commands.WRAPPER_SYNTAX.get(name)
+    if syntax is not None:
+        start = _wrapped_start(syntax, command, 1)
+        return start is None or start >= len(command)
+    return True
+
+
+def _exec_wrapper_command(command: Sequence[str], name: str) -> list[str]:
+    """The words of the command an exec wrapper the guard does not walk runs, as far as its
+    options can be followed; empty for a wrapper that takes a command string or has no table."""
+    syntax = SCREEN_SYNTAX if name == "screen" else wrapper_commands.WRAPPER_SYNTAX.get(name)
+    if name in COMMAND_STRING_ONLY or syntax is None:
+        return []
+    start = _wrapped_start(syntax, command, 1)
+    return [] if start is None else list(command[start:])
 
 
 def _parallel_runs_its_input(command: Sequence[str]) -> bool:

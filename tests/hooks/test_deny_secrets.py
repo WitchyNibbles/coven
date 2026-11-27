@@ -365,6 +365,43 @@ def test_bash_command_with_a_ssh_dir_in_a_message_only_is_allowed(bash: Run) -> 
     assert bash("git commit -m 'x' && ls ~/.ssh").returncode == 2
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .{en,x}v",
+        "cat .e{n,x}v",
+        "cat '.e{n,m}v'",
+        "cat ~/.s{s,x}h/id_rsa",
+        "less .{en,x}v",
+        "cp .e{n,x}v /tmp/x",
+        "grep -r x .{en,x}v",
+        "echo x > .e{n,x}v",
+        "cat .e{{n,m},x}v",
+        "cat ~/.s{s,x}h",
+    ],
+)
+def test_a_brace_word_is_read_as_the_names_it_makes(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 2, command
+    assert "blocked" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat {a,b}.txt", "cat f{1..3}", "ls {src,tests}/x", "find . -name x -exec echo {} +"],
+)
+def test_a_brace_word_with_no_secret_name_is_allowed(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", ["cat f{1..100}", "cat {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"])
+def test_a_brace_word_it_cannot_expand_is_blocked_naming_braces(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 2
+    assert "brace" in proc.stderr
+
+
 def test_missing_shell_words_module_blocks(run_hook: Run, tmp_path: Path) -> None:
     lone = tmp_path / SCRIPT.name
     shutil.copy(SCRIPT, lone)
@@ -841,6 +878,13 @@ def test_a_dos_short_name_of_a_secret_is_blocked_as_a_read_search_or_glob_path(c
     assert call("Grep", pattern="KEY", path=target).returncode == 2, target
     assert call("Glob", pattern=f"{target}/*").returncode == 2, target
     assert call("Glob", pattern="*", path=target).returncode == 2, target
+
+
+def test_braces_in_a_search_glob_are_not_expanded_a_known_gap(call):
+    """The brace word `.{en,x}v` is refused in Bash (the corpus pins that), but Grep's `glob` and
+    Glob's `pattern` are not expanded: both are allowed, as at c202ca4. Slice 2 may close this."""
+    assert call("Grep", pattern="KEY", glob=".{en,x}v").returncode == 0
+    assert call("Glob", pattern=".{en,x}v").returncode == 0
 
 
 @pytest.mark.parametrize("tool", WRITERS)

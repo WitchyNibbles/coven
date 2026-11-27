@@ -3830,6 +3830,121 @@ def test_a_pipe_into_a_wrapped_shell_is_guarded(repo, command):
     assert_guarded(command, repo)
 
 
+# An exec wrapper the guard does not walk, with no command of its own (doas, script, screen) or with
+# no table of its options (ssh, nsenter, chroot, pkexec), may run the shell text it reads: a push or
+# merge piped into it runs.
+PIPES_INTO_A_WRAPPER_WITH_NO_COMMAND = [
+    "echo 'git push -f origin main' | doas -s",
+    "echo 'git push -f origin main' | script -q /dev/null",
+    "echo 'git push -f origin main' | screen -",
+    "echo 'git push -f origin main' | screen",
+    "echo 'gh pr merge 1' | doas -u me -s",
+    "echo 'git merge topic' | script -q /dev/null",
+    "echo 'git push -f origin main' | su",
+    # A wrapper with no table of its options may start a shell whatever its operands are.
+    "echo 'git push -f origin main' | nsenter -t 1 -m",
+    "echo 'git push -f origin main' | nsenter --target 1 --mount",
+    "echo 'git push -f origin main' | chroot --userspec a:b /r",
+    "echo 'git push -f origin main' | pkexec --user x",
+    "echo 'git push -f origin main' | ssh -p 22 host",
+    "echo 'git push -f origin main' | ssh -i k host",
+    "echo 'git push -f origin main' | ssh host cat",
+    "echo 'git push -f origin main' | flock -c ls /l",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPER_WITH_NO_COMMAND)
+def test_a_pipe_into_an_exec_wrapper_with_no_command_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# A command after the wrapper's options is judged as it is today: a shell among the words guards,
+# any other command does not.
+PIPES_INTO_A_WRAPPER_WITH_A_COMMAND = [
+    "echo 'git push -f origin main' | doas -u me ls",
+    "echo 'git push -f origin main' | script -q -c ls /dev/null",
+    "echo 'git push -f origin main' | screen -dmS x ls",
+    "echo 'git push -f origin main' | nice -n 5 cat",
+    "echo 'git push -f origin main' | timeout 9 cat",
+    "echo 'git push -f origin main' | sudo -u me ls",
+    # stdbuf has a table of its options: its command is cat.
+    "echo 'git push -f origin main' | stdbuf -oL cat",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPER_WITH_A_COMMAND)
+def test_a_pipe_into_a_wrapper_with_a_command_keeps_its_verdict(repo, command):
+    assert_unguarded(command, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'git push -f origin main' | doas -u me bash",
+        "echo 'git push -f origin main' | script -q -c bash /dev/null",
+        "echo 'git push -f origin main' | screen -dmS x sh",
+    ],
+)
+def test_a_pipe_into_a_wrapper_with_a_shell_command_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+# The command a wrapper runs is read as a receiver too: it reads the pipe as shell text when it
+# starts a shell, a stdin script or a makefile, however many wrappers come first.
+PIPES_INTO_A_WRAPPER_AROUND_A_READER = [
+    "echo 'git push -f origin main' | doas su",
+    "echo 'git push -f origin main' | doas script",
+    "echo 'git push -f origin main' | doas screen -",
+    "echo 'git push -f origin main' | doas sudo -s",
+    "echo 'git push -f origin main' | setsid doas -s",
+    "echo 'git push -f origin main' | stdbuf -oL su",
+    "echo 'git push -f origin main' | flock f make -f -",
+    "echo 'git push -f origin main' | ionice -c 2 script",
+]
+
+
+@pytest.mark.parametrize("command", PIPES_INTO_A_WRAPPER_AROUND_A_READER)
+def test_a_pipe_into_a_wrapper_around_a_reader_is_guarded(repo, command):
+    assert_guarded(command, repo)
+
+
+def test_a_pipe_into_wrappers_nested_past_the_cap_is_guarded(repo):
+    nested = "echo 'git push -f origin main' | " + "doas " * (pm.MAX_NESTING + 2) + "cat"
+    assert_guarded(nested, repo)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'git push -f origin main' | doas -u x cat",
+        "echo 'git push -f origin main' | nice -n 5 cat",
+        "echo 'git push -f origin main' | doas doas cat",
+        "stdbuf -oL cat <<EOF\ngit push -f origin main\nEOF",
+    ],
+)
+def test_a_pipe_into_a_wrapper_around_a_reader_of_data_keeps_its_verdict(repo, command):
+    assert_unguarded(command, repo)
+
+
+# The approval path (PermissionRequest) is not the guard: it refuses these texts by its own rules,
+# for its own reasons, and the guard's new reading does not change what it says.
+APPROVAL_PATH_REASONS = [
+    ("echo 'git push -f origin main' | doas -s", "is not allowed in an automatically approved"),
+    ("echo 'git push -f origin main' | script -q /dev/null", "is not allowed in an automatically"),
+    ("echo 'git push -f origin main' | screen -", "is not allowed in an automatically approved"),
+    ("git push origin feature | doas -s", "a pipe into doas is not approved automatically"),
+    ("git push origin feature | script -q /dev/null", "a pipe into script is not approved"),
+    ("git push origin feature | screen -", "a pipe into screen is not approved automatically"),
+]
+
+
+@pytest.mark.parametrize(("command", "reason"), APPROVAL_PATH_REASONS)
+def test_the_approval_path_verdict_on_a_pipe_into_an_exec_wrapper_is_unchanged(
+    repo, command, reason
+):
+    assert reason in denied(command, repo)
+
+
 # find runs the command after an exec action, up to its `;` or `{} +`: only that command counts.
 FIND_SEARCHES = [
     "find . -name '*.py' -exec grep -l merge {} +",

@@ -303,30 +303,51 @@ store and the approvals in it.
 
 pm-permissions, the production guard and the OpenCode server guard share one lexer cache, one brace
 expander, one `SHELL_READERS` list and one wrapper table (`hooks/wrapper_commands.py`). That is
-phase 1. The rest of the unification is phase 2 (task opencode-m2/6b), not built:
+phase 1. The rest of the unification is phase 2 (task opencode-m2/6b), in three slices. Slice 1
+closed four holes (the CHANGELOG lists them). Slices 2 and 3 are not built:
 
-- Each guard still builds its own shell tree and its own Moves analysis (what a command writes,
-  where it runs). The guards can still disagree on a command that none of the shared pieces covers.
-- Each guard keeps its own capability tables per program (what a program may read, write or run).
-  They are not one table.
-- Each guard is its own hook entry and reads the Bash text on its own.
-- pm-permissions keeps its own `_Scanner` and, on its approval path, a plain `shlex` split.
-- The OpenCode server guard keeps its `Argv` reader and the `_crude` fallback it uses when `Argv`
-  cannot read a text.
-- The production guard keeps its regex splitters beside the lexer.
+- Slice 2: each guard still has its own test of whether a command reads its input as commands
+  (the production guard's `_runs_stdin`, pm-permissions' `_reads_commands`, the OpenCode server
+  guard's piped-wrapper rule). They are not one function, so the guards can still disagree on a
+  piped command that none of the shared names covers.
+- Slice 3: each guard still builds its own shell tree and its own Moves analysis (what a command
+  writes, where it runs). The guards can still disagree on a command that none of the shared
+  pieces covers.
+- Slice 3: pm-permissions keeps its own `_Scanner` in guard mode, and the production guard keeps
+  its regex splitters beside the lexer.
+- Slice 3: the OpenCode server guard keeps its `Argv` reader and the `_crude` fallback it uses when
+  `Argv` cannot read a text.
+- Not planned: each guard keeps its own capability tables per program (what a program may read,
+  write or run), its own hook entry, and, on pm-permissions' approval path, a plain `shlex` split.
+  The approval path is a whitelist and stays as it is.
 
-Holes that were there before phase 1 and are still open (each is pinned in
-`tests/hooks/guard_corpus.py`, so a change that closes one shows as a reviewed diff):
+Holes that were there before slice 1 and are the same on main (c202ca4):
 
-- The production guard allows a claude start piped into `eval`, `make -f -`, `su -s`, `sudo -s`,
-  `doas -s`, `script` or `screen -`. It refuses the same text piped into `sh`, `parallel` and the
-  other shells. `mksh -c` and `pnpx` are closed.
-- pm-permissions says nothing about a push piped into `doas`, `script` or `screen -`, where it
-  refuses one piped into `sh`, `su` or `sudo`.
-- deny-secrets does no brace expansion: `cat .{en,x}v` (a secret file's name built by braces) is
-  allowed.
-- The OpenCode server guard walks past `parallel`, `sudo` and `doas` as wrappers, so a body piped
-  into one of them (`echo 'opencode db' | sudo -s`) is not read as shell text.
+- The OpenCode server guard allows `echo x | (sh)`, `echo x | (sudo -s)` and
+  `echo x | if true; then sh; fi`.
+- pm-permissions, guard mode, allows a push piped into `runuser x` (the table gives `runuser` no
+  operands, so its first positional, a user, starts a shell) and into `busybox login`. (`busybox
+  su` and `busybox ssh` are refused since the final fix round of slice 1: a wrapper's command is
+  read as a receiver too, so `doas su` and the like are closed with them.)
+- deny-secrets does not expand braces in Grep's `glob` or Glob's `pattern` (a test pins it, since
+  the corpus holds Bash commands only), and does not join a name split by quotes (`cat .e"n"v`,
+  `cat .{"en",x}v`, `cat ~/.s"s"h/id_rsa`) or by `${y}` splicing (`cat .e${y}nv`).
+- The production guard allows a claude start piped into `script -qc sh /dev/null` or `sh -c sh`, a
+  shell named by `$(echo sh)` in command position, and `eval "$(cat)" < x.txt; echo <claude
+  start>` (the `$(` splits the redirect off). It refuses one piped into `script -c sh`.
+- The production guard and the OpenCode server guard allow a body (a claude start, `opencode db`)
+  piped into `chroot /r`, `unshare`, `pkexec`, `firejail`, `sg grp`, `nsenter -t 1 -m` or
+  `runuser x`, programs that start a shell when they are given no command.
+- pm-permissions, guard mode: a wrapper the guard does not walk but has an option table for (the
+  `WRAPPER_SYNTAX` entries `doas`, `setsid`, `flock`, `ionice` and the like) is read through that
+  table. An option the table does not know stops the reading and is refused. A table whose
+  operand count is off, or that lists an option as valued when it is not, makes the guard judge
+  the wrong word as the receiver: `| runuser x` and `| busybox login` are allowed, also behind
+  `doas`. A wrapper with no table at all is refused whatever follows it.
+- The OpenCode server guard has no deadline of its own. A long chain of `screen -X` words makes
+  its reading slow, and the time grows with the square of the length: about 15 s at 1,000 words
+  and 65 s at 2,000, on the same code at c202ca4 and now. The plugin's 5 s timeout
+  (`opencode/src/guard.ts`) is the only bound; a call that reaches it is refused.
 - The wrapper table's entries for `strace`, `ltrace`, `parallel`, `doas`, `busybox`, `unbuffer`,
   `bunx` and `pnpx` come from upstream pages or help text, because these programs' man pages were
   not on the machine that wrote them. The other entries cite a man page or upstream source.
