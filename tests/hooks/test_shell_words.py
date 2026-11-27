@@ -1518,6 +1518,25 @@ def test_brace_words_expand_what_the_guards_over_expand(word: str, words: list[s
     assert brace_words(word) == words
 
 
+@pytest.mark.parametrize(
+    "word",
+    [
+        "{a..~}",
+        "{a..一}",
+        "{....}",
+        "{/../}",
+        "a{....}b",
+        "P/{/../}/../X",
+        "{a..1}",
+        "{@..C}",
+        "{é..ü}",
+    ],
+)
+def test_a_letter_range_has_a_single_ascii_letter_at_each_end(word: str) -> None:
+    """Bash expands `{a..e}` and `{A..z}` and keeps any other brace as the word is written."""
+    assert brace_words(word) == [word]
+
+
 def test_a_brace_word_that_holds_a_parameter_is_read_around_it() -> None:
     assert brace_words("a{b,c}") == ["ab", "ac"]
     assert brace_words("{a,b}${c}") == ["a${c}", "b${c}"]
@@ -1531,8 +1550,7 @@ def test_brace_words_are_at_most_the_member_cap() -> None:
     assert brace_words("{65..1}") is None
     assert len(brace_words("{1..127..2}") or []) == 64
     assert brace_words("{1..129..2}") is None
-    assert len(brace_words("{a..~}") or []) == 30
-    assert brace_words("{a..一}") is None
+    assert len(brace_words("{A..z}") or []) == 58
     assert len(brace_words("{" + ",".join("a" for _ in range(64)) + "}") or []) == 64
     assert brace_words("{" + ",".join("a" for _ in range(65)) + "}") is None
     assert len(brace_words("{a,b}" * 6) or []) == 64

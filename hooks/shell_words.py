@@ -1607,9 +1607,15 @@ def _is_integer(text: str) -> bool:
     return (text[1:] if text.startswith("-") else text).isdecimal()
 
 
+def _is_ascii_letter(char: str) -> bool:
+    """Whether `char` is one of a-z and A-Z, the only characters a brace range's letter ends are."""
+    return char.isascii() and char.isalpha()
+
+
 def _parse_range(content: str) -> _Range | None:
     """The range that the inside of a brace is (`1..3`, `a..e`, either with `..step`); None when it
-    is not one (`{a}`, `{1..a}`, `{aa..bb}`)."""
+    is not one (`{a}`, `{1..a}`, `{aa..bb}`, `{....}`, `{/../}`): a letter range has a single ASCII
+    letter at both ends, and bash keeps any other brace as the literal word."""
     first, dots, rest = content.partition("..")
     if dots and _is_integer(first):
         last, more, every = rest.partition("..")
@@ -1619,8 +1625,8 @@ def _parse_range(content: str) -> _Range | None:
     letters = (
         len(content) >= LETTER_RANGE_LENGTH
         and content[1:3] == ".."
-        and not content[0].isdecimal()
-        and not content[3].isdecimal()
+        and _is_ascii_letter(content[0])
+        and _is_ascii_letter(content[3])
     )
     if not letters:
         return None

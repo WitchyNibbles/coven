@@ -853,6 +853,26 @@ ENTRIES = (
     Entry("valued-chrt-T-opencode", "chrt -T opencode db", (A, N, A, R)),
     Entry("valued-chrt-sched-runtime-opencode", "chrt --sched-runtime opencode db", (A, N, A, R)),
     Entry("valued-flock-wait-opencode", "flock --wait opencode db", (A, N, A, R)),
+    # Ruling 10: a reading of a command holds the shell it reads a body for (here-string, heredoc).
+    Entry("valued-sudo-host-shell-herestring", "sudo --host sh <<< 'opencode db'", (A, N, A, R)),
+    Entry(
+        "valued-stdbuf-output-shell-heredoc",
+        "stdbuf --output sh <<'EOF'\nopencode db\nEOF",
+        (A, N, A, R),
+    ),
+    Entry("valued-chrt-D-shell-herestring", "chrt -D x sh <<< 'opencode db'", (A, N, A, R)),
+    Entry(
+        "valued-flock-wait-shell-herestring", "flock --wait x sh <<< 'opencode db'", (A, N, A, R)
+    ),
+    Entry(
+        "valued-parallel-colsep-shell-herestring",
+        "parallel --colsep sh <<< 'opencode db'",
+        (A, N, A, R),
+    ),
+    # Ruling 11: a brace the shell keeps literal, and a range the guard expands, are both read.
+    Entry("braces-range-one-letter-literal", "rm -rf <home>/.{c..c}laude/skills", (A, N, R, R)),
+    Entry("braces-slash-dots-literal", "rm -rf <home>/{/../}claude/skills", (A, N, R, R)),
+    Entry("braces-four-dots-literal", "rm -rf <home>/{....}claude/skills", (A, N, R, R)),
     Entry("wrap-ionice-push", "ionice -c 3 git push -f origin main", (A, R, A, A)),
     Entry("wrap-ionice-opencode", "ionice -c 3 opencode db", (A, N, A, R)),
     Entry("wrap-ionice-claude", "ionice -c 3 claude -p hi", (A, N, R, A)),

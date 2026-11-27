@@ -262,6 +262,7 @@ def holds_closed_place(path: Path, view: "View", mode: Mode) -> str | None:
 ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.DOTALL)
 WORD_BREAKS = re.compile(r"[\s;|&<>()]+")
 PART_BREAKS = re.compile(r"[=,:{}]")
+BRACE_LIST = re.compile(r"\{[^{}]*,[^{}]*\}")  # a brace list with no brace in it
 ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=([^\s;|&<>()]*)")
 VARIABLE = re.compile(r"\$(?:\{(\w+)\}|([A-Za-z_]\w*)|[$?!#@*0-9_-])")
 UNRESOLVED = re.compile(r"\$[A-Za-z_{]")
@@ -347,11 +348,15 @@ def _brace_words(word: str, *, one_word: bool = False) -> list[str]:
 
 def _words_of(quoting: Quoting) -> list[str]:
     """Every word, brace expansion of a word and part of a word (`--opt=/x`, `A=/x:/y`) of the
-    text under each of its variants, without repeats."""
+    text under each of its variants, without repeats. The word as written is read too, with its
+    parts when it holds no brace list: a range the guard expands (`.{c..c}laude`) may be one the
+    shell keeps literal (`{....}`), and the parts of the literal word (`<home>/.`, `laude/skills`)
+    were read before ranges were expanded. A brace list is read as the words it makes."""
     found: dict[str, None] = {}
     for variant in quoting.variants:
         for chunk in WORD_BREAKS.split(variant):
-            for word in _brace_words(chunk) if chunk else []:
+            literal = [] if BRACE_LIST.search(chunk) else [chunk]
+            for word in [*literal, *_brace_words(chunk)] if chunk else []:
                 found[word] = None
                 found.update(dict.fromkeys(part for part in PART_BREAKS.split(word) if part))
     return list(found)
@@ -628,6 +633,8 @@ class Argv:
         the man page says a nanosecond count), and the table follows the program; this guard
         checks both readings, so what it refused as the command before it refuses still. More than
         MAX_LOOSE_READINGS of them are refused: every reading is a check of the whole command."""
+        if self.loose:
+            return ()  # a reading is not read again
         walk = self._unwrapping
         positions = [
             position for position in walk.valued if not walk.words[position + 1].startswith("-")
@@ -992,12 +999,10 @@ def _find_actions(words: Sequence[str], piped: bool) -> list[Argv]:
     return actions
 
 
-def _nested(argv: Argv, depth: int) -> list[Argv]:
-    """The commands inside one: shell strings, `eval`, runner strings and find actions."""
-    if depth > MAX_NESTING:
-        raise RefusedError("a command nested this deeply cannot be checked")
+def _bodies(argv: Argv) -> list[str]:
+    """The texts a command runs or reads as shell: its shell strings, `eval`, runner strings and
+    `$(...)`, and the heredocs, here-strings and files it feeds to a shell that reads them."""
     command = argv.command
-    found: list[Argv] = []
     strings = [
         *_command_strings(argv.words),
         *_command_strings(command),
@@ -1006,13 +1011,54 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
     ]
     if command and _base(command[0]) in SHELL_READERS:
         strings.extend(argv.inputs)
-    for inner in strings:
-        found.extend(argvs(inner, depth + 1))
+    return strings
+
+
+def _actions(argv: Argv) -> list[Argv]:
+    """The commands of the `-exec` actions of a `find` command."""
+    command = argv.command
     if command and _base(command[0]) == "find":
-        for action in _find_actions(command[1:], argv.piped):
-            found.append(action)
-            found.extend(_nested(action, depth + 1))
+        return _find_actions(command[1:], argv.piped)
+    return []
+
+
+def _nested(argv: Argv, depth: int) -> list[Argv]:
+    """The commands inside one: shell strings, `eval`, runner strings and find actions."""
+    if depth > MAX_NESTING:
+        raise RefusedError("a command nested this deeply cannot be checked")
+    found: list[Argv] = []
+    for inner in _bodies(argv):
+        found.extend(argvs(inner, depth + 1))
+    for action in _actions(argv):
+        found.append(action)
+        found.extend(_nested(action, depth + 1))
     found.extend(_anywhere_commands(argv.words, argv.piped))
+    return found
+
+
+def _loose_nested(argv: Argv, depth: int) -> list[Argv]:
+    """The commands inside the other readings of one (`Argv.loose_readings`) that its own reading
+    does not hold: a valued option read as a flag may leave a shell as the command, and the
+    heredoc, here-string or string it reads is then a body to check. Each text or action is read
+    once, so the work stays that of the command's words."""
+    readings = argv.loose_readings
+    if not readings:
+        return []
+    if depth > MAX_NESTING:
+        raise RefusedError("a command nested this deeply cannot be checked")
+    seen = set(_bodies(argv))
+    known = {each.words for each in _actions(argv)}
+    found: list[Argv] = []
+    for reading in readings:
+        for inner in _bodies(reading):
+            if inner not in seen:
+                seen.add(inner)
+                found.extend(argvs(inner, depth + 1))
+        for action in _actions(reading):
+            if action.words not in known:
+                known.add(action.words)
+                found.append(action)
+                found.extend(_nested(action, depth + 1))
     return found
 
 
@@ -1110,6 +1156,7 @@ def argvs(text: str, depth: int = 0) -> list[Argv]:
     for argv in _commands(text):
         found.append(argv)
         found.extend(_nested(argv, depth))
+        found.extend(_loose_nested(argv, depth))
     return found
 
 
