@@ -3830,8 +3830,9 @@ def test_a_pipe_into_a_wrapped_shell_is_guarded(repo, command):
     assert_guarded(command, repo)
 
 
-# An exec wrapper the guard does not walk (doas, script, screen) with no command of its own runs
-# the shell text it reads: a push or merge piped into it runs.
+# An exec wrapper the guard does not walk, with no command of its own (doas, script, screen) or with
+# no table of its options (ssh, nsenter, chroot, pkexec), may run the shell text it reads: a push or
+# merge piped into it runs.
 PIPES_INTO_A_WRAPPER_WITH_NO_COMMAND = [
     "echo 'git push -f origin main' | doas -s",
     "echo 'git push -f origin main' | script -q /dev/null",
@@ -3840,6 +3841,15 @@ PIPES_INTO_A_WRAPPER_WITH_NO_COMMAND = [
     "echo 'gh pr merge 1' | doas -u me -s",
     "echo 'git merge topic' | script -q /dev/null",
     "echo 'git push -f origin main' | su",
+    # A wrapper with no table of its options may start a shell whatever its operands are.
+    "echo 'git push -f origin main' | nsenter -t 1 -m",
+    "echo 'git push -f origin main' | nsenter --target 1 --mount",
+    "echo 'git push -f origin main' | chroot --userspec a:b /r",
+    "echo 'git push -f origin main' | pkexec --user x",
+    "echo 'git push -f origin main' | ssh -p 22 host",
+    "echo 'git push -f origin main' | ssh -i k host",
+    "echo 'git push -f origin main' | ssh host cat",
+    "echo 'git push -f origin main' | flock -c ls /l",
 ]
 
 
@@ -3857,6 +3867,8 @@ PIPES_INTO_A_WRAPPER_WITH_A_COMMAND = [
     "echo 'git push -f origin main' | nice -n 5 cat",
     "echo 'git push -f origin main' | timeout 9 cat",
     "echo 'git push -f origin main' | sudo -u me ls",
+    # stdbuf has a table of its options: its command is cat.
+    "echo 'git push -f origin main' | stdbuf -oL cat",
 ]
 
 

@@ -167,15 +167,7 @@ except Exception as exc:
     wrapper_commands = ModuleType("wrapper_commands")
     vars(wrapper_commands).update(
         dict.fromkeys(
-            (
-                "SHELLS",
-                "SHELL_KEYWORDS",
-                "WRAPPERS",
-                "EXEC_WRAPPERS",
-                "WALKED",
-                "POSITIONAL_WRAPPERS",
-            ),
-            frozenset[str](),
+            ("SHELLS", "SHELL_KEYWORDS", "WRAPPERS", "EXEC_WRAPPERS", "WALKED"), frozenset[str]()
         ),
         WRAPPER_SYNTAX={"parallel": None},
         NUMERIC_OPTION=re.compile(r"(?!)"),
@@ -264,8 +256,6 @@ WRAPPERS: frozenset[str] = wrapper_commands.WRAPPERS - wrapper_commands.SHELL_KE
 # Commands that run the rest of their words as a command, with options the guard does not follow:
 # a push, merge, send-pack or gh word among their words guards. find does so with an exec action.
 EXEC_WRAPPERS: frozenset[str] = wrapper_commands.EXEC_WRAPPERS
-# The wrappers that take one word before the command (`ssh HOST`, `chroot ROOT`, `script FILE`).
-POSITIONAL_WRAPPERS: frozenset[str] = wrapper_commands.POSITIONAL_WRAPPERS
 FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
 # The words that open and close a group or compound command, at the start of a command: a pipe
@@ -2047,18 +2037,18 @@ def _has_command_string(command: Sequence[str]) -> bool:
 
 
 def _exec_wrapper_has_no_command(command: Sequence[str], name: str) -> bool:
-    """Whether an exec wrapper the guard does not walk (doas, script, screen) runs no command of
-    its own, so it starts a shell that reads its stdin (`doas -s`, `script -q /dev/null`, `screen -`).
-    The stricter side: options the guard cannot follow count as no command. A wrapper with no
-    table of its options has a command when a word beyond its operands is not an option."""
+    """Whether an exec wrapper the guard does not walk runs no command of its own, so it starts a
+    shell that reads its stdin (`doas -s`, `script -q /dev/null`, `screen -`). The stricter side:
+    options the guard cannot follow count as no command. A wrapper with no table of its options
+    (`ssh -p 22 host`, `nsenter -t 1 -m`, `chroot --userspec a:b /r`) may start one whatever its
+    words say, so it reads its stdin."""
     if name in COMMAND_STRING_ONLY:
         return not _has_command_string(command)
     syntax = SCREEN_SYNTAX if name == "screen" else wrapper_commands.WRAPPER_SYNTAX.get(name)
     if syntax is not None:
         start = _wrapped_start(syntax, command, 1)
         return start is None or start >= len(command)
-    operands = 1 if name in POSITIONAL_WRAPPERS else 0
-    return sum(not word.startswith("-") for word in command[1:]) <= operands
+    return True
 
 
 def _parallel_runs_its_input(command: Sequence[str]) -> bool:
