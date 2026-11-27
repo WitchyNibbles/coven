@@ -87,6 +87,34 @@ review of that path.
   word that is a shell reader or a walked wrapper that runs a shell on stdin (`sudo -s`, `doas -s`,
   `parallel` with no command) makes the piped body shell text; `_bodies` gets the same rule.
 
+## Design notes for slice 2
+
+Slice 2 also takes the duplicates the slice 1 review named: the screen option table, the
+command-string test and prod's own option walker.
+
+- One option walker in `wrapper_commands`: pm's `_option_words` / `_wrapped_start` (it already
+  reads numeric options such as `nice -5`). An option a table does not list ends the walk with no
+  command (the stricter side, as prod and pm read it today). pm's `_unwrapped` and prod's
+  `_has_command` call it; opencode's own walk (`_skip_options`, which reads an unlisted option as a
+  flag) is slice 3's tree work and stays.
+- One table of the readers' options in `wrapper_commands`, beside `WRAPPER_SYNTAX`: sudo with its
+  shell options as flags, doas with `-L -n -s`, screen's letters. Each name has one entry; prod's
+  `STDIN_READER_OPTIONS`, pm's `SCREEN_SYNTAX` and the duplicated `STDIN_PATHS`,
+  `MAKE_GLUED_FILE` and parallel-source sets go.
+- `runs_stdin_as_commands(words)` in `wrapper_commands`: `words[0]` is the receiver after the
+  guard's own walk, the rest its words. True for a shell that reads stdin (prod's
+  `_shell_reads_stdin`, unknown means True), `eval`, `make` with `-f -`, `su`, `runuser` and
+  `script` with no command string or one whose first word is a shell, sudo, doas and screen with no
+  command after their options, and `parallel` with no command. False for any other name: each guard
+  keeps its own policy for names the test does not know (pm's untabled-wrapper rule and its
+  recursion, prod's bare `parallel`, opencode's refusal of a piped command named in
+  `SHELL_READERS` whatever its options).
+- Each guard's pipe rule asks the shared test; where a guard's own rule is broader, it stays beside
+  the test as an extra refusal, named in the PR. A move toward allow in any guard is a bug in the
+  shared test, which is then made stricter.
+- pm's damaged-hooks stub defines every new name the module reads at load, and a missing or broken
+  `wrapper_commands` still refuses in all three guards.
+
 ## Constraints
 
 - The guards' own tests stay green unchanged, except expected values listed as tightening.
