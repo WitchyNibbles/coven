@@ -365,6 +365,43 @@ def test_bash_command_with_a_ssh_dir_in_a_message_only_is_allowed(bash: Run) -> 
     assert bash("git commit -m 'x' && ls ~/.ssh").returncode == 2
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .{en,x}v",
+        "cat .e{n,x}v",
+        "cat '.e{n,m}v'",
+        "cat ~/.s{s,x}h/id_rsa",
+        "less .{en,x}v",
+        "cp .e{n,x}v /tmp/x",
+        "grep -r x .{en,x}v",
+        "echo x > .e{n,x}v",
+        "cat .e{{n,m},x}v",
+        "cat ~/.s{s,x}h",
+    ],
+)
+def test_a_brace_word_is_read_as_the_names_it_makes(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 2, command
+    assert "blocked" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat {a,b}.txt", "cat f{1..3}", "ls {src,tests}/x", "find . -name x -exec echo {} +"],
+)
+def test_a_brace_word_with_no_secret_name_is_allowed(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("command", ["cat f{1..100}", "cat {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"])
+def test_a_brace_word_it_cannot_expand_is_blocked_naming_braces(bash: Run, command: str) -> None:
+    proc = bash(command)
+    assert proc.returncode == 2
+    assert "brace" in proc.stderr
+
+
 def test_missing_shell_words_module_blocks(run_hook: Run, tmp_path: Path) -> None:
     lone = tmp_path / SCRIPT.name
     shutil.copy(SCRIPT, lone)

@@ -120,6 +120,11 @@ SSH_DIR_ANY_CASE = re.compile(SSH_DIR.pattern, re.IGNORECASE)
 SHORT_NAME = re.compile(r"(?:env|ssh)[^/~]{0,5}~\d+(?:\.[^/]{0,3})?", re.IGNORECASE)
 # What splits a Bash command into the words a short name is looked for in, as for `.env`.
 SHELL_WORD_BREAK = re.compile(r"[\s\"'`;&|()<>=:,{}\\]+")
+# What cuts a Bash command into the words a brace is read in: blanks and the operators, but not the
+# quotes, the backslash, `,` or the braces, which `shell_words.brace_words` reads itself.
+BRACE_WORD_SPLIT = re.compile(r"[\s;&|()<>`]+")
+UNREADABLE_BRACES = "a brace word it cannot expand"
+BRACE_WORD_SHOWN = 40
 # The basenames a write target counts as an env file by, case-folded (`.environment.yml` is not).
 ENV_NAMES = frozenset({".env", ".envrc"})
 ENV_PREFIXES = (".env.", ".env-", ".env_")
@@ -376,20 +381,44 @@ def unglued_match(pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
     return next((m for m in matches if not follows_call_or_index(text, m.start())), None)
 
 
-def text_hit(checked: Checked, cwd: object, home: Path) -> Hit | None:
-    """A `.env…` or `.ssh` word in one string of a Read, Grep, Glob or Bash call, or a short name
-    in one of its paths or as a word of its command (the data parts blanked, as for `.env`). The
-    basename of a path that is an env template is left out."""
-    text = checked.text
-    if checked.kind == PATH and is_template_path(text, cwd, home):
-        text = os.path.dirname(text)
+def secret_name(text: str, kind: str) -> str | None:
+    """The guarded name in one string: a `.env…` or `.ssh` word (an attribute of a call or an index
+    does not count), or a short name in a path or in a word of a command."""
     for pattern in (ENV_FILE, SSH_DIR):
         match = unglued_match(pattern, text)
         if match:
-            return Hit(match.group(1), "secrets")
-    words = {PATH: [text], COMMAND: SHELL_WORD_BREAK.split(text)}.get(checked.kind, [])
-    short = next(filter(None, map(short_name, words)), None)
-    return Hit(short, "secrets") if short else None
+            return match.group(1)
+    words = {PATH: [text], COMMAND: SHELL_WORD_BREAK.split(text)}.get(kind, [])
+    return next(filter(None, map(short_name, words)), None)
+
+
+def brace_hit(command: str) -> Hit | None:
+    """A word of a command that holds a brace, read as the words the shell makes of it
+    (shell_words.brace_words): a guarded name in one of them, or a word that cannot be expanded
+    (more than the cap, a range that holds a variable), which is refused."""
+    expand = hook_support.sibling("shell_words").brace_words
+    for word in filter(lambda part: "{" in part, BRACE_WORD_SPLIT.split(command)):
+        made: list[str] | None = expand(word)
+        if made is None:
+            return Hit(f"{word[:BRACE_WORD_SHOWN]}...", UNREADABLE_BRACES)
+        name = next(filter(None, (secret_name(one, COMMAND) for one in made)), None)
+        if name:
+            return Hit(name, "secrets")
+    return None
+
+
+def text_hit(checked: Checked, cwd: object, home: Path) -> Hit | None:
+    """A `.env…` or `.ssh` word in one string of a Read, Grep, Glob or Bash call, or a short name
+    in one of its paths or as a word of its command (the data parts blanked, as for `.env`). The
+    basename of a path that is an env template is left out. A word of a command that holds a brace
+    is read as the names it expands to too."""
+    text = checked.text
+    if checked.kind == PATH and is_template_path(text, cwd, home):
+        text = os.path.dirname(text)
+    name = secret_name(text, checked.kind)
+    if name:
+        return Hit(name, "secrets")
+    return brace_hit(text) if checked.kind == COMMAND else None
 
 
 def blocked(payload: dict[str, object]) -> Hit | None:
