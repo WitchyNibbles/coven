@@ -348,13 +348,15 @@ READER_SYNTAX: Mapping[str, WrapperSyntax] = {
 }
 # The paths a command reads its stdin from, and make's short options with a file glued on.
 STDIN_PATHS = frozenset({"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"})
-MAKE_GLUED_FILE = re.compile(r"-[A-Za-z]*f(?P<path>.+)")  # `-f-`, `-sf/dev/stdin`
+# `-f-`, `-sf/dev/stdin`. DOTALL: without it a newline in the word ends `.+` early, and the
+# pattern backtracks over every f of `-fff...f` (quadratic).
+MAKE_GLUED_FILE = re.compile(r"-[A-Za-z]*f(?P<path>.+)", re.DOTALL)
 # parallel's argument separators: the words after one are its inputs, and maybe its commands.
 INPUT_SOURCES = frozenset({":::", "::::", ":::+", "::::+"})
 # The options that give su, runuser and script a command string; `-c` also comes glued to other
-# short options (`-qc`) or to its value (`-cls`), which `_COMMAND_CLUSTER` reads.
+# short options (`-qc`) or to its value (`-cls`), which `_glued_command_string` reads.
 COMMAND_STRING_OPTIONS = frozenset({"-c", "--command", "--session-command"})
-_COMMAND_CLUSTER = re.compile(r"-[A-Za-z]*?c(?P<glued>.*)")
+_LETTERS = re.compile(r"[A-Za-z]*")
 _COMMAND_STRING_READERS = frozenset({"su", "runuser", "script"})
 
 _REDIRECT = re.compile(r"\d*(?:<|>|&>)")
@@ -392,18 +394,26 @@ def _shell_reads_stdin(words: Sequence[str]) -> bool:
     return True
 
 
+def _glued_command_string(word: str) -> str | None:
+    """What follows the `c` of a short option word whose letters before it are all options
+    (`-qc` gives "", `-cls` gives "ls"); None for any other word. One scan, no backtracking."""
+    if word[:1] != "-":
+        return None
+    letters, found, glued = word[1:].partition("c")
+    return glued if found and _LETTERS.fullmatch(letters) else None
+
+
 def _command_string_reads_stdin(words: Sequence[str]) -> bool:
     """Whether su, runuser or script given `words` run no command string, or one that starts a
     shell: `-c`, `-qc`, `--command` or `--session-command`, each with its value (glued on, after
     `=`, or the next word). An option with no value is no command."""
     for index, word in enumerate(words[1:], start=1):
         option, equals, value = word.partition("=")
-        cluster = _COMMAND_CLUSTER.fullmatch(word)
+        glued = _glued_command_string(word)
         if option in COMMAND_STRING_OPTIONS and equals:
             return _starts_a_shell(value)
-        if option not in COMMAND_STRING_OPTIONS and cluster is None:
+        if option not in COMMAND_STRING_OPTIONS and glued is None:
             continue
-        glued = cluster["glued"] if cluster else ""
         if glued:
             return _starts_a_shell(glued)
         return index + 1 >= len(words) or _starts_a_shell(words[index + 1])
@@ -424,19 +434,41 @@ def _make_reads_stdin_file(words: Sequence[str]) -> bool:
     return False
 
 
-def _runs_no_command(syntax: WrapperSyntax, words: Sequence[str]) -> bool:
-    """Whether a wrapper's words hold no command after its options: an option the table does not
-    list, a stdin redirect before any word, or nothing left (the stricter side)."""
-    index = option_words(syntax, words, 1)
-    if index is None:
-        return True
+def _command_index(words: Sequence[str], index: int, assignments: bool) -> int | None:
+    """Where the command is, from `index` (just after a wrapper's options), or None when none
+    follows: redirects (`>out`, or a bare `>` and its target) and, with `assignments`, `NAME=value`
+    words come before it, and a stdin redirect leaves none (the stricter side)."""
     while index < len(words):
-        if _STDIN_REDIRECT.match(words[index]):
-            return True
-        if not _REDIRECT.match(words[index]):  # `>out`, or a bare `>` and its target, are skipped
-            return False
-        index += 2 if _REDIRECT_OPERATOR.fullmatch(words[index]) else 1
-    return True
+        word = words[index]
+        if _STDIN_REDIRECT.match(word):
+            return None
+        if _REDIRECT.match(word):
+            index += 2 if _REDIRECT_OPERATOR.fullmatch(word) else 1
+        elif assignments and _ASSIGNMENT.match(word):
+            index += 1
+        else:
+            return index
+    return None
+
+
+def _runs_no_command(name: str, words: Sequence[str]) -> bool:
+    """Whether the words of sudo, doas or screen hold no command after their options: an option
+    the table does not list, or nothing left but redirects (and assignments: doas has no entry
+    for them, but `doas A=1` runs nothing)."""
+    syntax = READER_SYNTAX[name]
+    index = option_words(syntax, words, 1)
+    assignments = syntax.assignments or name == "doas"
+    return index is None or _command_index(words, index, assignments) is None
+
+
+def _parallel_has_no_command(words: Sequence[str]) -> bool:
+    """Whether parallel's words hold no command: none after its options and redirects and
+    assignments, or arguments (`:::`) first, so it runs its input lines."""
+    start = option_words(WRAPPER_SYNTAX["parallel"], words, 1)
+    if start is None:
+        return True
+    index = _command_index(words, start, assignments=True)
+    return index is None or words[index] in INPUT_SOURCES
 
 
 def runs_stdin_as_commands(words: Sequence[str]) -> bool:
@@ -459,11 +491,8 @@ def runs_stdin_as_commands(words: Sequence[str]) -> bool:
     if name in _COMMAND_STRING_READERS:
         return _command_string_reads_stdin(words)
     if name in READER_SYNTAX:
-        return _runs_no_command(READER_SYNTAX[name], words)
-    if name == "parallel":
-        start = option_words(WRAPPER_SYNTAX["parallel"], words, 1)
-        return start is None or start >= len(words) or words[start] in INPUT_SOURCES
-    return False
+        return _runs_no_command(name, words)
+    return name == "parallel" and _parallel_has_no_command(words)
 
 
 # Commands that run a program named later in their arguments (`uv run ssh`, `uvx`, `pipx run`,

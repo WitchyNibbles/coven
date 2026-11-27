@@ -4,7 +4,10 @@ is one, else the upstream page named in `wrapper_commands.py`), so an option an 
 wrongly is corrected here, and the word after a flag is still the command. How each guard follows
 the table is its own; the corpus (`test_guard_corpus.py`) pins the verdicts."""
 
+import io
+import json
 import sys
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -534,6 +537,15 @@ READS_STDIN = [
     ["sudo", "-u", "me"],
     ["sudo", "A=1"],
     ["sudo", "<in", "ls"],
+    ["sudo", ">out"],  # a redirect is not a command
+    ["sudo", ">", "out"],
+    ["sudo", ">out", "A=1"],
+    ["sudo", ">", "out", "A=1", "<in"],
+    ["doas", "A=1"],  # nor is an assignment
+    ["parallel", "A=1"],
+    ["parallel", ">out"],
+    ["parallel", ">", "out"],
+    ["parallel", ">out", "A=1", ":::", "a"],
     ["sudo", "-h", "h", "ls"],  # `-h` is not an option the table can follow
     ["doas"],
     ["doas", "-s"],
@@ -583,6 +595,11 @@ READS_NO_STDIN = [
     ["sudo", "A=1", "ls"],
     ["sudo", "-s", "ls"],
     ["sudo", ">out", "ls"],
+    ["sudo", ">", "out", "ls"],
+    ["sudo", ">out", "A=1", "ls"],
+    ["doas", "A=1", "ls"],
+    ["parallel", ">out", "echo"],
+    ["parallel", "A=1", "echo"],
     ["doas", "-u", "x", "cat"],
     ["doas", "cat"],
     ["screen", "-dmS", "x", "ls"],
@@ -686,11 +703,30 @@ def test_the_test_reads_each_word_once(words: list[str]) -> None:
     assert isinstance(table.runs_stdin_as_commands(words), bool)
 
 
+@pytest.mark.parametrize(
+    ("words", "reads"),
+    [
+        (["su", "-" + "c" * 12_000 + "\n"], False),  # `-ccc...`, then a newline
+        (["su", "-" + "x" * 12_000 + "c\n"], False),
+        (["make", "-" + "f" * 12_000 + "\n"], False),
+        (["make", "-" + "f" * 12_000 + "-"], True),
+        (["script", "-" + "q" * 12_000], True),
+    ],
+    ids=["su-cccc", "su-xxxc", "make-ffff", "make-ffff-stdin", "script-qqqq"],
+)
+def test_a_long_word_is_read_in_linear_time(words: list[str], reads: bool) -> None:
+    """A backtracking pattern takes four times as long each time the word doubles."""
+    started = time.monotonic()
+    result = table.runs_stdin_as_commands(words)
+    assert time.monotonic() - started < 0.5
+    assert result is reads
+
+
 def test_pm_refuses_through_its_stub_when_wrapper_commands_is_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """With no wrapper_commands to load, pm loads its damaged-hooks stub: every new name is there
-    and refuses (or is empty), so the module loads and main() answers with a refusal."""
+    and refuses (or is empty), and main() answers a pm request with a refusal."""
     lone = tmp_path / "lone"
     lone.mkdir()
     (lone / "hook_support.py").write_text(
@@ -712,3 +748,9 @@ def test_pm_refuses_through_its_stub_when_wrapper_commands_is_missing(
         assert not getattr(stub, name)
     assert not stub.MAKE_GLUED_FILE.search("-f-")
     assert all(hasattr(stub, name) for name in NEW_NAMES)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git status"}, "cwd": str(tmp_path)}
+    code = damaged.main([], io.StringIO(json.dumps(payload)), {damaged.ROLE_VAR: damaged.PM_ROLE})
+    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["decision"]
+    assert code == 0
+    assert decision["behavior"] == "deny"
+    assert "hook files are damaged" in decision["message"]
