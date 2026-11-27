@@ -68,6 +68,12 @@ because Claude runs Bash non-interactively (`zsh -c`, `bash -c`), where comments
 One pass over the text, no backtracking regex (prod-guard runs under a deadline). Standard library
 only: the hooks run as `python3 -I`.
 
+One lex per text and lexer variant: the token stream is cached by the exact text and the lexer's
+options (`comments`, `substitutions`), 256 entries, in this process only (`_lex`). The cache holds
+only tuples of frozen tokens; every public function builds its own `Command` objects and lists from
+them, so a caller may change what it gets back. Two functions with the same options share the
+stream, because they only read it.
+
 This is text matching, not a shell. It only ever blanks a word whose value it knows exactly (no
 `$name`, glob or `~`), and only in a place where the word reaches `git`, `gh`, `grep`, `rg`,
 `cat` (or, for `code_text`, another inert command) as plain data. Claude Code runs Bash commands in
@@ -75,6 +81,7 @@ bash or zsh, so every rule has to hold for both: where they differ (`>!`, `12>f`
 functions kept in tables) the scanner gives up, and `without_data` also gives up on comments.
 """
 
+import functools
 import string
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -245,6 +252,8 @@ class Word:
 
 @dataclass(frozen=True)
 class _Redirect:
+    # The one mutable part of a token (the lexer fills in its body when the line ends), and `_lex`
+    # keeps tokens across calls: `_commands` hands each caller a copy (`replace`), never this one.
     heredoc: _Heredoc | None
     writes: bool = False  # opens a file for writing
     target: str | None = None  # the value of its target word; None when it may expand
@@ -608,6 +617,33 @@ class _Lexer:
         return name, after
 
 
+@dataclass(frozen=True)
+class _Lexed:
+    """What one lex of a text found: its tokens, the spans of its comments and the spans of its
+    heredoc bodies. All tuples; the tokens are frozen (a `_Heredoc` is copied by `_commands`)."""
+
+    tokens: tuple[_Token, ...]
+    comment_spans: tuple[tuple[int, int], ...]
+    body_spans: tuple[tuple[int, int], ...]
+
+
+LEX_CACHE_SIZE = 256
+
+
+@functools.lru_cache(maxsize=LEX_CACHE_SIZE)
+def _lex(text: str, comments: bool, substitutions: bool) -> _Lexed | None:
+    """The lex of `text` under one set of `_Lexer` options; None when the scanner cannot follow it.
+    Kept by the exact text and the options, so a different text, or the same text under other
+    options, never gets this entry. A process holds one call (a hook reads one payload), and the
+    answer depends on nothing but the key. Any error but `_GiveUp` is not kept."""
+    lexer = _Lexer(text, comments=comments, substitutions=substitutions)
+    try:
+        tokens = lexer.tokenize()
+    except _GiveUp:
+        return None
+    return _Lexed(tuple(tokens), tuple(lexer.comment_spans), tuple(lexer.body_spans))
+
+
 def _is_under(parts: Sequence[str], folder: tuple[str, ...]) -> bool:
     """Whether the path components `parts` lie inside the components `folder`, met in a row."""
     size = len(folder)
@@ -694,7 +730,7 @@ def _commands(tokens: Sequence[_Token], *, exports: bool = False) -> tuple[list[
             commands[-1].redirected = True
             commands[-1].extend(*token.span)
             if token.heredoc is not None:
-                commands[-1].heredocs.append(token.heredoc)
+                commands[-1].heredocs.append(replace(token.heredoc))  # the lex is shared
                 commands[-1].extend(*token.heredoc.body)
             if token.writes:
                 commands[-1].redirect_targets.append(token.target)
@@ -1123,20 +1159,38 @@ def _blanked(command: str, spans: Sequence[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
+@dataclass(frozen=True)
+class _Scanned:
+    """A text read by `_scan`: the lex, the commands built from it for this caller alone, and
+    whether the line has a pipe."""
+
+    lexed: _Lexed
+    commands: list[Command]
+    piped: bool
+
+
+def _scan(command: str, *, comments: bool, substitutions: bool) -> _Scanned | None:
+    """`command` lexed (once per text and options) and split into fresh `Command` objects; None
+    when the scanner cannot follow it. With `substitutions`, an `export` of assignments is a
+    command like another."""
+    lexed = _lex(command, comments, substitutions)
+    if lexed is None:
+        return None
+    try:
+        commands, piped = _commands(lexed.tokens, exports=substitutions)
+    except _GiveUp:
+        return None
+    return _Scanned(lexed, commands, piped)
+
+
 def simple_commands(command: str, *, substitutions: bool = False) -> list[Command] | None:
     """The simple commands of `command`, in line order, comments read as comments (some come back
     without words: a separator ends one); None when the scanner cannot follow the command. With
     `substitutions`, a plain `$(...)` (`_plain_substitution`) stays in its word instead of
     stopping the scanner (the caller reads its text), a lone `[` or `]` is a word of its own, not
     a glob, and an `export` of assignments is no reason to give up (the caller judges its names)."""
-    try:
-        commands, _piped = _commands(
-            _Lexer(command, comments=True, substitutions=substitutions).tokenize(),
-            exports=substitutions,
-        )
-    except _GiveUp:
-        return None
-    return commands
+    scanned = _scan(command, comments=True, substitutions=substitutions)
+    return None if scanned is None else scanned.commands
 
 
 def _bound_word(word: Word, paths: Mapping[str, str]) -> Word:
@@ -1195,12 +1249,10 @@ def heredoc_bodies(command: str) -> HeredocBodies | None:
 
     None when the line cannot be read as plain words: the scanner cannot follow it (this includes
     an unquoted heredoc), or a pipe is on it (the next command may run a body)."""
-    try:
-        commands, piped = _commands(_Lexer(command, comments=True).tokenize())
-    except _GiveUp:
+    scanned = _scan(command, comments=True, substitutions=False)
+    if scanned is None or scanned.piped:
         return None
-    if piped:
-        return None
+    commands = scanned.commands
     readers = [c for c in commands if c.heredocs]
     spans = [heredoc.body for c in readers for heredoc in c.heredocs]
     return HeredocBodies(
@@ -1215,12 +1267,8 @@ def quoted_heredoc_spans(command: str) -> list[tuple[int, int]] | None:
     `$(cat <<'X' ...)` form included. Every one has a quoted delimiter (`<<'X'`, `<<"X"`, `<<\\X`,
     `<<-'X'`), so its body is literal text: the scanner gives up on an unquoted one, whose body
     expands. None when the scanner cannot follow the command."""
-    lexer = _Lexer(command, comments=True, substitutions=True)
-    try:
-        lexer.tokenize()
-    except _GiveUp:
-        return None
-    return list(lexer.body_spans)
+    lexed = _lex(command, True, True)
+    return None if lexed is None else list(lexed.body_spans)
 
 
 def without_patterns(command: str) -> str:
@@ -1228,11 +1276,10 @@ def without_patterns(command: str) -> str:
     `rg`, `git grep`) replaced by spaces (same length), or `command` unchanged when the scanner
     cannot follow it. A heredoc body, a file operand and a word the shell expands (`grep w*`) are
     never blanked: unlike `without_data`, this is for a check that must still read a body."""
-    try:
-        commands, _piped = _commands(_Lexer(command).tokenize())
-    except _GiveUp:
+    scanned = _scan(command, comments=False, substitutions=False)
+    if scanned is None:
         return command
-    spans = [(w.start, w.end) for c in commands if c.words for w in _pattern_words(c.words)]
+    spans = [(w.start, w.end) for c in scanned.commands if c.words for w in _pattern_words(c.words)]
     return _blanked(command, spans)
 
 
@@ -1355,11 +1402,13 @@ def without_quoted_globs(command: str) -> str:
 def without_data(command: str) -> str:
     """`command` with its data parts replaced by spaces (same length), or `command` unchanged
     when the scanner cannot follow it."""
-    try:
-        commands, piped = _commands(_Lexer(command).tokenize())
-    except _GiveUp:
+    scanned = _scan(command, comments=False, substitutions=False)
+    if scanned is None:
         return command
-    return _blanked(command, [span for c in commands for span in _command_data(c, piped=piped)])
+    piped = scanned.piped
+    return _blanked(
+        command, [span for c in scanned.commands for span in _command_data(c, piped=piped)]
+    )
 
 
 # code_text: commands that run nothing they are given, and the data they take.
@@ -1473,13 +1522,11 @@ def code_text(command: str, lone: Sequence[str] = ()) -> str:
 
     When what is left as code holds a `$` or a backtick, nothing is blanked: it may expand to
     the blanked text (`$_` after a message, then `echo $[$_]` runs `a[$(...)]` in bash)."""
-    reader = _Lexer(command, comments=True)
-    try:
-        tokens = reader.tokenize()
-        commands, piped = _commands(tokens)
-    except _GiveUp:
+    scanned = _scan(command, comments=True, substitutions=False)
+    if scanned is None:
         return command
-    if PAREN in tokens:
+    commands, piped = scanned.commands, scanned.piped
+    if PAREN in scanned.lexed.tokens:
         lone = ()
     lone_spans = [(c.words[0].start, c.words[-1].end) for c in commands if _is_lone(c, lone)]
     simple = [c for c in commands if c.words and not _is_lone(c, lone)]
@@ -1489,10 +1536,202 @@ def code_text(command: str, lone: Sequence[str] = ()) -> str:
     rewrites = any(c.writes_run_later for c in commands) or (
         has_git and any(c.writes for c in commands)
     )
-    spans = [*reader.comment_spans, *lone_spans]
+    spans = [*scanned.lexed.comment_spans, *lone_spans]
     for c in simple:
         spans += _code_data(c, keep_messages=rewrites, keep_text=piped or rewrites)
     blanked = _blanked(command, spans)
     if EXPANSION_MARKS.intersection(blanked):
         return command  # what is left may expand to the blanked text (`$_`, `$[...]`)
     return blanked
+
+
+# brace_words: the one brace expander of the guards.
+# A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words one word is read as, and the
+# most `{` a word may hold (a list or range is one `{`, so no more could expand it).
+BRACE_MEMBERS = 64
+# A range of letters is a character, `..`, a character, and a step if it has one (`{a..e..2}`).
+LETTER_RANGE_LENGTH = 4
+
+
+@dataclass(frozen=True)
+class _Braces:
+    """The first brace expansion of a word: where it starts, where it ends (past its `}`), and the
+    words it stands for, None when the guard cannot tell them (`_brace_group`)."""
+
+    start: int
+    end: int
+    alternatives: tuple[str, ...] | None
+
+
+def closing_brace(word: str, start: int, *, one_word: bool = False) -> int:
+    """Where the brace that closes the `{` at `start` stands, nested braces counted; -1 when a
+    blank or the end of the text comes first (`one_word`: the text is a single word, so a blank in
+    it is part of a name and ends nothing)."""
+    depth = 0
+    for at in range(start, len(word)):
+        char = word[at]
+        if char.isspace() and not one_word:
+            return -1
+        depth += (char == "{") - (char == "}")
+        if depth == 0:
+            return at
+    return -1
+
+
+def _alternatives(content: str) -> list[str]:
+    """A brace list's words: its text cut at each comma outside the braces in it."""
+    found: list[str] = []
+    depth = 0
+    begin = 0
+    for at, char in enumerate(content):
+        depth += (char == "{") - (char == "}")
+        if char == "," and depth == 0:
+            found.append(content[begin:at])
+            begin = at + 1
+    found.append(content[begin:])
+    return found
+
+
+@dataclass(frozen=True)
+class _Range:
+    """The ends and step of a brace range as written (`01..10..2`, `a..e`)."""
+
+    first: str
+    last: str
+    step: str
+    numbers: bool
+
+
+def _is_integer(text: str) -> bool:
+    """Whether `text` is a whole number as a brace range reads it: digits, a `-` before them."""
+    return (text[1:] if text.startswith("-") else text).isdecimal()
+
+
+def _is_ascii_letter(char: str) -> bool:
+    """Whether `char` is one of a-z and A-Z, the only characters a brace range's letter ends are."""
+    return char.isascii() and char.isalpha()
+
+
+def _parse_range(content: str) -> _Range | None:
+    """The range that the inside of a brace is (`1..3`, `a..e`, either with `..step`); None when it
+    is not one (`{a}`, `{1..a}`, `{aa..bb}`, `{....}`, `{/../}`): a letter range has a single ASCII
+    letter at both ends, and bash keeps any other brace as the literal word."""
+    first, dots, rest = content.partition("..")
+    if dots and _is_integer(first):
+        last, more, every = rest.partition("..")
+        if _is_integer(last) and (not more or _is_integer(every)):
+            return _Range(first, last, every if more else "1", numbers=True)
+        return None
+    letters = (
+        len(content) >= LETTER_RANGE_LENGTH
+        and content[1:3] == ".."
+        and _is_ascii_letter(content[0])
+        and _is_ascii_letter(content[3])
+    )
+    if not letters:
+        return None
+    if len(content) == LETTER_RANGE_LENGTH:
+        return _Range(content[0], content[3], "1", numbers=False)
+    if content[4:6] == ".." and _is_integer(content[6:]):
+        return _Range(content[0], content[3], content[6:], numbers=False)
+    return None
+
+
+def _range_words(brace: _Range) -> tuple[str, ...] | None:
+    """The words a brace range makes, zero-padded when an end is (`01..10`); None past
+    BRACE_MEMBERS, or when an end is too long a number to read."""
+    try:
+        step = abs(int(brace.step)) or 1
+        low, high = (
+            (int(brace.first), int(brace.last))
+            if brace.numbers
+            else (ord(brace.first), ord(brace.last))
+        )
+    except ValueError:
+        return None
+    if abs(high - low) // step + 1 > BRACE_MEMBERS:
+        return None
+    values = range(low, high + (1 if high >= low else -1), step if high >= low else -step)
+    if not brace.numbers:
+        return tuple(map(chr, values))
+    ends = [end.lstrip("-") for end in (brace.first, brace.last)]
+    padded = any(len(end) > 1 and end[0] == "0" for end in ends)
+    width = max(len(brace.first), len(brace.last)) if padded else 0
+    return tuple(f"{value:0{width}d}" for value in values)
+
+
+def _holds_expansion(content: str) -> bool:
+    """Whether the inside of a brace range may expand into something else: a `$`, a backtick, or a
+    brace list or range of its own."""
+    if "$" in content or "`" in content:
+        return True
+    at = content.find("{")
+    while at >= 0:
+        close = content.find("}", at)
+        inner = content[at + 1 : close]
+        if close >= 0 and "{" not in inner and ("," in inner or ".." in inner):
+            return True
+        at = content.find("{", at + 1)
+    return False
+
+
+def _brace_group(word: str, *, one_word: bool) -> _Braces | None:
+    """The first brace expansion of a word: a `{...}` with a comma outside the braces in it
+    (`{a,{b,c}}`, also after a `$`: `${a,b}`), or a range (`_parse_range`); None when it has
+    none. Not a brace that closes no list or range (`{}`, `{a}`), nor a range after `$` (`${a..c}`).
+    A range that holds an expansion has no alternatives: zsh expands `{1..$N}` after `$N`."""
+    index = 0
+    while (start := word.find("{", index)) >= 0:
+        index = start + 1
+        close = closing_brace(word, start, one_word=one_word)
+        if close < 0:
+            continue
+        content = word[start + 1 : close]
+        alternatives = _alternatives(content)
+        if len(alternatives) > 1:
+            return _Braces(start, close + 1, tuple(alternatives))
+        if word[start - 1 : start] == "$":
+            continue
+        if ".." in content and _holds_expansion(content):
+            return _Braces(start, close + 1, None)
+        brace = _parse_range(content)
+        if brace is not None:
+            return _Braces(start, close + 1, _range_words(brace))
+    return None
+
+
+def brace_words(word: str, *, one_word: bool = False) -> list[str] | None:
+    """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
+    `abd acd`, `{1..3}` is `1 2 3`, `{01..10..3}` and `{a..e}` are ranges, nested lists too);
+    `[word]` when it has none. An empty member is kept (`{a,}` is `a` and an empty word).
+
+    None when the guard cannot tell the words: more than BRACE_MEMBERS of them, a range that holds
+    an expansion (`{1..$N}`) or ends too long to read, or a word that holds more than
+    BRACE_MEMBERS braces (`{`, any: minified JSON, and each list or range is one `{`). A caller
+    that reads paths refuses on None.
+
+    The words are the ones a shell may make, and more: a brace in quotes or after a backslash is
+    expanded (`"{a,b}"` is `"a" "b"`), and so is a list after a `$` (`${a,b}` is `$a $b`), where
+    bash reads a parameter. A `$` brace that holds no list is no expansion (`${a}`, `${1..3}`).
+
+    A blank ends a brace (`{a b,c}` is no list: the text is cut into words before it is read),
+    unless `one_word`: the text is one word already, a pattern (`{a b,c}` is `a b` and `c`)."""
+    if word.count("{") > BRACE_MEMBERS:
+        return None
+    group = _brace_group(word, one_word=one_word)
+    if group is None:
+        return [word]
+    if group.alternatives is None:
+        return None
+    heads: list[str] = []
+    for alternative in group.alternatives:
+        made = brace_words(alternative, one_word=one_word)
+        if made is None:
+            return None
+        heads += made
+        if len(heads) > BRACE_MEMBERS:
+            return None
+    tails = brace_words(word[group.end :], one_word=one_word)
+    if tails is None or len(heads) * len(tails) > BRACE_MEMBERS:
+        return None
+    return [word[: group.start] + head + tail for head in heads for tail in tails]

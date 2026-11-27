@@ -215,15 +215,7 @@ SHELL_STRING_RUNNERS = frozenset({"sh", "bash", "zsh", "dash"})  # `sh -c STRING
 # The wrapper tables are shared with opencode_server_guard.py (wrapper_commands.py).
 _WRAPPER_COMMANDS: ModuleType = hook_support.sibling("wrapper_commands")
 SHELLS: frozenset[str] = _WRAPPER_COMMANDS.SHELLS
-# Words that read a heredoc body as shell commands, or start a shell without naming one: a body
-# fed by a line with one of them is shell text, and its globs are real.
-SHELL_READERS = frozenset(
-    {
-        *SHELLS,
-        *("source", ".", "eval", "parallel", "make", "su", "sudo", "doas", "script"),
-        *("screen", "tmux"),
-    }
-)
+SHELL_READERS: frozenset[str] = _WRAPPER_COMMANDS.SHELL_READERS
 CHARACTER_CLASS = re.compile(r"\[[^\]]*\]")  # a glob's `[a-z]`: one character from a set
 ONE_CHARACTER_CLASS = re.compile(r"\[([^\]!^])\]")  # `[w]`: the set holds the one character
 # Commands that read a heredoc body as a script or text, not as shell commands (python by
@@ -513,13 +505,9 @@ CURRENT_FOLDER = re.compile(r"^(?:\$PWD|\$\{PWD\}|~\+)(?=/|$)")
 # a write could reach the zone by: `/dev/shm` is a folder like /tmp, `/dev/tcp/HOST/PORT` a socket.
 ALIAS_FOLDERS = ("/proc", "/dev/fd", "/dev/stdin")
 DEV_WRITABLE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
-# A brace expansion (`{a,b}`, `{1..3}`, nested too): the most words the guard reads one word as
-# (`_brace_members`), a range's text, and a word of a text that holds a brace.
-BRACE_MEMBERS = 64
-BRACE_RANGE = re.compile(r"(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?|(\D)\.\.(\D)(?:\.\.(-?\d+))?")
-# A word that holds a `{`, matched only from its start: a long word is scanned once.
+# A word of a text that holds a brace expansion (`{a,b}`, `{1..3}`, nested too; `_brace_members`),
+# matched only from its start: a long word is scanned once.
 BRACE_WORD = re.compile(r"(?<![^\s;&|()<>`])[^\s;&|()<>`]*\{[^\s;&|()<>`]*")
-BRACE_OPENER = re.compile(r"(?<!\$)\{")
 # What `_glued_expansions` keeps in an expansion's word: blanks, separators, parentheses, braces
 # and backticks, as private-use characters.
 GLUED = str.maketrans({char: chr(0xE000 + at) for at, char in enumerate(" \t\n;&|(){}`<>")})
@@ -646,7 +634,6 @@ READ_ENVIRONMENT = re.compile(rf"(?:{READ_NAME.pattern})=[\w.@:+-]*")
 SORT_OPTION = re.compile(r"-(?:[bdfghiMnRrsuVzcCm]+|[kt]\S*|S\S*)|--(?:reverse|unique|stable)")
 READ_OPTIONS = frozenset("rs")
 TIMEOUT_DURATION = re.compile(r"\d+(?:\.\d+)?[smhd]?")
-NICE_OPTION = re.compile(r"-\d+")
 # The words that open a command inside a compound one, and those that close it.
 COMMAND_OPENERS = frozenset(
     {"if", "then", "elif", "else", "do", "while", "until", "!", "{", "time"}
@@ -1265,9 +1252,14 @@ def _command_candidates(words: Sequence[str]) -> list[int]:
     its command: every head word but a wrapper's own name. That is each word after an option
     (which may be the option's value), the word where the walk stops, and, stricter than those
     two, a wrapper's positional argument, an assignment, a redirect and its target, and every word
-    after `tmux`."""
+    after `tmux`. `ssh` is a wrapper of the shared table (it runs the command it is given) and
+    also a remote CLI whose host is judged, so its own name stays a candidate."""
     head = _command_head(words).indices
-    return [index for index in head if _basename(words[index]) not in WRAPPERS]
+    return [
+        index
+        for index in head
+        if _basename(words[index]) not in WRAPPERS or _basename(words[index]) in REMOTE_CLIS
+    ]
 
 
 def _split_env_strings(words: Sequence[str]) -> list[str]:
@@ -1342,7 +1334,9 @@ def _runs_its_input(names: Sequence[str], head: _Head) -> bool:
     runner = next((index for index, name in enumerate(names) if name in INPUT_RUNNERS), None)
     if runner is None or not head.open:
         return False
-    return names[runner] == PARALLEL or any(name in WRAPPERS for name in names[runner + 1 :])
+    return names[runner] == PARALLEL or any(
+        name in WRAPPERS and name not in REMOTE_CLIS for name in names[runner + 1 :]
+    )  # `xargs ssh` is a remote CLI with its host from the input, not a wrapper run
 
 
 def _runs_stdin(segment: str, fed: bool) -> bool:
@@ -3573,109 +3567,24 @@ def _expansion_end(text: str, index: int) -> int:
 
 
 def _closing_brace(word: str, start: int) -> int:
-    """Where the brace that closes the `{` at `start` stands, nested braces counted; -1 when a
-    blank or the end of the text comes first."""
-    depth = 0
-    for at in range(start, len(word)):
-        char = word[at]
-        if char.isspace():
-            return -1
-        depth += (char == "{") - (char == "}")
-        if depth == 0:
-            return at
-    return -1
-
-
-class _Braces(NamedTuple):
-    """The first brace expansion of a word: where it starts, where it ends (past its `}`), and the
-    words it stands for, None when the guard cannot tell them (`_brace_group`)."""
-
-    start: int
-    end: int
-    alternatives: tuple[str, ...] | None
-
-
-def _brace_group(word: str) -> _Braces | None:
-    """The first brace expansion of a word: a `{...}` with a comma outside the braces in it
-    (`{a,{b,c}}`), or a range (`_range_members`); None when it has none. Not a `${`, nor a brace
-    that closes no list or range (`{}`, `{a}`). A range the guard cannot tell has no
-    alternatives: zsh expands `{1..$N}` after `$N`."""
-    index = 0
-    while (start := word.find("{", index)) >= 0:
-        index = start + 1
-        close = _closing_brace(word, start)
-        if close < 0 or word[start - 1 : start] == "$":
-            continue
-        content = word[start + 1 : close]
-        alternatives = _alternatives(content)
-        if len(alternatives) > 1:
-            return _Braces(start, close + 1, tuple(alternatives))
-        if ".." in content and UNPINNED_EXPANSION.search(content):
-            return _Braces(start, close + 1, None)
-        match = BRACE_RANGE.fullmatch(content)
-        if match:
-            return _Braces(start, close + 1, _range_members(match))
-    return None
-
-
-def _alternatives(content: str) -> list[str]:
-    """A brace list's words: its text cut at each comma outside the braces in it."""
-    found = [""]
-    depth = 0
-    for char in content:
-        depth += (char == "{") - (char == "}")
-        if char == "," and depth == 0:
-            found.append("")
-        else:
-            found[-1] += char
-    return found
-
-
-def _range_members(match: re.Match[str]) -> tuple[str, ...] | None:
-    """The words a brace range makes (BRACE_RANGE: `1..3`, `a..e`, `01..10..2`), zero-padded
-    when an end is; None past BRACE_MEMBERS."""
-    numbers = match[1] is not None
-    first, last, every = (match[1], match[2], match[3]) if numbers else match.group(4, 5, 6)
-    step = abs(int(every or 1)) or 1
-    low, high = (int(first), int(last)) if numbers else (ord(first), ord(last))
-    if abs(high - low) // step + 1 > BRACE_MEMBERS:
-        return None
-    values = range(low, high + (1 if high >= low else -1), step if high >= low else -step)
-    if not numbers:
-        return tuple(map(chr, values))
-    padded = any(len(end.lstrip("-")) > 1 and end.lstrip("-")[0] == "0" for end in (first, last))
-    width = max(len(first), len(last)) if padded else 0
-    return tuple(f"{value:0{width}d}" for value in values)
+    """shell_words.closing_brace: where the brace that closes the `{` at `start` stands."""
+    result: int = _shell_words().closing_brace(word, start)
+    return result
 
 
 def _brace_members(word: str) -> list[str] | None:
-    """The words the shell makes of a word by its brace expansions, in its order (`a{b,c}d` is
-    `abd acd`, `{1..3}` is `1 2 3`, nested lists too); `[word]` when it has none. None when they
-    are more than BRACE_MEMBERS, or one cannot be told (`_brace_group`), or the word holds more
-    braces than BRACE_MEMBERS words could (minified JSON): each list or range is one `{`."""
-    if len(BRACE_OPENER.findall(word)) > BRACE_MEMBERS:
-        return None
-    group = _brace_group(word)
-    if group is None:
-        return [word]
-    if group.alternatives is None:
-        return None
-    heads: list[str] = []
-    for alternative in group.alternatives:
-        made = _brace_members(alternative)
-        if made is None:
-            return None
-        heads += made
-    tails = _brace_members(word[group.end :])
-    if tails is None or len(heads) * len(tails) > BRACE_MEMBERS:
-        return None
-    return [word[: group.start] + head + tail for head in heads for tail in tails]
+    """shell_words.brace_words: the words the shell makes of a word by its brace expansions
+    (`a{b,c}d` is `abd acd`, `{1..3}` is `1 2 3`); `[word]` when it has none. None when the guard
+    cannot tell them: more than shell_words.BRACE_MEMBERS, a range that holds an expansion, or a
+    word that holds more than shell_words.BRACE_MEMBERS braces (minified JSON)."""
+    result: list[str] | None = _shell_words().brace_words(word)
+    return result
 
 
 def _brace_expanded(text: str) -> str | None:
     """`text` with each word that holds a brace expansion (BRACE_WORD) written as the words it
     makes (`_brace_members`), as the shell runs it; None when a word makes words the guard cannot
-    tell or more than BRACE_MEMBERS."""
+    tell or more than shell_words.BRACE_MEMBERS."""
     found: list[str] = []
     last = 0
     for match in BRACE_WORD.finditer(text):
@@ -4262,35 +4171,85 @@ def _program_name(word: _ShellWord, zone: _Zone) -> str | None:
     return name
 
 
+# The options of a wrapper that `_wrapper_end` reads past, out of the ones its table lists
+# (wrapper_commands.WRAPPER_SYNTAX): the ones that only limit or tidy what it runs. The others
+# change where or how the command runs (`env -C`, `env -S`, `timeout --signal`, `command -v`), so
+# a read that has one is not read past.
+UNWRAPPED_OPTIONS: Mapping[str, frozenset[str]] = {
+    "timeout": frozenset({"-k", "-s"}),
+    "nice": frozenset({"-n"}),
+    "env": frozenset({"-i", "-u"}),
+    "command": frozenset(),
+}
+# `nice` is read past with one option (`nice -n 5`, `nice -5`), the others with any number.
+ONE_OPTION = frozenset({"nice"})
+
+
+class _WrapperSyntax(Protocol):
+    """What `_wrapper_end` reads of a wrapper_commands.WrapperSyntax."""
+
+    @property
+    def flags(self) -> frozenset[str]: ...
+
+    @property
+    def valued(self) -> frozenset[str]: ...
+
+    @property
+    def operands(self) -> int: ...
+
+    @property
+    def assignments(self) -> bool: ...
+
+    @property
+    def numeric(self) -> bool: ...
+
+
+def _reads_past_value(option: str, value: str) -> bool:
+    """Whether `value` is one a read goes past after `option`: `env -u` takes a plain variable name
+    (`_plain_name`), `nice -n` a number, `timeout -k` and `-s` any word."""
+    if option == "-u":
+        return _plain_name(value)
+    return value.isdigit() if option == "-n" else True
+
+
+def _followed_word(
+    words: Sequence[_ShellWord], at: int, name: str, syntax: _WrapperSyntax
+) -> int | None:
+    """Where the words go on after the word at `at` of a wrapper's options when `_wrapper_end` reads
+    past it: an option of UNWRAPPED_OPTIONS (with its value), a `-<number>` where the table says
+    there is one, an assignment of READ_ENVIRONMENT where it says there are; None for any other."""
+    word, followed = words[at], UNWRAPPED_OPTIONS[name]
+    if word.value in followed & syntax.flags:
+        return at + 1
+    if word.value in followed & syntax.valued:
+        reads = at + 1 < len(words) and _reads_past_value(word.value, words[at + 1].raw)
+        return at + 2 if reads else None
+    if syntax.numeric and _WRAPPER_COMMANDS.NUMERIC_OPTION.fullmatch(word.raw):
+        return at + 1
+    return at + 1 if syntax.assignments and READ_ENVIRONMENT.fullmatch(word.raw) else None
+
+
 def _wrapper_end(words: Sequence[_ShellWord]) -> int:
     """Where the command a wrapper runs starts: after `timeout DURATION`, `nice [-n N]` or `env
     [-i] [-u NAME] [NAME=VALUE]` (READ_ENVIRONMENT), or `command` and the program it runs. 0 when
     the first word is none of them, or has an option or a value this does not read (`env -C`,
-    `timeout --signal`, `command -v`)."""
-    name = words[0].value
-    at = 1
-    if name == "timeout":
-        while at + 1 < len(words) and words[at].value in ("-k", "-s"):
-            at += 2
-        valid = at < len(words) and TIMEOUT_DURATION.fullmatch(words[at].raw)
-        return at + 1 if valid else 0
-    if name == "nice":
-        if words[1:2] and words[1].value == "-n" and words[2:3] and words[2].raw.isdigit():
-            return 3
-        return 2 if words[1:2] and NICE_OPTION.fullmatch(words[1].raw) else 1
-    if name == "command":
-        return 0 if _unquoted(words[1].raw).startswith("-") else 1
-    if name != "env":
+    `timeout --signal`, `command -v`). The wrapper's options are read through its table."""
+    name = words[0].value or ""  # a word with no value is no wrapper
+    syntax = _WRAPPER_COMMANDS.WRAPPER_SYNTAX.get(name)
+    if name not in UNWRAPPED_OPTIONS or syntax is None:
         return 0
-    while at < len(words):
-        word = words[at]
-        if word.value == "-i" or READ_ENVIRONMENT.fullmatch(word.raw):
-            at += 1
-        elif word.value == "-u" and at + 1 < len(words) and _plain_name(words[at + 1].raw):
-            at += 2
-        else:
+    at = 1
+    while at < len(words) and (after := _followed_word(words, at, name, syntax)) is not None:
+        at = after
+        if name in ONE_OPTION:
             break
-    return at if at > 1 and not _unquoted(words[min(at, len(words) - 1)].raw).startswith("-") else 0
+    for _ in range(syntax.operands):  # timeout's duration
+        if at >= len(words) or not TIMEOUT_DURATION.fullmatch(words[at].raw):
+            return 0
+        at += 1
+    if syntax.assignments and at == 1:  # a bare `env` is not read past
+        return 0
+    return 0 if at < len(words) and _unquoted(words[at].raw).startswith("-") else at
 
 
 def _unwrap(words: Sequence[_ShellWord], zone: _Zone) -> Sequence[_ShellWord]:
@@ -5312,9 +5271,10 @@ def _bash_touches(call: Call, zone: _Zone, *, follow_cds: bool = False) -> bool:
 def _loop_variants(command: str, code: str, glob_code: str) -> list[tuple[str, str]]:
     """The code and glob texts with the variable of each loop over literal words
     (`_literal_loops`) written as each of its words in turn; none when there is no such loop or
-    more than BRACE_MEMBERS ways to write them."""
+    more than shell_words.BRACE_MEMBERS ways to write them."""
     loops = _literal_loops(command)
-    if not loops or math.prod(map(len, loops.values())) > BRACE_MEMBERS:
+    cap: int = _shell_words().BRACE_MEMBERS
+    if not loops or math.prod(map(len, loops.values())) > cap:
         return []
     variants: list[tuple[str, str]] = []
     for values in itertools.product(*loops.values()):

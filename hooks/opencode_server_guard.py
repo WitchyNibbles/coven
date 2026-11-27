@@ -73,11 +73,11 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from functools import cached_property
 from pathlib import Path
-from typing import NoReturn, Self
+from typing import NoReturn, Protocol, Self
 
 # `-I` leaves this folder off sys.path, so put it there for hook_support, the one module found so.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -91,8 +91,9 @@ GM_TOOLS = "coven_pm_list, coven_pm_resume, coven_pm_stop"
 POINTER = f"this is coven's own server; ask the GM with a QUESTION (its tools: {GM_TOOLS})"
 MAX_NESTING = 8
 MAX_GLOB_MATCHES = 2000
-MAX_BRACE_WORDS = 256
 MAX_UNWRAP = 16
+MAX_LOOSE_READINGS = 16  # each reading is a full check of the command: a line has a few
+LIST_WORDS = 256  # _list_words keeps the bound the guard's list-only expansion had
 
 
 class Mode(Enum):
@@ -262,7 +263,7 @@ def holds_closed_place(path: Path, view: "View", mode: Mode) -> str | None:
 ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.DOTALL)
 WORD_BREAKS = re.compile(r"[\s;|&<>()]+")
 PART_BREAKS = re.compile(r"[=,:{}]")
-BRACES = re.compile(r"\{([^{}]*,[^{}]*)\}")
+BRACE_LIST = re.compile(r"\{[^{}]*,[^{}]*\}")  # a brace list with no brace in it
 ASSIGNMENT = re.compile(r"(?<![\w$])([A-Za-z_]\w*)=([^\s;|&<>()]*)")
 VARIABLE = re.compile(r"\$(?:\{(\w+)\}|([A-Za-z_]\w*)|[$?!#@*0-9_-])")
 UNRESOLVED = re.compile(r"\$[A-Za-z_{]")
@@ -329,28 +330,49 @@ class Quoting:
         return cls(text, sources, tuple(dict.fromkeys(found)))
 
 
-def _braces(word: str) -> list[str]:
-    """The words `a{b,c}d` stands for (bash brace expansion), at most MAX_BRACE_WORDS."""
+def _brace_words(word: str, *, one_word: bool = False) -> list[str]:
+    """The words `a{b,c}d` stands for (bash brace expansion: lists, ranges, steps, zero padding),
+    by shell_words.brace_words; raises RefusedError when it cannot tell them (more than
+    shell_words.BRACE_MEMBERS words, or a range that holds a variable). `one_word`: the text is one
+    word already (a glob pattern), so a blank in a brace is part of a name."""
+    made: list[str] | None = hook_support.sibling("shell_words").brace_words(
+        word, one_word=one_word
+    )
+    if made is None:
+        raise RefusedError(
+            "a path built from a brace expansion the guard cannot tell (more than 64 words or"
+            " braces in one word, or a range with a variable) cannot be checked; write the paths"
+            " out"
+        )
+    return made
+
+
+def _list_words(word: str) -> list[str]:
+    """`word` with only its brace lists expanded and its ranges kept as written, at most
+    LIST_WORDS words, the rest as written: how the guard read a word before it expanded ranges."""
     pending = [word]
     done: list[str] = []
-    while pending and len(done) + len(pending) <= MAX_BRACE_WORDS:
+    while pending and len(done) + len(pending) <= LIST_WORDS:
         current = pending.pop()
-        match = BRACES.search(current)
+        match = BRACE_LIST.search(current)
         if match is None:
             done.append(current)
             continue
-        for choice in match.group(1).split(","):
+        for choice in match.group(0)[1:-1].split(","):
             pending.append(current[: match.start()] + choice + current[match.end() :])
     return done + pending
 
 
 def _words_of(quoting: Quoting) -> list[str]:
     """Every word, brace expansion of a word and part of a word (`--opt=/x`, `A=/x:/y`) of the
-    text under each of its variants, without repeats."""
+    text under each of its variants, without repeats. Each word is read two ways: as bash expands
+    it (_brace_words) and as the guard read it before it expanded ranges (_list_words), so a range
+    the guard expands but the shell keeps (`{....}`) and the parts of a word read before
+    (`<home>/.` in `<home>/.{c..c}laude`) are both checked."""
     found: dict[str, None] = {}
     for variant in quoting.variants:
         for chunk in WORD_BREAKS.split(variant):
-            for word in _braces(chunk) if chunk else []:
+            for word in [*_list_words(chunk), *_brace_words(chunk)] if chunk else []:
                 found[word] = None
                 found.update(dict.fromkeys(part for part in PART_BREAKS.split(word) if part))
     return list(found)
@@ -600,23 +622,45 @@ class Argv:
     piped: bool = False
     substitutions: tuple[str, ...] = ()
     inputs: tuple[str, ...] = ()
+    loose: frozenset[int] = frozenset()  # positions of valued options read as flags (see below)
 
     @cached_property
-    def _unwrapping(self) -> tuple[list[str], int]:
-        return _unwrap(self.words)
+    def _unwrapping(self) -> "_Walk":
+        return _walk(self.words, self.loose)
 
     @cached_property
     def command(self) -> tuple[str, ...]:
         """The words under their assignments and wrappers (env, timeout, xargs, npx, pnpm dlx...),
         worked out once."""
-        words, start = self._unwrapping
-        return tuple(words[start:])
+        walk = self._unwrapping
+        return tuple(walk.words[walk.start :])
 
     @cached_property
     def prefix(self) -> tuple[str, ...]:
         """The words before the command: its assignments, wrappers and their options."""
-        words, start = self._unwrapping
-        return tuple(words[:start])
+        walk = self._unwrapping
+        return tuple(walk.words[: walk.start])
+
+    @cached_property
+    def loose_readings(self) -> tuple["Argv", ...]:
+        """This command read once more for each valued option of a wrapper it walks past whose
+        value is a bare word, with that option taken as a flag: the value (and the words after
+        it) are then the command. A program may not take a value there (`chrt -D opencode db`:
+        the man page says a nanosecond count), and the table follows the program; this guard
+        checks both readings, so what it refused as the command before it refuses still. More than
+        MAX_LOOSE_READINGS of them are refused: every reading is a check of the whole command."""
+        if self.loose:
+            return ()  # a reading is not read again
+        walk = self._unwrapping
+        positions = [
+            position for position in walk.valued if not walk.words[position + 1].startswith("-")
+        ]
+        if len(positions) > MAX_LOOSE_READINGS:
+            raise RefusedError(
+                f"a command with more than {MAX_LOOSE_READINGS} wrapper options that take a value"
+                " cannot be checked"
+            )
+        return tuple(replace(self, loose=frozenset({position})) for position in positions)
 
 
 SEPARATORS = re.compile(r"(\|\||&&|\||;|&|\n)")
@@ -625,9 +669,7 @@ PROCESS_SUBSTITUTION = "<(...)"
 SHELLS: frozenset[str] = wrapper_commands.SHELLS
 # The builtins that run a file as shell text.
 SOURCING = frozenset({"source", "."})
-# A shell or one of those builtins: each runs what a pipe, a heredoc, a `<<<` string or a
-# process substitution gives it.
-SHELL_READERS = SHELLS | SOURCING
+SHELL_READERS: frozenset[str] = wrapper_commands.SHELL_READERS
 SHELL_PREFIXES = frozenset({"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until"})
 SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 # `opencode`, `opencode-ai@1`, `opencode.exe`, and `opencode serve` as one word (`pkill -f`).
@@ -640,64 +682,29 @@ RUNNER_ARGUMENTS = {
 }
 
 
-@dataclass(frozen=True)
-class Wrapper:
-    """How a command that runs another reads its words: options that take a value, and the
-    words that follow the options (timeout's duration)."""
+class _Syntax(Protocol):
+    """What this guard reads of a wrapper_commands.WrapperSyntax: the options that take a value,
+    the words that follow the options (timeout's duration), and whether assignments may come
+    next (`env A=1 cmd`)."""
 
-    valued: frozenset[str] = frozenset()
-    operands: int = 0
-    assignments: bool = False
+    @property
+    def valued(self) -> frozenset[str]: ...
+
+    @property
+    def operands(self) -> int: ...
+
+    @property
+    def assignments(self) -> bool: ...
 
 
-def _wrapper(valued: str = "", operands: int = 0, assignments: bool = False) -> Wrapper:
-    return Wrapper(frozenset(valued.split()), operands, assignments)
-
-
-# How the wrappers of wrapper_commands.WRAPPERS that this guard walks past read their options. A
-# wrapper that is not here (a shell, `su`, `script`, `tmux`...) is not walked past; its command
+# How the wrappers of wrapper_commands.WRAPPER_SYNTAX that this guard walks past read their
+# options. Any option not in `valued` is taken to be a flag, so the word after it is the command. A
+# wrapper that is not there (a shell, `su`, `script`, `tmux`...) is not walked past; its command
 # strings are read, and any word that names opencode after it is refused anyway.
-OPTION_SYNTAX = {
-    "env": _wrapper("-u --unset -C --chdir", assignments=True),
-    "exec": _wrapper("-a"),
-    "command": _wrapper(),
-    "builtin": _wrapper(),
-    "nice": _wrapper("-n --adjustment"),
-    "nohup": _wrapper(),
-    "time": _wrapper("-f -o --format --output"),
-    "timeout": _wrapper("-s -k --signal --kill-after", operands=1),
-    "sudo": _wrapper(
-        "-C -D -g -p -R -r -T -t -U -u --chdir --group --prompt --user", assignments=True
-    ),
-    "doas": _wrapper("-u -C"),
-    "stdbuf": _wrapper("-i -o -e"),
-    "setsid": _wrapper(),
-    "ionice": _wrapper("-c -n -p -P -u -t"),
-    "xargs": _wrapper("-a -E -I -L -n -P -s -d --arg-file --max-args --max-procs --delimiter"),
-    "watch": _wrapper("-n -d --interval"),
-    "unbuffer": _wrapper(),
-    "npx": _wrapper("-p --package -c --call"),
-    "bunx": _wrapper("-p --package"),
-    "pnpx": _wrapper("-p --package"),
-    "taskset": _wrapper(operands=1),
-    "chrt": _wrapper(operands=1),
-    "flock": _wrapper("-w -E -c --timeout --conflict-exit-code --command", operands=1),
-    "unshare": _wrapper("-S -G -R -w --root --wd --setuid --setgid --propagation --map-user"),
-    "setpriv": _wrapper(
-        "--reuid --regid --ruid --euid --rgid --egid --groups --inh-caps --bounding-set"
-        " --ambient-caps --securebits --pdeathsig --selinux-label --apparmor-profile"
-    ),
-    "runuser": _wrapper("-u -g -G -s -c -l --user --group --supp-group --shell --command"),
-    "strace": _wrapper("-e -o -p -s -u -E -a -I -P -S -X -b -O -U --env --output"),
-    "ltrace": _wrapper("-e -o -p -s -u -A -n -l --output"),
-    "parallel": _wrapper("-j -a -S -N -n -L -P --jobs --arg-file --sshlogin --max-args"),
-    "systemd-run": _wrapper(
-        "-p -u -E -M -G --property --unit --setenv --machine --slice --description --uid --gid"
-        " --working-directory --on-active --on-calendar"
-    ),
-    "busybox": _wrapper(),
-}
-RUNNER_OPTIONS = _wrapper("-p --package -c --call -C --prefix --workspace -w")
+OPTION_SYNTAX: Mapping[str, _Syntax] = wrapper_commands.WRAPPER_SYNTAX
+RUNNER_OPTIONS: _Syntax = wrapper_commands.WrapperSyntax(
+    valued=frozenset({"-p", "--package", "-c", "--call", "-C", "--prefix", "--workspace", "-w"})
+)
 # Launcher options known to take no value, so the word after one is the program; any other option
 # may take the next word as its value. `-n` only for poetry: `conda run -n <env>` takes one.
 LAUNCHER_FLAGS = frozenset(
@@ -846,7 +853,7 @@ def _commands(text: str) -> list[Argv]:
     return found
 
 
-def _skip_options(words: Sequence[str], start: int, wrapper: Wrapper) -> int:
+def _skip_options(words: Sequence[str], start: int, wrapper: _Syntax, walk: "_Walking") -> int:
     index = start
     while index < len(words):
         word = words[index]
@@ -854,7 +861,10 @@ def _skip_options(words: Sequence[str], start: int, wrapper: Wrapper) -> int:
             index += 1
             break
         if word.startswith("-") and word != "-":
-            index += 2 if word in wrapper.valued else 1
+            valued = word in wrapper.valued and index not in walk.loose
+            if valued and index + 1 < len(words):
+                walk.valued.append(index)
+            index += 2 if valued else 1
         elif wrapper.assignments and SHELL_ASSIGNMENT.match(word):
             index += 1
         else:
@@ -888,10 +898,28 @@ def _split_string(words: Sequence[str], index: int) -> list[str] | None:
         return [*words[:index], *value.split(), *rest]
 
 
-def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
-    """The words (with an `env -S` string split) and where the command under its assignments and
-    wrappers starts in them."""
+@dataclass
+class _Walking:
+    """What `_walk` has found so far: the positions of the options that took a value, and the
+    positions it was told to read as flags."""
+
+    loose: frozenset[int]
+    valued: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Walk:
+    """The words of a command (with an `env -S` string split), where the command under its
+    assignments and wrappers starts in them, and the positions of the options that took a value."""
+
+    words: list[str]
+    start: int
+    valued: tuple[int, ...]
+
+
+def _walk(words: Sequence[str], loose: frozenset[int] = frozenset()) -> _Walk:
     current = list(words)
+    walking = _Walking(loose)
     index = _after_prefixes(current, 0)
     for _ in range(MAX_UNWRAP):
         if index >= len(current):
@@ -912,8 +940,15 @@ def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
                 if split is not None:
                     current = split
                     break
-        index = _after_prefixes(current, _skip_options(current, index + 1, wrapper))
-    return current, min(index, len(current))
+        index = _after_prefixes(current, _skip_options(current, index + 1, wrapper, walking))
+    return _Walk(current, min(index, len(current)), tuple(walking.valued))
+
+
+def _unwrap(words: Sequence[str]) -> tuple[list[str], int]:
+    """The words (with an `env -S` string split) and where the command under its assignments and
+    wrappers starts in them."""
+    walk = _walk(words)
+    return walk.words, walk.start
 
 
 def _short_c_option(word: str) -> bool:
@@ -980,12 +1015,10 @@ def _find_actions(words: Sequence[str], piped: bool) -> list[Argv]:
     return actions
 
 
-def _nested(argv: Argv, depth: int) -> list[Argv]:
-    """The commands inside one: shell strings, `eval`, runner strings and find actions."""
-    if depth > MAX_NESTING:
-        raise RefusedError("a command nested this deeply cannot be checked")
+def _bodies(argv: Argv) -> list[str]:
+    """The texts a command runs or reads as shell: its shell strings, `eval`, runner strings and
+    `$(...)`, and the heredocs, here-strings and files it feeds to a shell that reads them."""
     command = argv.command
-    found: list[Argv] = []
     strings = [
         *_command_strings(argv.words),
         *_command_strings(command),
@@ -994,13 +1027,54 @@ def _nested(argv: Argv, depth: int) -> list[Argv]:
     ]
     if command and _base(command[0]) in SHELL_READERS:
         strings.extend(argv.inputs)
-    for inner in strings:
-        found.extend(argvs(inner, depth + 1))
+    return strings
+
+
+def _actions(argv: Argv) -> list[Argv]:
+    """The commands of the `-exec` actions of a `find` command."""
+    command = argv.command
     if command and _base(command[0]) == "find":
-        for action in _find_actions(command[1:], argv.piped):
-            found.append(action)
-            found.extend(_nested(action, depth + 1))
+        return _find_actions(command[1:], argv.piped)
+    return []
+
+
+def _nested(argv: Argv, depth: int) -> list[Argv]:
+    """The commands inside one: shell strings, `eval`, runner strings and find actions."""
+    if depth > MAX_NESTING:
+        raise RefusedError("a command nested this deeply cannot be checked")
+    found: list[Argv] = []
+    for inner in _bodies(argv):
+        found.extend(argvs(inner, depth + 1))
+    for action in _actions(argv):
+        found.append(action)
+        found.extend(_nested(action, depth + 1))
     found.extend(_anywhere_commands(argv.words, argv.piped))
+    return found
+
+
+def _loose_nested(argv: Argv, depth: int) -> list[Argv]:
+    """The commands inside the other readings of one (`Argv.loose_readings`) that its own reading
+    does not hold: a valued option read as a flag may leave a shell as the command, and the
+    heredoc, here-string or string it reads is then a body to check. Each text or action is read
+    once, so the work stays that of the command's words."""
+    readings = argv.loose_readings
+    if not readings:
+        return []
+    if depth > MAX_NESTING:
+        raise RefusedError("a command nested this deeply cannot be checked")
+    seen = set(_bodies(argv))
+    known = {each.words for each in _actions(argv)}
+    found: list[Argv] = []
+    for reading in readings:
+        for inner in _bodies(reading):
+            if inner not in seen:
+                seen.add(inner)
+                found.extend(argvs(inner, depth + 1))
+        for action in _actions(reading):
+            if action.words not in known:
+                known.add(action.words)
+                found.append(action)
+                found.extend(_nested(action, depth + 1))
     return found
 
 
@@ -1098,6 +1172,7 @@ def argvs(text: str, depth: int = 0) -> list[Argv]:
     for argv in _commands(text):
         found.append(argv)
         found.extend(_nested(argv, depth))
+        found.extend(_loose_nested(argv, depth))
     return found
 
 
@@ -1538,6 +1613,8 @@ def shell_problem(command: str, cwd: Path, scope: Scope) -> None:
         raise RefusedError(COVEN_CHECKOUT_RULE)
     for argv in commands:
         check_command(argv, names, here)
+        for reading in argv.loose_readings:
+            check_command(reading, names, here)
     view = View(
         scope,
         here,
@@ -1615,7 +1692,7 @@ def path_problem(
         check_word(path, [cwd], view, mode)
     if pattern is not None:
         where = [_resolve(path, cwd) or cwd for path in paths] or [cwd]
-        for word in _braces(pattern):
+        for word in _brace_words(pattern, one_word=True):
             check_word(word, where, view, mode)
 
 

@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -692,6 +693,44 @@ def test_a_command_nested_too_deeply_is_refused(world: World) -> None:
     for _ in range(12):
         command = "bash -c " + json.dumps(command)
     assert world.call("Bash", "command", command)
+
+
+# A wrapper option that takes a value is read once more as a flag (`Argv.loose_readings`), a full
+# check of the command each: the readings are capped, so a long line is decided fast.
+VALUED_OPTIONS = {"sudo": "sudo " + "-u x " * 50, "flock": "flock " + "-w 1 " * 50}
+DECISION_SECONDS = 2.0  # the guard's own timeout is 5 s
+
+
+@pytest.mark.parametrize("wrapper", VALUED_OPTIONS)
+def test_a_line_with_many_valued_options_is_refused_fast(world: World, wrapper: str) -> None:
+    line = VALUED_OPTIONS[wrapper] + ("lock " if wrapper == "flock" else "") + "ls"
+    started = time.monotonic()
+    refusal = world.call("Bash", "command", line)
+    assert time.monotonic() - started < DECISION_SECONDS
+    assert refusal
+    assert "more than 16 wrapper options that take a value" in refusal
+
+
+@pytest.mark.parametrize("wrapper", VALUED_OPTIONS)
+def test_a_line_with_many_valued_options_still_refuses_opencode_fast(
+    world: World, wrapper: str
+) -> None:
+    line = VALUED_OPTIONS[wrapper] + ("lock " if wrapper == "flock" else "") + "opencode db"
+    started = time.monotonic()
+    assert world.call("Bash", "command", line)
+    assert time.monotonic() - started < DECISION_SECONDS
+
+
+def test_a_line_with_the_most_valued_options_is_still_read_and_allowed(world: World) -> None:
+    assert world.call("Bash", "command", "sudo " + "-u x " * 16 + "ls") is None
+    assert world.call("Bash", "command", "sudo " + "-u x " * 17 + "ls")
+
+
+def test_valued_options_are_counted_for_each_command_of_a_line(world: World) -> None:
+    line = "; ".join(["sudo " + "-u x " * 16 + "ls"] * 40)
+    started = time.monotonic()
+    assert world.call("Bash", "command", line) is None
+    assert time.monotonic() - started < DECISION_SECONDS
 
 
 DATA_AND_ANCESTORS_REFUSED = [
@@ -1922,3 +1961,109 @@ def test_main_refuses_when_the_check_itself_fails(
         ]
     )
     assert code == 2
+
+
+# --- brace expansion: one expander (shell_words.brace_words), refused when it cannot tell ---
+
+BRACE_RULE = "a path built from a brace expansion the guard cannot tell"
+# A word of 65 members, and one of more than 64 braces that expands to nothing.
+PAST_THE_CAP = [
+    "touch <project>/f{1..65}",
+    "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
+    "touch <project>/{a,b,c}{a,b,c}{a,b,c}{a,b,c}",
+    "touch <project>/{1..9}{1..9}",
+    "touch <project>/" + "{a}" * 65,
+    "touch <project>/{a,{b,c}}{a,{b,c}}{a,{b,c}}{a,{b,c}}",
+    "echo '<project>/f{1..100}'",
+    "bash -c 'touch <project>/f{1..100}'",
+    "touch <project>/f{1..$N}",
+]
+AT_THE_CAP = [
+    "touch <project>/f{1..64}",
+    "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
+    "touch <project>/{a,b,c}{a,b,c}{a,b,c}",
+    "touch <project>/" + "{a}" * 64,
+    "touch <project>/f{a..e}{01..10}",
+]
+
+
+@pytest.mark.parametrize("command", PAST_THE_CAP)
+def test_a_brace_word_the_guard_cannot_tell_is_refused(world: World, command: str) -> None:
+    refused = world.call("Bash", "command", command)
+    assert refused is not None
+    assert BRACE_RULE in refused
+    assert "more than 64 words or braces in one word, or a range with a variable" in refused
+    assert "write the paths out" in refused
+
+
+@pytest.mark.parametrize("command", AT_THE_CAP)
+def test_a_brace_word_of_64_members_or_braces_is_allowed(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+def test_the_refusal_past_the_cap_does_not_depend_on_the_path(world: World) -> None:
+    """The guard cannot tell where the words go, so a word past the cap is refused far from every
+    protected folder too (it was kept literal, with the rest, past 256 words)."""
+    assert world.call("Bash", "command", "touch <project>/f{1..100}") is not None
+    assert world.call("Bash", "command", "touch <project>/f{1..30}") is None
+
+
+# The serve folder's password, written only behind a brace range, step, padding or nested list.
+HIDDEN_BY_BRACES = [
+    "cat <home>/pro{f..f}ile/state/serve/password",
+    "cat <home>/pro{f..f..1}ile/state/serve/password",
+    "cat <home>/pro{d..h..2}ile/state/serve/password",
+    "cat <home>/pro{g..f}ile/state/serve/password",
+    "cat <home>/profile/state/serve/pass{v..w}ord",
+    "cat <home>/profile/{x,{s..s}tate}/serve/password",
+    "cat <home>/profile/state/serve/{x,{01..02},password}",
+    "cat <home>/profile/state/serve/{{01..02},password}",
+    "cat <home>/profile/state/serve/{x,{1..5..2},password}",
+    "cat <home>/pro{x,{f..f}}ile/state/serve/password",
+    "cat <home>/pro{x,{y,{f,g}}}ile/state/serve/password",
+    "cat <home>/profile/state/serve/password{,.bak}",
+    "cat <home>/profile/state/serve/${x,password}",
+    "cat '<home>/pro{x,{f..f}}ile/state/serve/password'",
+    "cat <home>/pro\\{f..f\\}ile/state/serve/password",
+]
+
+
+@pytest.mark.parametrize("command", HIDDEN_BY_BRACES)
+def test_a_protected_path_hidden_only_by_a_brace_expansion_is_refused(
+    world: World, command: str
+) -> None:
+    refused = world.call("Bash", "command", command)
+    assert refused is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "touch <project>/f{1..3}",
+        "touch <project>/f{01..10..3}",
+        "touch <project>/{x,{a..c},y}",
+        "cat <project>/{x,{a..c}}",
+        "cat <project>/README.{md,txt}",
+    ],
+)
+def test_a_range_step_padding_or_nested_list_that_stays_clear_is_allowed(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command) is None
+
+
+def test_a_glob_pattern_is_refused_past_the_cap_and_when_a_range_hides_a_path(
+    world: World,
+) -> None:
+    assert BRACE_RULE in (world.call("Glob", "pattern", "<project>/f{1..65}") or "")
+    assert world.call("Glob", "pattern", "<project>/f{1..64}") is None
+    assert world.call("Glob", "pattern", "<home>/pro{f..f}ile/state/serve/*") is not None
+
+
+def test_a_glob_pattern_is_one_word_so_a_blank_in_a_brace_is_a_name(world: World) -> None:
+    """`one_word`: the old guard expanded `{a b,state}` in a pattern (a blank is part of a file
+    name there); a text cut at blanks would not, and would let the path through."""
+    assert world.call("Glob", "pattern", "<profile>/{a b,state}/serve/password") is not None
+    assert world.call("Glob", "pattern", "<profile>/{a\tb,state}/serve/password") is not None
+    assert world.call("Glob", "pattern", "<project>/{a b,c}/x") is None
+    assert world.call("Bash", "command", "touch <project>/{a b,c}") is None

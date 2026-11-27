@@ -1573,7 +1573,8 @@ def test_a_missing_hook_log_module_does_not_change_the_decision(repo, run_hook, 
     lone = tmp_path / "lone"
     lone.mkdir()
     (lone / SCRIPT.name).write_text(SCRIPT.read_text())
-    (lone / "hook_support.py").write_text((SCRIPT.parent / "hook_support.py").read_text())
+    for support in ("hook_support.py", "wrapper_commands.py"):  # the files pm reads at load
+        (lone / support).write_text((SCRIPT.parent / support).read_text())
     allowed = run_hook(
         lone / SCRIPT.name, request("git push -u origin feature", repo), {ROLE: "pm"}
     )
