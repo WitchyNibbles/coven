@@ -11,8 +11,10 @@ says nothing about a command with no push, merge, send-pack or gh word in it). T
      walker (an option a table does not list means no command; numeric options such as `nice -5`
      are read) and ask one shared test whether it runs its stdin as shell text. The entries it
      moves: `doas -n ls`, `doas -u root -n ls` and `sudo -h h ls` (an unlisted option, so no
-     command), `parallel -j2 echo` in opencode, and a `script -qc sh` or `runuser x` start in prod
-     or opencode. Tasks 3-5 confirm the tags
+     command), and a `script -qc sh`, `sh -c sh` or `runuser x` start in prod or opencode (a
+     shell `-c` string whose first word is a shell reads stdin). The `-push` rows are controls:
+     pm refuses a real push whatever the receiver; the `-text` rows feed it the text of one.
+     Tasks 3-5 confirm the tags
   none  no task may move it; the `gap-` entries pin holes the slices leave open (each was allowed
      at c202ca4 and is now): a later slice that closes one moves its entry toward refuse
 Slice 1's tag (h) and phase 1's (3, 4 and 5) are gone: every entry they named is at its end state.
@@ -1827,13 +1829,19 @@ ENTRIES = (
         "s2-parallel-j2-echo-push",
         "git push -f origin main | parallel -j2 echo",
         (A, R, A, A),
-        "s2",
+        "none",
     ),
     Entry(
-        "s2-parallel-j2-echo-claude", "echo 'claude -p hi' | parallel -j2 echo", (A, N, R, A), "s2"
+        "s2-parallel-j2-echo-claude",
+        "echo 'claude -p hi' | parallel -j2 echo",
+        (A, N, R, A),
+        "none",
     ),
     Entry(
-        "s2-parallel-j2-echo-opencode", "echo 'opencode db' | parallel -j2 echo", (A, N, A, A), "s2"
+        "s2-parallel-j2-echo-opencode",
+        "echo 'opencode db' | parallel -j2 echo",
+        (A, N, A, A),
+        "none",
     ),
     Entry("s2-nice-5-sh-push", "git push -f origin main | nice -5 sh", (A, R, A, R), "none"),
     Entry("s2-nice-5-sh-claude", "echo 'claude -p hi' | nice -5 sh", (A, N, R, R), "none"),
@@ -1879,6 +1887,62 @@ ENTRIES = (
     Entry("s2-runuser-x-push", "git push -f origin main | runuser x", (A, R, A, A), "s2"),
     Entry("s2-runuser-x-claude", "echo 'claude -p hi' | runuser x", (A, N, A, A), "s2"),
     Entry("s2-runuser-x-opencode", "echo 'opencode db' | runuser x", (A, N, A, A), "s2"),
+    # --- the same receivers fed the text of a push: pm reads the text form; the push rows above
+    # are its controls (pm refuses a real push whatever the receiver)
+    Entry("s2-doas-n-ls-text", "echo 'git push -f origin main' | doas -n ls", (A, R, A, A), "s2"),
+    Entry(
+        "s2-doas-u-root-n-ls-text",
+        "echo 'git push -f origin main' | doas -u root -n ls",
+        (A, R, A, A),
+        "s2",
+    ),
+    Entry(
+        "s2-sudo-h-h-ls-text", "echo 'git push -f origin main' | sudo -h h ls", (A, R, A, A), "s2"
+    ),
+    Entry(
+        "s2-su-session-command-ls-text",
+        "echo 'git push -f origin main' | su --session-command ls",
+        (A, R, A, R),
+        "none",
+    ),
+    Entry("s2-su-c-ls-text", "echo 'git push -f origin main' | su -c ls", (A, N, A, R), "none"),
+    Entry("s2-bash-c-ls-text", "echo 'git push -f origin main' | bash -c ls", (A, R, A, R), "none"),
+    Entry(
+        "s2-script-qc-ls-text",
+        "echo 'git push -f origin main' | script -qc ls /dev/null",
+        (A, N, A, R),
+        "none",
+    ),
+    Entry("s2-make-text", "echo 'git push -f origin main' | make", (A, N, A, R), "none"),
+    Entry("s2-make-C-x-text", "echo 'git push -f origin main' | make -C x", (A, N, A, R), "none"),
+    Entry(
+        "s2-parallel-j2-echo-text",
+        "echo 'git push -f origin main' | parallel -j2 echo",
+        (A, N, A, A),
+        "none",
+    ),
+    Entry("s2-nice-5-sh-text", "echo 'git push -f origin main' | nice -5 sh", (A, R, A, R), "none"),
+    Entry(
+        "s2-nice-5-cat-text", "echo 'git push -f origin main' | nice -5 cat", (A, N, A, A), "none"
+    ),
+    Entry("s2-ssh-host-text", "echo 'git push -f origin main' | ssh host", (A, R, A, A), "none"),
+    Entry(
+        "s2-doas-u-x-cat-text",
+        "echo 'git push -f origin main' | doas -u x cat",
+        (A, N, A, A),
+        "none",
+    ),
+    Entry(
+        "s2-script-c-sh-text", "echo 'git push -f origin main' | script -c sh", (A, R, A, R), "none"
+    ),
+    Entry(
+        "s2-script-qc-sh-text",
+        "echo 'git push -f origin main' | script -qc sh /dev/null",
+        (A, R, A, R),
+        "none",
+    ),
+    Entry("s2-su-c-sh-text", "echo 'git push -f origin main' | su -c sh", (A, R, A, R), "none"),
+    Entry("s2-runuser-x-text", "echo 'git push -f origin main' | runuser x", (A, N, A, A), "s2"),
     # --- holes slice 1 leaves open (the same at c202ca4): pinned so a later slice must move them
     Entry("gap-oc-paren-sh", "echo 'opencode db' | (sh)", (A, N, A, A), "none"),
     Entry("gap-oc-paren-sudo-s", "echo 'opencode db' | (sudo -s)", (A, N, A, A), "none"),
@@ -1900,7 +1964,7 @@ ENTRIES = (
         (A, N, A, R),
         "s2",
     ),
-    Entry("gap-prod-sh-c-sh", "echo 'claude -p hi' | sh -c sh", (A, N, A, R), "none"),
+    Entry("gap-prod-sh-c-sh", "echo 'claude -p hi' | sh -c sh", (A, N, A, R), "s2"),
     Entry("gap-prod-subst-sh", "echo 'claude -p hi' | $(echo sh)", (A, N, A, R), "none"),
     Entry("gap-prod-eval-cat", 'eval "$(cat)" < x.txt; echo claude -p hi', (A, N, A, R), "none"),
     Entry("gap-prod-chroot", "echo 'claude -p hi' | chroot /r", (A, N, A, A), "none"),
