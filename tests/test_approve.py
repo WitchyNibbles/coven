@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from isolation import SCRATCH_HOME
+from isolation import SCRATCH_HOME, require_scratch_home
 from support import REPO, git, neutral_hook
 
 from coven import approve, cli, guard
@@ -50,6 +50,7 @@ def home() -> Path:
 
 
 def configure(store: Path) -> None:
+    require_scratch_home()
     file = home() / ".config" / "coven" / "config.json"
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps({"memory_path": str(store)}))
@@ -58,6 +59,7 @@ def configure(store: Path) -> None:
 def make_store(path: Path, guard_json: object = GUARD) -> Path:
     """A store with the real pre-commit hook, a committed guard.json, and coven's config pointing
     at it."""
+    require_scratch_home()
     memory_store.init_store(path, None)
     neutral_hook(path)
     (path / "systems").mkdir(exist_ok=True)

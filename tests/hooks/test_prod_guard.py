@@ -18,7 +18,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
-from isolation import SCRATCH_HOME
+from isolation import SCRATCH_HOME, require_scratch_home
 from support import load_module
 
 from coven import cli, paths
@@ -95,6 +95,7 @@ def commit(store: Path) -> None:
 
 
 def make_store(path: Path, *, committed: bool = True, guard: object = GUARD) -> Path:
+    require_scratch_home()
     (path / "systems").mkdir(parents=True)
     (path / "approvals").mkdir()
     (path / "systems/guard.json").write_text(json.dumps(guard))
@@ -109,6 +110,7 @@ def config_file() -> Path:
 
 
 def write_config(text: str) -> None:
+    require_scratch_home()
     config_file().parent.mkdir(parents=True, exist_ok=True)
     config_file().write_text(text)
 

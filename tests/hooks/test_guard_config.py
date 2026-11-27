@@ -10,7 +10,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from isolation import SCRATCH_HOME
+from isolation import SCRATCH_HOME, require_scratch_home
 from support import load_module
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
@@ -32,6 +32,7 @@ def home() -> Path:
 
 
 def write_config(text: str) -> Path:
+    require_scratch_home()
     file = home() / ".config" / "coven" / "config.json"
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(text, encoding="utf-8")

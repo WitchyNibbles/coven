@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
+import isolation
 import pytest
 from support import (
     CHECK,
@@ -24,55 +25,10 @@ from support import (
     npm_ci,
 )
 
-
-@pytest.fixture(autouse=True)
-def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No test reads or writes the real home, config, cache or Claude directory."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(home / ".cache"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
-    monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local" / "state"))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude"))
-    monkeypatch.delenv("COVEN_SESSION_ROLE", raising=False)
-    # Claude Code sets it in a background session: a run from one must not hand it to a hook.
-    monkeypatch.delenv("CLAUDE_JOB_DIR", raising=False)
-    for name in ("COVEN_OPENCODE_HOME", "COVEN_OPENCODE_BIN", *os.environ):
-        if name.startswith("OPENCODE_") or name.startswith("COVEN_OPENCODE_"):
-            monkeypatch.delenv(name, raising=False)
-
-
-# What git exports to a hook it runs (a pre-commit run starts pytest with some of these set): each
-# one would point a test's git at the repo that started the run.
-GIT_HOOK_VARIABLES = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_PREFIX",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-)
-
-
-@pytest.fixture(autouse=True)
-def git_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Git reads one test-owned config and identity, never the user's, and never the outer repo."""
-    config = tmp_path / "gitconfig"
-    config.write_text(
-        "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n"
-        # No detached auto-maintenance: it holds lock files while a test copies the repo.
-        "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n"
-    )
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    for role in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{role}_NAME", "Test")
-        monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")
-    for name in GIT_HOOK_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+# The test isolation lives in isolation.py and every conftest under tests/ binds it by name: a run
+# that loads one conftest alone (a test file outside tests/, with `-p conftest`) gets it too.
+isolated_home = isolation.isolated_home
+git_isolation = isolation.git_isolation
 
 
 @pytest.fixture(autouse=True)

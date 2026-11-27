@@ -97,6 +97,12 @@
   guarded tails, piped, here-string and heredoc, brace words around secret names) against the
   guards before this slice shows none moving from refused to allowed in any guard, and no change
   in pm-permissions' approval path.
+- Tests: the isolation of HOME, XDG, the Claude folder and git moved from `tests/conftest.py` to
+  `tests/isolation.py`, and every conftest under `tests/` binds it. A run that loaded one
+  sub-conftest alone (`-p conftest` for a test file outside `tests/`) no longer writes the real
+  home: the guards' fixtures had made `$HOME/profile` and `$HOME/coven-memory` and replaced
+  coven's config file. `isolated_home` marks the scratch home, and the test helpers that write
+  coven's config or a store refuse a HOME that is not that home.
 
 ## 0.2.0 (2026-11-25)
 

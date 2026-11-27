@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import corpus_harness as harness
+import isolation
 import pytest
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
@@ -42,6 +43,12 @@ def _run_hook(
         cwd=cwd,
         env={**os.environ, **(env or {})},
     )
+
+
+# The test isolation (HOME, XDG, Claude and git), bound by name as in tests/conftest.py: this
+# conftest may be loaded alone.
+isolated_home = isolation.isolated_home
+git_isolation = isolation.git_isolation
 
 
 @pytest.fixture

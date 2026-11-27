@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import isolation
 import pytest
 from doctor_kit import KEY_NAME, KEY_VALUE, LITELLM_FLAGS, Good
 from fakes import fake_opencode, install_superpowers
@@ -14,6 +15,11 @@ from coven import cli
 from coven.opencode import checks_isolation, serve, superpowers
 from coven.opencode.check_types import Outcome
 from coven.opencode.profile import layout
+
+# The test isolation (HOME, XDG, Claude and git), bound by name as in tests/conftest.py: this
+# conftest may be loaded alone.
+isolated_home = isolation.isolated_home
+git_isolation = isolation.git_isolation
 
 
 @pytest.fixture(autouse=True)

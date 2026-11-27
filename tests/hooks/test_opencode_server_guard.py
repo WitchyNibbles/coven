@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from isolation import require_scratch_home
 from support import load_module
 
 HOOKS = Path(__file__).resolve().parents[2] / "hooks"
@@ -68,7 +69,7 @@ def touch(path: Path, text: str = "x") -> Path:
 
 @pytest.fixture
 def world(tmp_path: Path) -> World:
-    home = Path(os.environ["HOME"])
+    home = require_scratch_home()
     profile = home / "profile"
     serve = profile / "state" / "serve"
     # Not under the profile's parents: a folder above the coven root is not above the profile.

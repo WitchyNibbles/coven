@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from isolation import SCRATCH_HOME
+from isolation import SCRATCH_HOME, require_scratch_home
 from memory.memory_support import neutral_hook
 from pm.fixtures import SLEEP_CLI, fake_claude
 from support import commit_all, git
@@ -602,6 +602,7 @@ REMOTE = "https://git.example.internal/user/notes.git"
 
 
 def write_config(**fields: object) -> None:
+    require_scratch_home()
     file = config.config_file()
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps(fields))

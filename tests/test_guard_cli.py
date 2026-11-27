@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from isolation import SCRATCH_HOME
+from isolation import SCRATCH_HOME, require_scratch_home
 from support import REPO, commit_all, git
 
 from coven import cli, guard
@@ -57,6 +57,7 @@ def home() -> Path:
 
 
 def write_config(text: str) -> None:
+    require_scratch_home()
     file = home() / ".config" / "coven" / "config.json"
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(text)
@@ -68,6 +69,7 @@ def configure(store: Path, *, latch: bool = False) -> None:
 
 
 def make_store(path: Path, *, committed: bool = True, guard_json: object = GUARD) -> Path:
+    require_scratch_home()
     (path / "systems").mkdir(parents=True)
     (path / "approvals").mkdir()
     (path / "systems" / "guard.json").write_text(json.dumps(guard_json))
