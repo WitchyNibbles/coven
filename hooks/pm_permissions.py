@@ -167,10 +167,20 @@ except Exception as exc:
     wrapper_commands = ModuleType("wrapper_commands")
     vars(wrapper_commands).update(
         dict.fromkeys(
-            ("SHELLS", "SHELL_KEYWORDS", "WRAPPERS", "EXEC_WRAPPERS", "WALKED"), frozenset[str]()
+            (
+                *("SHELLS", "SHELL_KEYWORDS", "WRAPPERS", "EXEC_WRAPPERS", "WALKED"),
+                *("STDIN_PATHS", "INPUT_SOURCES", "COMMAND_STRING_OPTIONS"),
+            ),
+            frozenset[str](),
         ),
         WRAPPER_SYNTAX={"parallel": None},
         NUMERIC_OPTION=re.compile(r"(?!)"),
+        # The shared walker and reads-its-input test refuse by default: no option can be
+        # followed, and every receiver is read as running its stdin.
+        option_words=lambda *_: None,
+        runs_stdin_as_commands=lambda *_: True,
+        READER_SYNTAX={},
+        MAKE_GLUED_FILE=re.compile(r"(?!)"),
     )
     SUPPORT_ERROR = type(exc).__name__
 

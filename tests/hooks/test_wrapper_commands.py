@@ -4,10 +4,13 @@ is one, else the upstream page named in `wrapper_commands.py`), so an option an 
 wrongly is corrected here, and the word after a flag is still the command. How each guard follows
 the table is its own; the corpus (`test_guard_corpus.py`) pins the verdicts."""
 
+import sys
+from pathlib import Path
 from typing import NamedTuple
 
 import corpus_harness as harness
 import pytest
+from support import load_module
 
 table = harness.TABLES["wrapper_commands"]
 opencode = harness.TABLES["opencode_server_guard"]
@@ -376,3 +379,336 @@ def test_prod_reads_nice_past_one_option_only() -> None:
     """A second option is one it does not read past (`nice -n 5 -n 3`)."""
     assert prod._wrapper_end(words_of("nice", "-n", "5", "-n", "3", "grep")) == 0
     assert prod._wrapper_end(words_of("nice", "-5", "-n", "3", "grep")) == 0
+
+
+# --- the shared option walker and the reads-its-input test ---------------------------------------
+
+NEW_NAMES = (
+    "option_words",
+    "READER_SYNTAX",
+    "STDIN_PATHS",
+    "MAKE_GLUED_FILE",
+    "INPUT_SOURCES",
+    "COMMAND_STRING_OPTIONS",
+    "runs_stdin_as_commands",
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "words", "end"),
+    [
+        ("nice", ["nice", "-5", "sh"], 2),  # the numeric option is read: the command is `sh`
+        ("nice", ["nice", "-n", "5", "sh"], 3),
+        ("nice", ["nice", "-n5", "sh"], 2),
+        ("nice", ["nice", "--adjustment=5", "sh"], 2),
+        ("nice", ["nice", "sh"], 1),
+        ("nice", ["nice"], 1),
+        ("nice", ["nice", "--", "-5"], 2),
+        ("timeout", ["timeout", "-s", "KILL", "5", "sh"], 4),
+        ("env", ["env", "-u", "X", "A=1", "sh"], 4),
+        ("sudo", ["sudo", "-u", "me", "ls"], 3),
+        ("sudo", ["sudo", "-n", "A=1", "ls"], 3),
+        ("sudo", ["sudo", "-h", "h", "ls"], None),  # an option the table does not list
+        ("nice", ["nice", "-n"], None),  # a valued option with no value
+        ("nice", ["nice", "-x", "sh"], None),
+        ("nice", ["nice", "--unknown", "sh"], None),
+    ],
+)
+def test_the_walker_returns_where_the_command_starts(
+    name: str, words: list[str], end: int | None
+) -> None:
+    assert table.option_words(table.WRAPPER_SYNTAX[name], words, 1) == end
+
+
+@pytest.mark.parametrize("name", sorted(table.WRAPPER_SYNTAX))
+@pytest.mark.parametrize(
+    "rest",
+    [
+        [],
+        ["ls"],
+        ["-n", "5", "ls"],
+        ["-5", "ls"],
+        ["-s", "ls"],
+        ["-x", "ls"],
+        ["--", "ls"],
+        ["--user=x", "ls"],
+        ["--user", "x", "ls"],
+        ["-u", "x", "A=1", "ls"],
+        ["-qc", "ls"],
+        ["-"],
+        ["-j2", "echo"],
+        ["-n"],
+    ],
+)
+def test_the_walker_reads_as_pm_does(name: str, rest: list[str]) -> None:
+    words = [name, *rest]
+    syntax = table.WRAPPER_SYNTAX[name]
+    assert table.option_words(syntax, words, 1) == pm._wrapped_start(syntax, words, 1)
+
+
+def test_the_readers_table_names_sudo_doas_and_screen() -> None:
+    assert set(table.READER_SYNTAX) == {"sudo", "doas", "screen"}
+
+
+def test_sudo_reads_its_shell_options_as_flags_and_nothing_else_differs() -> None:
+    shared, reader = table.WRAPPER_SYNTAX["sudo"], table.READER_SYNTAX["sudo"]
+    assert reader.flags == shared.flags | {"-s", "-i", "--shell", "--login"}
+    assert reader.valued == shared.valued
+    assert reader.assignments is shared.assignments
+
+
+def test_doas_is_its_wrapper_entry_with_no_flags() -> None:
+    """`doas -n ls` is no command: the stricter guard reads `-n` as an option it cannot follow."""
+    assert table.READER_SYNTAX["doas"] == table.WRAPPER_SYNTAX["doas"]
+    assert table.READER_SYNTAX["doas"].flags == frozenset()
+
+
+def test_screen_is_the_letters_pm_and_prod_both_had() -> None:
+    screen = table.READER_SYNTAX["screen"]
+    assert (screen.flags, screen.valued) == (pm.SCREEN_SYNTAX.flags, pm.SCREEN_SYNTAX.valued)
+    old = prod.STDIN_READER_OPTIONS["screen"]
+    assert (screen.flags, screen.valued) == (old.flags, old.valued)
+
+
+def test_the_small_tables_are_the_ones_the_guards_had() -> None:
+    assert table.STDIN_PATHS == pm.STDIN_PATHS == prod.STDIN_PATHS
+    assert (
+        table.MAKE_GLUED_FILE.pattern == pm.MAKE_GLUED_FILE.pattern == prod.MAKE_GLUED_FILE.pattern
+    )
+    assert table.INPUT_SOURCES == pm.PARALLEL_SOURCES == prod.INPUT_SOURCES
+    assert table.COMMAND_STRING_OPTIONS == {"-c", "--command", "--session-command"}
+
+
+READS_STDIN = [
+    # A shell: unknown means yes; a stdin redirect, `-`, `-s` or a stdin script too.
+    ["sh"],
+    ["bash"],
+    ["/bin/sh"],
+    ["bash", "-x"],
+    ["bash", "-s"],
+    ["bash", "-"],
+    ["bash", "-o", "pipefail"],
+    ["bash", "/dev/stdin"],
+    ["bash", "<in"],
+    ["bash", "<", "in"],
+    ["bash", "-s", "-c", "ls"],
+    # A shell given `-c` whose string starts with a shell reads stdin (Ruling s2-5).
+    ["sh", "-c", "sh"],
+    ["bash", "-c", "bash -s"],
+    ["bash", "-lc", "/bin/sh"],
+    ["sh", "-o", "pipefail", "-c", "zsh"],
+    # eval always.
+    ["eval"],
+    ["eval", "ls"],
+    # make: only a makefile read from stdin.
+    ["make", "-f", "-"],
+    ["make", "--file=-"],
+    ["make", "-f-"],
+    ["make", "-sf/dev/stdin"],
+    ["make", "--makefile=/dev/fd/0"],
+    # su, runuser and script: no command string, or one that starts a shell.
+    ["su"],
+    ["su", "-"],
+    ["su", "-l", "root"],
+    ["su", "-c", "sh"],
+    ["su", "-c", "bash -s"],
+    ["su", "--command", "sh"],
+    ["su", "--command=sh"],
+    ["su", "--session-command", "sh"],
+    ["su", "--session-command=/bin/sh"],
+    ["su", "-c"],
+    ["runuser", "x"],
+    ["runuser", "-u", "x", "ls"],
+    ["script"],
+    ["script", "-q", "/dev/null"],
+    ["script", "-c", "sh"],
+    ["script", "-qc", "sh", "/dev/null"],
+    ["script", "-qc"],
+    # sudo, doas and screen with no command after their options.
+    ["sudo"],
+    ["sudo", "-s"],
+    ["sudo", "-i"],
+    ["sudo", "--shell"],
+    ["sudo", "--login"],
+    ["sudo", "-n"],
+    ["sudo", "-u", "me"],
+    ["sudo", "A=1"],
+    ["sudo", "<in", "ls"],
+    ["sudo", "-h", "h", "ls"],  # `-h` is not an option the table can follow
+    ["doas"],
+    ["doas", "-s"],
+    ["doas", "-n", "ls"],  # Review Focus 2
+    ["doas", "-u", "root", "-n", "ls"],
+    ["screen"],
+    ["screen", "-"],
+    ["screen", "-dmS", "x"],
+    ["screen", "-d", "-m"],
+    # parallel with no command.
+    ["parallel"],
+    ["parallel", "-j", "2"],
+    ["parallel", ":::", "a"],
+    ["parallel", "-l", "2", "echo"],  # an option the table leaves out: no command
+]
+
+READS_NO_STDIN = [
+    [],
+    ["cat"],
+    ["grep", "-c", "bash"],
+    ["nice", "-5", "sh"],  # the guard walks `nice` itself: the receiver is `sh`
+    ["env", "sh"],
+    ["source"],
+    # A shell with a command string that is no shell, or a script.
+    ["bash", "-c", "ls"],
+    ["bash", "-lc", "ls"],
+    ["bash", "-c", "git status", "-s"],
+    ["sh", "script.sh"],
+    ["bash", ">out", "script.sh"],
+    ["bash", "-c"],
+    # make without -f -.
+    ["make"],
+    ["make", "-C", "x"],
+    ["make", "-f", "Makefile"],
+    ["make", "--file=Makefile"],
+    ["make", "-sf", "Makefile"],
+    # A command string that is no shell.
+    ["su", "-c", "ls"],
+    ["su", "--session-command", "ls"],
+    ["su", "--command=ls", "root"],
+    ["script", "-qc", "ls", "/dev/null"],
+    ["script", "-c", "ls"],
+    ["runuser", "-c", "ls", "x"],
+    ["runuser", "--command=ls", "x"],
+    # A command after the options keeps its verdict (Review Focus 1).
+    ["sudo", "-u", "me", "ls"],
+    ["sudo", "A=1", "ls"],
+    ["sudo", "-s", "ls"],
+    ["sudo", ">out", "ls"],
+    ["doas", "-u", "x", "cat"],
+    ["doas", "cat"],
+    ["screen", "-dmS", "x", "ls"],
+    ["screen", "ls"],
+    ["parallel", "echo"],
+    ["parallel", "-j", "2", "echo"],
+    ["parallel", "-j2", "echo"],
+    ["parallel", "--", "echo"],
+]
+
+
+@pytest.mark.parametrize("words", READS_STDIN, ids=" ".join)
+def test_a_receiver_that_runs_its_stdin_as_commands(words: list[str]) -> None:
+    assert table.runs_stdin_as_commands(words) is True
+
+
+@pytest.mark.parametrize("words", READS_NO_STDIN, ids=lambda words: " ".join(words) or "empty")
+def test_a_receiver_that_does_not(words: list[str]) -> None:
+    assert table.runs_stdin_as_commands(words) is False
+
+
+def test_a_path_receiver_is_read_by_its_basename() -> None:
+    assert table.runs_stdin_as_commands(["/usr/bin/sudo", "-s"]) is True
+    assert table.runs_stdin_as_commands(["/usr/bin/sudo", "-u", "me", "ls"]) is False
+    assert table.runs_stdin_as_commands(["/usr/bin/make", "-f", "-"]) is True
+
+
+def test_a_nice_numeric_option_is_walked_to_the_receiver() -> None:
+    """A guard walks `nice -5 sh` with `option_words` and passes the receiver's words on."""
+    words = ["nice", "-5", "sh"]
+    end = table.option_words(table.WRAPPER_SYNTAX["nice"], words, 1)
+    assert end == 2
+    assert table.runs_stdin_as_commands(words[end:]) is True
+    words = ["nice", "-5", "cat"]
+    end = table.option_words(table.WRAPPER_SYNTAX["nice"], words, 1)
+    assert table.runs_stdin_as_commands(words[end:]) is False
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        [""],
+        ["", ""],
+        ["sh", ""],
+        ["bash", "", "-c"],
+        ["bash", "-c", ""],
+        ["su", ""],
+        ["su", "-c", ""],
+        ["script", "-"],
+        ["sudo", "--"],
+        ["sudo", "-"],
+        ["sudo", "--", "-"],
+        ["-"],
+        ["--"],
+        ["screen", "-S"],
+        ["make", "-f"],
+        ["make", "--"],
+        ["make", "-f", ""],
+        ["parallel", "-j"],
+        ["parallel", "--", ":::"],
+        ["doas", "-u"],
+        ["bash", "-o"],
+        ["bash", "+o"],
+        ["bash", ">"],
+        ["bash", "<"],
+        ["sudo", "<"],
+        ["eval", ""],
+    ],
+)
+def test_the_test_is_total(words: list[str]) -> None:
+    assert isinstance(table.runs_stdin_as_commands(words), bool)
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        ("sudo", "-n"),
+        ("bash", "-c", "ls"),
+        ("su", "-c", "ls"),
+    ],
+)
+def test_a_tuple_reads_as_a_list(words: tuple[str, ...]) -> None:
+    assert table.runs_stdin_as_commands(words) == table.runs_stdin_as_commands(list(words))
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        ["sudo", *["-n"] * 100_000, "ls"],
+        ["doas", *["-u", "x"] * 50_000, "ls"],
+        ["bash", *["-o", "pipefail"] * 50_000],
+        ["su", *["-l"] * 100_000],
+        ["make", *["-C", "x"] * 50_000],
+        ["parallel", *["-j", "2"] * 50_000],
+        ["screen", *["-d"] * 100_000],
+    ],
+    ids=lambda words: words[0],
+)
+def test_the_test_reads_each_word_once(words: list[str]) -> None:
+    """No clock: a walk that read the words more than once each would not end on this input."""
+    assert isinstance(table.runs_stdin_as_commands(words), bool)
+
+
+def test_pm_refuses_through_its_stub_when_wrapper_commands_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no wrapper_commands to load, pm loads its damaged-hooks stub: every new name is there
+    and refuses (or is empty), so the module loads and main() answers with a refusal."""
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    (lone / "hook_support.py").write_text(
+        "def sibling(name):\n    raise ImportError(name)\n", encoding="utf-8"
+    )
+    (lone / "pm_permissions.py").write_text(
+        (Path(pm.__file__).resolve()).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "hook_support", raising=False)
+    damaged = load_module(lone / "pm_permissions.py", "coven_pm_damaged", register=True)
+    monkeypatch.delitem(sys.modules, "coven_pm_damaged")
+    assert damaged.SUPPORT_ERROR is not None
+    stub = damaged.wrapper_commands
+    assert stub.runs_stdin_as_commands(["cat"]) is True
+    assert stub.runs_stdin_as_commands([]) is True
+    assert stub.option_words(stub.READER_SYNTAX, ["sudo"], 1) is None
+    for name in ("READER_SYNTAX", "STDIN_PATHS", "INPUT_SOURCES", "COMMAND_STRING_OPTIONS"):
+        assert not getattr(stub, name)
+    assert not stub.MAKE_GLUED_FILE.search("-f-")
+    assert all(hasattr(stub, name) for name in NEW_NAMES)

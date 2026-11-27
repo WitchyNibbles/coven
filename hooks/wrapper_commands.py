@@ -8,8 +8,10 @@ the real program reads them. How each guard follows a wrapper (what an option it
 means) is its own.
 """
 
+import os
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 
 # Shells, and busybox's shell applets (`busybox sh -c ...` names `sh`).
 SHELLS = frozenset(
@@ -278,6 +280,191 @@ WRAPPER_SYNTAX = {
         ),
     ),
 }
+
+# A wrapper's options are read as the real program reads them; `option_words` is the one walk of
+# them that the guards share (it was pm_permissions' `_option_words` and `_wrapped_start`).
+_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
+
+
+def _option_width(syntax: WrapperSyntax, word: str, following: int) -> int | None:
+    """How many words the option `word` takes (itself and its value), or None when the wrapper
+    may read it some other way. `following` is how many words come after it."""
+    name, equals, _ = word.partition("=")
+    long_value = bool(equals) and name.startswith("--")
+    if word in syntax.flags or (long_value and (name in syntax.flags or name in syntax.valued)):
+        return 1
+    if word in syntax.valued:
+        return 2 if following else None
+    if syntax.numeric and NUMERIC_OPTION.fullmatch(word):
+        return 1
+    if word.startswith("--"):
+        return None
+    for position, letter in enumerate(word[1:], start=1):
+        if f"-{letter}" in syntax.valued:
+            return 1 if word[position + 1 :] else (2 if following else None)
+        if f"-{letter}" not in syntax.flags:
+            return None
+    return 1
+
+
+def option_words(syntax: WrapperSyntax, words: Sequence[str], start: int) -> int | None:
+    """Where the command a wrapper runs starts, given where the words after its name start
+    (`start`): the index of the first word after its options, its operands and its assignments.
+    None when an option is not in the table, so the guard cannot tell where the command is."""
+    index = start
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if not word.startswith("-") or (word == "-" and word not in syntax.flags):
+            break
+        taken = _option_width(syntax, word, len(words) - index - 1)
+        if taken is None:
+            return None
+        index += taken
+    index += syntax.operands
+    while syntax.assignments and index < len(words) and _ASSIGNMENT.match(words[index]):
+        index += 1
+    return index
+
+
+# The programs `runs_stdin_as_commands` reads the options of, to find the command each runs. Only
+# that test reads this table: pm_permissions and prod_guard walk their own wrappers with
+# WRAPPER_SYNTAX. sudo's shell options are flags here (`sudo -s` starts a shell, and a command
+# after them is still its command); doas is its entry above, with no flags, so `doas -n ls` has no
+# command it can follow (the stricter reading of pm_permissions and prod_guard); screen's letters
+# are screen(1)'s, and a lone `-` reads the commands from stdin.
+READER_SYNTAX: Mapping[str, WrapperSyntax] = {
+    "sudo": replace(
+        WRAPPER_SYNTAX["sudo"],
+        flags=WRAPPER_SYNTAX["sudo"].flags | {"-s", "-i", "--shell", "--login"},
+    ),
+    "doas": WRAPPER_SYNTAX["doas"],
+    "screen": WrapperSyntax(
+        flags=frozenset({"-", *(f"-{letter}" for letter in "aAdDfFilLmMOqQrRUvVxZ")}),
+        valued=frozenset(f"-{letter}" for letter in "cehpsStTX"),
+    ),
+}
+# The paths a command reads its stdin from, and make's short options with a file glued on.
+STDIN_PATHS = frozenset({"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"})
+MAKE_GLUED_FILE = re.compile(r"-[A-Za-z]*f(?P<path>.+)")  # `-f-`, `-sf/dev/stdin`
+# parallel's argument separators: the words after one are its inputs, and maybe its commands.
+INPUT_SOURCES = frozenset({":::", "::::", ":::+", "::::+"})
+# The options that give su, runuser and script a command string; `-c` also comes glued to other
+# short options (`-qc`) or to its value (`-cls`), which `_COMMAND_CLUSTER` reads.
+COMMAND_STRING_OPTIONS = frozenset({"-c", "--command", "--session-command"})
+_COMMAND_CLUSTER = re.compile(r"-[A-Za-z]*?c(?P<glued>.*)")
+_COMMAND_STRING_READERS = frozenset({"su", "runuser", "script"})
+
+_REDIRECT = re.compile(r"\d*(?:<|>|&>)")
+_REDIRECT_OPERATOR = re.compile(r"\d*(?:[<>]{1,3}[&|]?|&>{1,2})")
+_STDIN_REDIRECT = re.compile(r"0?<")
+_STDIN_FILES = ("/dev/stdin", "/dev/fd/", "/proc/self/fd/")
+_SHELL_VALUE_OPTIONS = frozenset({"-o", "+o", "-O", "+O"})  # `bash -o pipefail`
+
+
+def _starts_a_shell(text: str) -> bool:
+    """Whether the first word of a command string names a shell (`sh`, `/bin/bash -s`)."""
+    first = text.lstrip("'\"").split(maxsplit=1)
+    return bool(first) and os.path.basename(first[0].rstrip("'\"")) in SHELLS
+
+
+def _shell_reads_stdin(words: Sequence[str]) -> bool:
+    """Whether a shell given the words after its name reads its program from stdin: a stdin
+    redirect, `-` or `-s` before a `-c` or a script argument, or a script that is stdin
+    (`/dev/stdin`, `/dev/fd/0`). A `-c` string is not stdin, unless its first word is a shell
+    (`sh -c sh`). Words it cannot read count as stdin."""
+    skip = False
+    for index, word in enumerate(words):
+        if skip:
+            skip = False
+        elif word == "-" or _STDIN_REDIRECT.match(word):
+            return True
+        elif _REDIRECT.match(word) or word in _SHELL_VALUE_OPTIONS:
+            skip = word in _SHELL_VALUE_OPTIONS or bool(_REDIRECT_OPERATOR.fullmatch(word))
+        elif word[:1] not in ("-", "+"):
+            return word.startswith(_STDIN_FILES)  # a script, which may be stdin itself
+        elif word[1:2] != "-" and "s" in word:
+            return True
+        elif word[1:2] != "-" and "c" in word:
+            return index + 1 < len(words) and _starts_a_shell(words[index + 1])
+    return True
+
+
+def _command_string_reads_stdin(words: Sequence[str]) -> bool:
+    """Whether su, runuser or script given `words` run no command string, or one that starts a
+    shell: `-c`, `-qc`, `--command` or `--session-command`, each with its value (glued on, after
+    `=`, or the next word). An option with no value is no command."""
+    for index, word in enumerate(words[1:], start=1):
+        option, equals, value = word.partition("=")
+        cluster = _COMMAND_CLUSTER.fullmatch(word)
+        if option in COMMAND_STRING_OPTIONS and equals:
+            return _starts_a_shell(value)
+        if option not in COMMAND_STRING_OPTIONS and cluster is None:
+            continue
+        glued = cluster["glued"] if cluster else ""
+        if glued:
+            return _starts_a_shell(glued)
+        return index + 1 >= len(words) or _starts_a_shell(words[index + 1])
+    return True
+
+
+def _make_reads_stdin_file(words: Sequence[str]) -> bool:
+    """Whether make's words name stdin as its makefile: a stdin path as a word, after `=`
+    (`--file=-`), or glued on (`-f-`, `-sf/dev/stdin`)."""
+    for word in words[1:]:
+        if word.startswith("--"):
+            path = word.partition("=")[2]
+        else:
+            glued = MAKE_GLUED_FILE.fullmatch(word)
+            path = glued["path"] if glued else ""
+        if word in STDIN_PATHS or path in STDIN_PATHS:
+            return True
+    return False
+
+
+def _runs_no_command(syntax: WrapperSyntax, words: Sequence[str]) -> bool:
+    """Whether a wrapper's words hold no command after its options: an option the table does not
+    list, a stdin redirect before any word, or nothing left (the stricter side)."""
+    index = option_words(syntax, words, 1)
+    if index is None:
+        return True
+    while index < len(words):
+        if _STDIN_REDIRECT.match(words[index]):
+            return True
+        if not _REDIRECT.match(words[index]):  # `>out`, or a bare `>` and its target, are skipped
+            return False
+        index += 2 if _REDIRECT_OPERATOR.fullmatch(words[index]) else 1
+    return True
+
+
+def runs_stdin_as_commands(words: Sequence[str]) -> bool:
+    """Whether a program that is fed text runs it as shell commands, given the receiver's words
+    (`words[0]` is its name or path, after a guard's own walk past `nice`, `env` and the like).
+
+    True for a shell that reads its program from stdin, `eval`, `make` given a makefile from stdin,
+    `su`, `runuser` and `script` with no command string or one that starts a shell, `sudo`, `doas`
+    and `screen` with no command after their options, and `parallel` with no command. False for any
+    other name: each guard keeps its own rule for those. Never raises."""
+    if not words:
+        return False
+    name = os.path.basename(words[0])
+    if name in SHELLS:
+        return _shell_reads_stdin(words[1:])
+    if name == "eval":
+        return True
+    if name == "make":
+        return _make_reads_stdin_file(words)
+    if name in _COMMAND_STRING_READERS:
+        return _command_string_reads_stdin(words)
+    if name in READER_SYNTAX:
+        return _runs_no_command(READER_SYNTAX[name], words)
+    if name == "parallel":
+        start = option_words(WRAPPER_SYNTAX["parallel"], words, 1)
+        return start is None or start >= len(words) or words[start] in INPUT_SOURCES
+    return False
+
 
 # Commands that run a program named later in their arguments (`uv run ssh`, `uvx`, `pipx run`,
 # `python -m`, `poetry run`, `hatch run`, `pdm run`, `conda run -n env`, `mise exec --`, `direnv
