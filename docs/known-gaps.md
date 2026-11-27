@@ -326,13 +326,27 @@ Holes that were there before slice 1 and are the same on main (c202ca4):
 - The OpenCode server guard allows `echo x | (sh)`, `echo x | (sudo -s)` and
   `echo x | if true; then sh; fi`.
 - pm-permissions, guard mode, allows a push piped into `runuser x` (the table gives `runuser` no
-  operands, so its first positional, a user, starts a shell) and into `busybox su`, `busybox login`
-  or `busybox ssh` (only the shell applet names are read).
-- deny-secrets does not expand braces in Grep's `glob` or Glob's `pattern`, and does not join a
-  name split by quotes (`cat .e"n"v`, `cat .{"en",x}v`) or by `${y}` splicing.
-- The production guard allows a claude start piped into `script -qc sh /dev/null`, `script -c sh`
-  or `sh -c sh`, a shell named by `$(echo sh)` in command position, and
-  `eval "$(cat)" < x.txt; echo <claude start>` (the `$(` splits the redirect off).
+  operands, so its first positional, a user, starts a shell) and into `busybox login`. (`busybox
+  su` and `busybox ssh` are refused since the final fix round of slice 1: a wrapper's command is
+  read as a receiver too, so `doas su` and the like are closed with them.)
+- deny-secrets does not expand braces in Grep's `glob` or Glob's `pattern` (a test pins it, since
+  the corpus holds Bash commands only), and does not join a name split by quotes (`cat .e"n"v`,
+  `cat .{"en",x}v`, `cat ~/.s"s"h/id_rsa`) or by `${y}` splicing (`cat .e${y}nv`).
+- The production guard allows a claude start piped into `script -qc sh /dev/null` or `sh -c sh`, a
+  shell named by `$(echo sh)` in command position, and `eval "$(cat)" < x.txt; echo <claude
+  start>` (the `$(` splits the redirect off). It refuses one piped into `script -c sh`.
+- The production guard and the OpenCode server guard allow a body (a claude start, `opencode db`)
+  piped into `chroot /r`, `unshare`, `pkexec`, `firejail`, `sg grp`, `nsenter -t 1 -m` or
+  `runuser x`, programs that start a shell when they are given no command.
+- pm-permissions, guard mode: a wrapper the guard does not walk but has an option table for (the
+  `WRAPPER_SYNTAX` entries `doas`, `setsid`, `flock`, `ionice` and the like) is read through that
+  table. A table that misses a valued option of its wrapper counts that option's value as the
+  wrapper's command, so the guard judges the wrong word as the receiver. A wrapper with no table
+  at all is refused whatever follows it.
+- The OpenCode server guard has no deadline of its own. A long chain of `screen -X` words makes
+  its reading slow, and the time grows with the square of the length: about 15 s at 1,000 words
+  and 65 s at 2,000, on the same code at c202ca4 and now. The plugin's 5 s timeout
+  (`opencode/src/guard.ts`) is the only bound; a call that reaches it is refused.
 - The wrapper table's entries for `strace`, `ltrace`, `parallel`, `doas`, `busybox`, `unbuffer`,
   `bunx` and `pnpx` come from upstream pages or help text, because these programs' man pages were
   not on the machine that wrote them. The other entries cite a man page or upstream source.

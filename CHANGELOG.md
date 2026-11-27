@@ -66,7 +66,7 @@
     `chroot`, `nocache`, `faketime`, `firejail`, `sg`, `numactl`, `cgexec`, `proxychains`,
     `torsocks`, `pkexec` or `ssh` with options is refused; the wrapper table now knows them.
 - No command that was refused before is allowed now.
-- Slice 1 of phase 2 of the shared lexing layer closes the four holes phase 1 left open:
+- Slice 1 of phase 2 of the shared lexing layer closes four holes that predate phase 1:
   - The production guard refuses a claude start piped into `sudo -s`, `sudo -i`, `su`, `doas -s`,
     `script`, `screen`, `make -f -` or `eval`, and text naming ssh or `coven setup` piped into the
     same programs. It already refused them piped into `sh` and `parallel`.
@@ -89,10 +89,14 @@
     d{1..100}` and a word with more than 64 braces (deep minified JSON in `echo` or `curl -d`) stop.
   - Production guard: `| sudo -v`, `-l`, `-k`, `-K`, `sudo -e ls` and `screen -ls ls` are refused
     when the line names ssh, claude or `coven setup`.
-- A differential of 110,380 commands (the corpus and generated lines: each reader with 0 to 2
-  options, three guarded tails, piped, here-string and heredoc, brace words around secret names)
-  against the guards before this slice shows no command moving from refused to allowed in any guard, and no change
-  in pm-permissions' approval path. No command that was refused before is allowed now.
+  - pm-permissions, guard mode: a push piped into a wrapper around a reader (`doas su`,
+    `setsid doas -s`, `stdbuf -oL su`, `flock f make -f -`, `busybox su`) is refused, as one
+    piped into the reader is.
+- No command that was refused before is allowed now. A differential of 147,334 commands (the
+  corpus and generated lines: each reader, and each wrapper around a reader, with 0 to 2 options,
+  guarded tails, piped, here-string and heredoc, brace words around secret names) against the
+  guards before this slice shows none moving from refused to allowed in any guard, and no change
+  in pm-permissions' approval path.
 
 ## 0.2.0 (2026-11-25)
 
