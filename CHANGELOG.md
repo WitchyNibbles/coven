@@ -66,6 +66,33 @@
     `chroot`, `nocache`, `faketime`, `firejail`, `sg`, `numactl`, `cgexec`, `proxychains`,
     `torsocks`, `pkexec` or `ssh` with options is refused; the wrapper table now knows them.
 - No command that was refused before is allowed now.
+- Slice 1 of phase 2 of the shared lexing layer closes the four holes phase 1 left open:
+  - The production guard refuses a claude start piped into `sudo -s`, `sudo -i`, `su`, `doas -s`,
+    `script`, `screen`, `make -f -` or `eval`, and text naming ssh or `coven setup` piped into the
+    same programs. It already refused them piped into `sh` and `parallel`.
+  - pm-permissions refuses a push piped into `doas`, `script` or `screen -`, as it did for `sh`,
+    `su` and `sudo`.
+  - deny-secrets reads a word with braces as each word the shell makes of it, so `cat .{en,x}v`
+    and `cat ~/.s{s,x}h/id_rsa` are refused.
+  - The OpenCode server guard reads a body piped into `sudo -s`, `doas -s` or `parallel` as shell
+    text, so `echo 'opencode db' | sudo -s` is refused.
+- Slice 1 refuses some commands the guards allowed before:
+  - OpenCode server guard: a body piped into `sudo -l`, `-v` or `-k` (options that leave no
+    command) is refused. So is `sudo -u su`, where the value reads as a wrapper name; pm-permissions
+    refuses that too.
+  - pm-permissions, guard mode: a push, merge or `gh` call piped into a wrapper it does not walk and
+    has no option table for (`ssh`, `chroot`, `nsenter`, `pkexec`, `tmux` and the like) is refused
+    whatever follows the wrapper: `git push origin x | ssh host tee log`, `tmux source -`. A table
+    wrapper given an option the table does not know (`flock -n`, `setsid -w`) counts as having no
+    command.
+  - deny-secrets: a brace word it cannot expand is refused, so `touch f{1..100}`, `mkdir -p
+    d{1..100}` and a word with more than 64 braces (deep minified JSON in `echo` or `curl -d`) stop.
+  - Production guard: `| sudo -v`, `-l`, `-k`, `-K`, `sudo -e ls` and `screen -ls ls` are refused
+    when the line names ssh, claude or `coven setup`.
+- A differential of 110,380 commands (the corpus and generated lines: each reader with 0 to 2
+  options, three guarded tails, piped, here-string and heredoc, brace words around secret names)
+  against the guards before this slice shows no command moving from refused to allowed in any guard, and no change
+  in pm-permissions' approval path. No command that was refused before is allowed now.
 
 ## 0.2.0 (2026-11-25)
 
