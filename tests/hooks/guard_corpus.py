@@ -10,6 +10,9 @@ says nothing about a command with no push, merge, send-pack or gh word in it). T
   3  one brace expander (opencode reads ranges, steps and the cap; both read a `${a,b}` word)
   4  one SHELL_READERS (opencode reads a body fed to eval, make, su, sudo and the others)
   5  one wrapper table (pm reads npx, bunx, tmux, screen, pnpx; prod reads the pm-only names)
+  h  slice 1 of phase 2, the four open holes: prod reads a claude start piped into sudo, doas, su,
+     script, screen, make or eval; pm reads a push piped into doas, script or screen; deny_secrets
+     reads brace words as their expansions; opencode reads a body piped into sudo, doas or parallel
   none  no task may move it
 A task that moves one edits the expected value in this file and lists the flip in `flips.md`.
 
@@ -25,7 +28,7 @@ from dataclasses import dataclass
 GUARDS = ("deny_secrets", "pm_permissions", "prod_guard", "opencode_server_guard")
 A, R, N = "allow", "refuse", "n/a"
 VERDICTS = (A, R, N)
-FLIPS = ("3", "4", "5", "none")
+FLIPS = ("3", "4", "5", "h", "none")
 # The word in an entry id for a table name that is not a word: `then` and `do` belong to the `if`
 # and `while` entries, `!` is `bang`, braces are `group`, the `.` builtin is `dot`.
 TOKENS = {"then": "if", "do": "while", "!": "bang", "{": "group", "}": "group", ".": "dot"}
@@ -75,80 +78,73 @@ ENTRIES = (
         "9b-nine-groups-oc",
         "cat <serve>/{p,q}{a,b}{s,t}{s,t}{w,x}{o,p}{r,s}{d,e}{,x}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
-        "9b-eight-groups-oc", "cat <serve>/{p,q}{a,b}{s,t}{s,t}{w,x}{o,p}{r,s}{d,e}", (A, N, A, R)
+        "9b-eight-groups-oc",
+        "cat <serve>/{p,q}{a,b}{s,t}{s,t}{w,x}{o,p}{r,s}{d,e}",
+        (A, N, A, R),
+        "h",
     ),
     Entry(
         "9b-nine-groups-far-oc",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-eight-groups-far-oc",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-seven-groups-far",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
-        "3",
+        "h",
     ),
     Entry(
         "9b-claude-six-groups", "rm -rf <home>/.cl{a,b}ude/{a,b}{a,b}{a,b}{a,b}{a,b}", (A, N, R, A)
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-claude-seven-groups",
         "rm -rf <home>/.cl{a,b}ude/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, R, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-claude-nine-groups",
         "rm -rf <home>/.cl{a,b}ude/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, R, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-claude-many-braces",
         "rm -rf <home>/.cl{a,b}ude{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, R, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-far-seven-groups",
         "rm -rf <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, R, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-far-nine-groups",
         "rm -rf <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, R, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
-    Entry("9b-range-past-cap", "touch <project>/f{1..100}", (A, N, A, R), "3"),
+    Entry("9b-range-past-cap", "touch <project>/f{1..100}", (A, N, A, R), "h"),
     Entry("9b-range-at-cap", "touch <project>/f{1..64}", (A, N, A, A)),
-    # flip 3: cap 256 to 64 (one cap)
-    Entry("9b-range-claude-past-cap", "rm -rf <home>/.cl{a,b}ude{1..100}", (A, N, R, R), "3"),
-    # flip 3: cap 256 to 64 (one cap)
-    Entry("9b-range-255-oc", "touch <project>/f{1..255}", (A, N, A, R), "3"),
-    # flip 3: cap 256 to 64 (one cap)
-    Entry("9b-range-300-oc", "touch <project>/f{1..300}", (A, N, A, R), "3"),
+    Entry("9b-range-claude-past-cap", "rm -rf <home>/.cl{a,b}ude{1..100}", (A, N, R, R), "h"),
+    Entry("9b-range-255-oc", "touch <project>/f{1..255}", (A, N, A, R), "h"),
+    Entry("9b-range-300-oc", "touch <project>/f{1..300}", (A, N, A, R), "h"),
     # --- 9c SHELL_READERS
     Entry("9c-printf-make-opencode", "printf 'opencode db\\n' | make -f -", (A, N, A, R), "4"),
-    Entry("9c-printf-make-claude", "printf 'claude -p hi\\n' | make -f -", (A, N, A, R), "4"),
+    Entry("9c-printf-make-claude", "printf 'claude -p hi\\n' | make -f -", (A, N, A, R), "h"),
     Entry("9c-printf-sh-opencode", "printf 'opencode db\\n' | sh", (A, N, A, R)),
     # --- 9d pnpx
     Entry("9d-pnpx-claude", "pnpx claude -p hi", (A, N, R, A), "5"),
@@ -406,7 +402,7 @@ ENTRIES = (
     Entry("9j-quoted-list-far-double", 'touch "<project>/{a,b}"', (A, N, A, A)),
     Entry("9j-escaped-list-far", "touch <project>/\\{a,b\\}", (A, N, A, A)),
     Entry("9j-quoted-list-env", 'cat "{.env,x}"', (R, N, A, A)),
-    Entry("9j-quoted-literal-env-name", "cat '.e{n,m}v'", (A, N, A, A)),
+    Entry("9j-quoted-literal-env-name", "cat '.e{n,m}v'", (A, N, A, A), "h"),
     # --- 9k brace after dollar
     Entry("9k-dollar-list-serve", "cat <serve>/${a,b}", (A, N, A, R)),
     Entry("9k-dollar-list-password", "cat <serve>/pass${x,}word", (A, N, A, R)),
@@ -512,7 +508,7 @@ ENTRIES = (
     Entry("b-list-command-word-claude", "{claude,x} -p hi", (A, N, A, A)),
     Entry("b-list-command-word-push", "git {push,status} -f origin main", (A, R, A, A)),
     Entry("b-list-command-word-env", "cat {.env,x}", (R, N, A, A)),
-    Entry("b-list-split-env", "cat .e{n,x}v", (A, N, A, A)),
+    Entry("b-list-split-env", "cat .e{n,x}v", (A, N, A, A), "h"),
     Entry(
         "b-list-command-word-prod-target",
         "psql -h orders-db{.example.internal,x} -c x",
@@ -542,7 +538,7 @@ ENTRIES = (
     Entry("b-padding-width-far", "touch <project>/f{001..003}", (A, N, A, A)),
     Entry("b-padding-left-only-far", "touch <project>/f{01..3}", (A, N, A, A)),
     Entry("b-padding-right-only-far", "touch <project>/f{1..03}", (A, N, A, A)),
-    Entry("b-variable-range-far", "touch <project>/f{1..$N}", (A, N, A, R)),
+    Entry("b-variable-range-far", "touch <project>/f{1..$N}", (A, N, A, R), "h"),
     Entry("b-variable-list-far", "touch <project>/{$a,b}", (A, N, A, R)),
     Entry("b-substitution-list-far", "touch <project>/{$(date),b}", (A, N, A, R)),
     Entry("b-list-with-space-far", "touch '<project>/{a, b}'", (A, N, A, A)),
@@ -599,17 +595,19 @@ ENTRIES = (
         "h-nine-groups",
         "cat <tmp>/{h,x}{o,x}{m,x}{e,x}/{p,x}{r,x}{o,x}{f,x}{i,x}le/state/serve/password",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-eight-groups",
         "cat <tmp>/{h,x}{o,x}{m,x}{e,x}/{p,x}{r,x}{o,x}{f,x}ile/state/serve/password",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-nine-groups-miss",
         "cat <tmp>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}/x",
         (A, N, A, R),
-        "3",
+        "h",
     ),
     Entry("h-dollar-list", "cat <tmp>/ho${m,x}e/profile/state/serve/password", (A, N, A, R)),
     Entry("h-dollar-list-in-name", "cat <serve>/${a,password}", (A, N, A, R)),
@@ -705,36 +703,36 @@ ENTRIES = (
     Entry("readers-dot-claude", "echo 'claude -p hi' | . /dev/stdin", (A, N, R, R)),
     Entry("readers-dot-push", "echo 'git push -f origin main' | . /dev/stdin", (A, R, A, R)),
     Entry("readers-eval-opencode", "echo 'opencode db' | eval", (A, N, A, R), "4"),
-    Entry("readers-eval-claude", "echo 'claude -p hi' | eval", (A, N, A, R), "4"),
+    Entry("readers-eval-claude", "echo 'claude -p hi' | eval", (A, N, A, R), "h"),
     Entry("readers-eval-push", "echo 'git push -f origin main' | eval", (A, R, A, R), "4"),
-    Entry("readers-parallel-opencode", "echo 'opencode db' | parallel", (A, N, A, A), "4"),
-    Entry("readers-parallel-claude", "echo 'claude -p hi' | parallel", (A, N, R, A)),
-    Entry("readers-parallel-push", "echo 'git push -f origin main' | parallel", (A, R, A, A)),
+    Entry("readers-parallel-opencode", "echo 'opencode db' | parallel", (A, N, A, A), "h"),
+    Entry("readers-parallel-claude", "echo 'claude -p hi' | parallel", (A, N, R, A), "h"),
+    Entry("readers-parallel-push", "echo 'git push -f origin main' | parallel", (A, R, A, A), "h"),
     Entry("readers-make-opencode", "echo 'opencode db' | make -f -", (A, N, A, R), "4"),
-    Entry("readers-make-claude", "echo 'claude -p hi' | make -f -", (A, N, A, R), "4"),
+    Entry("readers-make-claude", "echo 'claude -p hi' | make -f -", (A, N, A, R), "h"),
     Entry("readers-make-push", "echo 'git push -f origin main' | make -f -", (A, R, A, R), "4"),
     Entry("readers-su-opencode", "echo 'opencode db' | su -s /bin/sh me", (A, N, A, R), "4"),
-    Entry("readers-su-claude", "echo 'claude -p hi' | su -s /bin/sh me", (A, N, A, R), "4"),
+    Entry("readers-su-claude", "echo 'claude -p hi' | su -s /bin/sh me", (A, N, A, R), "h"),
     Entry(
         "readers-su-push", "echo 'git push -f origin main' | su -s /bin/sh me", (A, R, A, R), "4"
     ),
-    Entry("readers-sudo-opencode", "echo 'opencode db' | sudo -s", (A, N, A, A), "4"),
-    Entry("readers-sudo-claude", "echo 'claude -p hi' | sudo -s", (A, N, A, A)),
-    Entry("readers-sudo-push", "echo 'git push -f origin main' | sudo -s", (A, R, A, A)),
-    Entry("readers-doas-opencode", "echo 'opencode db' | doas -s", (A, N, A, A), "4"),
-    Entry("readers-doas-claude", "echo 'claude -p hi' | doas -s", (A, N, A, A)),
-    Entry("readers-doas-push", "echo 'git push -f origin main' | doas -s", (A, N, A, A)),
+    Entry("readers-sudo-opencode", "echo 'opencode db' | sudo -s", (A, N, A, A), "h"),
+    Entry("readers-sudo-claude", "echo 'claude -p hi' | sudo -s", (A, N, A, A), "h"),
+    Entry("readers-sudo-push", "echo 'git push -f origin main' | sudo -s", (A, R, A, A), "h"),
+    Entry("readers-doas-opencode", "echo 'opencode db' | doas -s", (A, N, A, A), "h"),
+    Entry("readers-doas-claude", "echo 'claude -p hi' | doas -s", (A, N, A, A), "h"),
+    Entry("readers-doas-push", "echo 'git push -f origin main' | doas -s", (A, N, A, A), "h"),
     Entry("readers-script-opencode", "echo 'opencode db' | script -q /dev/null", (A, N, A, R), "4"),
-    Entry("readers-script-claude", "echo 'claude -p hi' | script -q /dev/null", (A, N, A, R), "4"),
+    Entry("readers-script-claude", "echo 'claude -p hi' | script -q /dev/null", (A, N, A, R), "h"),
     Entry(
         "readers-script-push",
         "echo 'git push -f origin main' | script -q /dev/null",
         (A, N, A, R),
-        "4",
+        "h",
     ),
     Entry("readers-screen-opencode", "echo 'opencode db' | screen -", (A, N, A, R), "4"),
-    Entry("readers-screen-claude", "echo 'claude -p hi' | screen -", (A, N, A, R), "4"),
-    Entry("readers-screen-push", "echo 'git push -f origin main' | screen -", (A, N, A, R), "4"),
+    Entry("readers-screen-claude", "echo 'claude -p hi' | screen -", (A, N, A, R), "h"),
+    Entry("readers-screen-push", "echo 'git push -f origin main' | screen -", (A, N, A, R), "h"),
     Entry("readers-tmux-opencode", "echo 'opencode db' | tmux source -", (A, N, A, R)),
     Entry("readers-tmux-claude", "echo 'claude -p hi' | tmux source -", (A, N, A, R)),
     Entry("readers-tmux-push", "echo 'git push -f origin main' | tmux source -", (A, R, A, R), "5"),
@@ -1486,16 +1484,19 @@ ENTRIES = (
         "h-cap-eight-groups-component-names",
         "cat <tmp>/{home,x}/{profile,x}/{state,x}/{serve,x}/{password,x}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-nine-groups-component-names",
         "cat <tmp>/{home,x}/{profile,x}/{state,x}/{serve,x}/{password,x}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-ten-groups-component-names",
         "cat <tmp>/{home,x}/{profile,x}/{state,x}/{serve,x}/{password,x}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-five-groups-last-member",
@@ -1506,81 +1507,97 @@ ENTRIES = (
         "h-cap-eight-groups-last-member",
         "cat <tmp>/{x,home}/{x,profile}/{x,state}/{x,serve}/{x,password}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-nine-groups-last-member",
         "cat <tmp>/{x,home}/{x,profile}/{x,state}/{x,serve}/{x,password}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-ten-groups-last-member",
         "cat <tmp>/{x,home}/{x,profile}/{x,state}/{x,serve}/{x,password}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-three-members-five-groups",
         "cat <tmp>/{x,y,home}/{x,y,profile}/{x,y,state}/{x,y,serve}/{x,y,password}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-three-members-nine-groups",
         "cat <tmp>/{x,y,home}/{x,y,profile}/{x,y,state}/{x,y,serve}/{x,y,password}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-groups-before-the-path",
         "cat {a,b}{a,b}{a,b}{a,b}<tmp>/{x,home}/{x,profile}/{x,state}/{x,serve}/{x,password}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-nine-groups-before-one-list",
         "cat {a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}<tmp>/{x,home}/profile/state/serve/password",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-nine-groups-then-dotdot",
         "cat <tmp>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}/../{x,home}/profile/state/serve/password",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-eight-groups-after-the-file",
         "cat <tmp>/{x,home}/profile/state/serve/{x,password}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-nine-groups-after-the-file",
         "cat <tmp>/{x,home}/profile/state/serve/{x,password}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-numeric-range-300",
         "cat <tmp>/{x,home}/profile/state/serve/{x,password}{1..300}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-numeric-range-100",
         "cat <tmp>/{x,home}/profile/state/serve/{x,password}{1..100}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-padded-range-300",
         "cat <tmp>/{home,x}/profile/state/serve/{x,password}{001..300}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-two-letter-ranges",
         "cat <tmp>/{x,home}/{x,profile}/{x,state}/{x,serve}/{x,password}{a..z}{a..z}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-three-numeric-ranges",
         "cat <tmp>/{x,home}/{x,profile}/{x,state}/{x,serve}/{x,password}{1..9}{1..9}{1..9}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-write-profile-config",
         "touch <tmp>/{x,home}/{x,profile}/{x,config}/{x,y}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-write-profile-config-small",
@@ -1591,6 +1608,7 @@ ENTRIES = (
         "h-cap-write-coven-hooks",
         "touch <tmp>/{x,projects}/{x,coven}/{x,hooks}/{x,y}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
+        "h",
     ),
     Entry(
         "h-cap-write-coven-hooks-small",
@@ -1599,31 +1617,78 @@ ENTRIES = (
     ),
     # --- round 1: braces that hide nothing protected (controls)
     Entry("control-brace-letter-range", "touch <project>/{a..c}", (A, N, A, A)),
-    # flip 3: cap 256 to 64 (one cap)
-    Entry("9b-cap-numeric-range-300", "touch <project>/f{1..300}", (A, N, A, R), "3"),
-    # flip 3: cap 256 to 64 (one cap)
-    Entry("9b-cap-padded-range-300", "touch <project>/f{001..300}", (A, N, A, R), "3"),
+    Entry("9b-cap-numeric-range-300", "touch <project>/f{1..300}", (A, N, A, R), "h"),
+    Entry("9b-cap-padded-range-300", "touch <project>/f{001..300}", (A, N, A, R), "h"),
     Entry("control-brace-padded-range", "touch <project>/f{01..03}", (A, N, A, A)),
     Entry("control-brace-numeric-step", "touch <project>/f{1..9..2}", (A, N, A, A)),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-cap-three-members-five-groups",
         "touch <project>/{a,b,c}{a,b,c}{a,b,c}{a,b,c}{a,b,c}",
         (A, N, A, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-cap-eight-groups",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
-        "3",
+        "h",
     ),
-    # flip 3: cap 256 to 64 (one cap)
     Entry(
         "9b-cap-nine-groups",
         "touch <project>/{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}",
         (A, N, A, R),
-        "3",
+        "h",
     ),
+    # --- slice 1 of phase 2: the four open holes, as the guards judge them today
+    Entry("piped-push-sudo-s", "git push origin feature | sudo -s", (A, R, A, A)),
+    Entry("piped-push-doas-s", "git push origin feature | doas -s", (A, R, A, A)),
+    Entry("piped-push-script", "git push origin feature | script -q /dev/null", (A, R, A, R)),
+    Entry("piped-push-screen-dash", "git push origin feature | screen -", (A, R, A, R)),
+    Entry("readers-sudo-i-claude", "echo 'claude -p hi' | sudo -i", (A, N, A, A), "h"),
+    Entry("readers-su-bare-claude", "echo 'claude -p hi' | su", (A, N, A, R), "h"),
+    Entry("readers-screen-bare-claude", "echo 'claude -p hi' | screen", (A, N, A, R), "h"),
+    Entry("readers-eval-subst-claude", "echo 'claude -p hi' | eval \"$(cat)\"", (A, N, A, R), "h"),
+    Entry("focus1-sudo-command-claude", "echo 'claude -p hi' | sudo -s ls", (A, N, A, A)),
+    Entry("focus1-doas-command-claude", "echo 'claude -p hi' | doas -u x cat", (A, N, A, A)),
+    Entry(
+        "focus1-script-command-claude",
+        "echo 'claude -p hi' | script -q -c ls /dev/null",
+        (A, N, A, R),
+    ),
+    Entry("focus1-screen-command-claude", "echo 'claude -p hi' | screen -dmS x ls", (A, N, A, R)),
+    Entry("focus1-sudo-command-opencode", "echo 'opencode db' | sudo -s ls", (A, N, A, A)),
+    Entry("focus2-make-s-claude", "echo 'claude -p hi' | make -s", (A, N, A, R)),
+    Entry("focus2-make-s-plain", "echo x | make -s", (A, N, A, R)),
+    Entry("focus4-sudo-user-command-opencode", "echo 'opencode db' | sudo -u me ls", (A, N, A, A)),
+    Entry("focus4-doas-user-command-opencode", "echo 'opencode db' | doas -u me ls", (A, N, A, A)),
+    Entry("focus5-push-nice-cat", "git push -f origin main | nice -n 5 cat", (A, R, A, A)),
+    Entry("focus5-text-nice-cat", "echo 'git push -f origin main' | nice -n 5 cat", (A, N, A, A)),
+    Entry(
+        "focus5-text-timeout-cat", "echo 'git push -f origin main' | timeout 9 cat", (A, N, A, A)
+    ),
+    Entry(
+        "focus5-text-sudo-user-command",
+        "echo 'git push -f origin main' | sudo -u me ls",
+        (A, N, A, A),
+    ),
+    Entry(
+        "focus5-text-doas-user-command",
+        "echo 'git push -f origin main' | doas -u me ls",
+        (A, N, A, A),
+    ),
+    Entry(
+        "focus5-text-script-command",
+        "echo 'git push -f origin main' | script -q -c ls /dev/null",
+        (A, N, A, R),
+    ),
+    Entry(
+        "focus5-text-screen-command",
+        "echo 'git push -f origin main' | screen -dmS x ls",
+        (A, N, A, R),
+    ),
+    Entry("b-hole-env-name", "cat .{en,x}v", (A, N, A, A), "h"),
+    Entry("b-hole-ssh-key", "cat ~/.s{s,x}h/id_rsa", (A, N, A, A), "h"),
+    Entry("b-hole-plain-txt", "cat {a,b}.txt", (A, N, A, A)),
+    Entry("b-hole-past-cap-env", "cat .{e,x}{n,x}{v,x}{,a}{,a}{,a}{,a}", (A, N, A, R), "h"),
+    Entry("b-hole-at-cap-env", "cat .{e,x}{n,x}{v,x}{,a}{,a}{,a}", (A, N, A, A), "h"),
 )
