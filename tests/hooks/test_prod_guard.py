@@ -2585,6 +2585,52 @@ def test_pm_may_feed_claude_to_a_wrapper_with_a_command(
     assert proc.returncode == 0, proc.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'ssh prod ls' | sudo -s",
+        "echo 'ssh prod ls' | doas -s",
+        "echo 'ssh prod ls' | su",
+        "echo 'ssh prod ls' | script -q /dev/null",
+        "echo 'ssh prod ls' | screen -",
+        "echo 'ssh prod ls' | make -f -",
+        "sudo -s <<< 'ssh prod ls'",
+    ],
+)
+def test_pm_cannot_feed_ssh_to_a_reader_that_runs_stdin(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "a shell runs what its input holds")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'coven setup' | sudo -s",
+        "echo 'coven setup' | doas -s",
+        "echo 'coven setup' | su",
+        "echo 'coven setup' | script -q /dev/null",
+        "echo 'coven setup' | screen -",
+        "echo 'coven setup' | make -f -",
+        "su <<< 'coven setup'",
+    ],
+)
+def test_pm_cannot_feed_coven_setup_to_a_reader_that_runs_stdin(
+    run: Run, store: Path, command: str
+) -> None:
+    assert_pm_refused_gm_not(run, command, "cannot run coven")
+
+
+@pytest.mark.parametrize(
+    "command", ["echo 'ssh prod ls' | sudo -s ls", "echo 'coven setup' | su -c ls"]
+)
+def test_pm_may_feed_ssh_or_coven_setup_text_to_a_wrapper_with_a_command(
+    run: Run, store: Path, command: str
+) -> None:
+    proc = run(bash(command), role="pm")
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- non-literal hosts ---
 
 EDGE_GUARD = {
