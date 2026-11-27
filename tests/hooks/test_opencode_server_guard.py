@@ -2067,3 +2067,45 @@ def test_a_glob_pattern_is_one_word_so_a_blank_in_a_brace_is_a_name(world: World
     assert world.call("Glob", "pattern", "<profile>/{a\tb,state}/serve/password") is not None
     assert world.call("Glob", "pattern", "<project>/{a b,c}/x") is None
     assert world.call("Bash", "command", "touch <project>/{a b,c}") is None
+
+
+# Guards phase 2, slice 1: a wrapper that leaves no command (`sudo -s`, `doas -s`, `parallel`) runs
+# the text it is given as shell, so a body piped into it cannot be told and a body fed to it by a
+# here-string or heredoc is checked as shell text.
+WRAPPER_BODY_REFUSED = [
+    "echo 'opencode db' | sudo -s",
+    "echo 'opencode db' | sudo -i",
+    "echo 'opencode db' | doas -s",
+    "echo 'opencode db' | parallel",
+    "echo 'ls' | sudo -s",
+    "echo ls | sudo -u me -s",
+    "sudo -s <<< 'opencode db'",
+    "doas -s <<< 'opencode db'",
+    "parallel <<< 'opencode db'",
+    "sudo -s <<'EOF'\nopencode db\nEOF",
+    "doas -s <<'EOF'\nopencode db\nEOF",
+    "parallel <<'EOF'\nopencode db\nEOF",
+    "nice -n 5 sudo -s <<< 'opencode db'",
+]
+WRAPPER_BODY_ALLOWED = [
+    "echo 'opencode db' | sudo -u me ls",
+    "echo x | sudo -s ls",
+    "echo x | doas -u me cat",
+    "echo x | nice -n 5 cat",
+    "echo x | env",
+    "sudo -s <<< 'ls'",
+    "doas -s <<'EOF'\nls\nEOF",
+    "sudo -u me ls <<< 'opencode db'",
+]
+
+
+@pytest.mark.parametrize("command", WRAPPER_BODY_REFUSED)
+def test_a_body_given_to_a_wrapper_that_leaves_no_command_is_read_as_shell(
+    world: World, command: str
+) -> None:
+    assert world.call("Bash", "command", command)
+
+
+@pytest.mark.parametrize("command", WRAPPER_BODY_ALLOWED)
+def test_a_wrapper_with_a_command_is_judged_on_that_command(world: World, command: str) -> None:
+    assert world.call("Bash", "command", command) is None

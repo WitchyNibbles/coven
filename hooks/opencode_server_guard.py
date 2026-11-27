@@ -1015,6 +1015,13 @@ def _find_actions(words: Sequence[str], piped: bool) -> list[Argv]:
     return actions
 
 
+def _runs_stdin_as_shell(argv: Argv) -> bool:
+    """Whether the walk leaves no command and a wrapper it walked past (`sudo -s`, `doas -s`,
+    `parallel`) is one that runs its input as shell text. With a command left, that command is what
+    the line runs."""
+    return not argv.command and any(_base(word) in SHELL_READERS for word in argv.prefix)
+
+
 def _bodies(argv: Argv) -> list[str]:
     """The texts a command runs or reads as shell: its shell strings, `eval`, runner strings and
     `$(...)`, and the heredocs, here-strings and files it feeds to a shell that reads them."""
@@ -1025,7 +1032,7 @@ def _bodies(argv: Argv) -> list[str]:
         *_runner_strings(argv.words),
         *argv.substitutions,
     ]
-    if command and _base(command[0]) in SHELL_READERS:
+    if (command and _base(command[0]) in SHELL_READERS) or _runs_stdin_as_shell(argv):
         strings.extend(argv.inputs)
     return strings
 
@@ -1331,6 +1338,8 @@ def check_command(argv: Argv, names: Names, cwd: Path) -> None:
             "a variable that makes git or man run a command is closed to OpenCode sessions"
         )
     if not command:
+        if argv.piped and _runs_stdin_as_shell(argv):
+            raise RefusedError("a pipe into a shell cannot be checked")
         return
     program = command[0]
     if "$(" in program or "`" in program or _runs_unknown_variable(words, command, names):
